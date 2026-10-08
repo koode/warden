@@ -234,3 +234,140 @@ Per-field `list_policy` (meta) with a schema-wide default `:null_item`:
   different roles on the same topic, and the `context_id` collision case.
 - **Adversarial suite** in `test/adversarial/`: one test per attempted bypass, named
   after the attack. Keep the tests that failed and were fixed.
+
+## Implementation notes
+
+Evidence is from the Absinthe 1.12.0 source (`deps/absinthe`), with 1.7.10 checked for
+the same code paths. File references are relative to `deps/absinthe/lib/absinthe/`.
+The full suite passes unchanged on both versions; no version-specific code was needed.
+
+### Verified points
+
+**(a) Attaching middleware.** The schema pipeline runs `Phase.Schema.InlineFunctions`
+and then `Phase.Schema.Compile` (`pipeline.ex:200-201`). `InlineFunctions` is where the
+user's `middleware/3` is applied (`phase/schema/inline_functions.ex:59` calling
+`middleware.ex:303`). Pipeline modifiers run in `__after_compile__`
+(`schema.ex:397`, `schema.ex:365`, `schema.ex:323`). Warden registers
+`@pipeline_modifier Warden.Phase.Attach`, which inserts its phase directly after
+`InlineFunctions`: every field's middleware is wrapped after `middleware/3` has run, so
+`middleware/3` cannot remove it. Same structure in 1.7.10 (`pipeline.ex:197-198`).
+No `@before_compile` fallback is needed.
+
+Adaptation: when `middleware/3` returns something that cannot be escaped (a closure),
+`InlineFunctions` stores a shim instead (`inline_functions.ex:64`) that re-expands the
+middleware at runtime and *replaces the rest of the chain* (`middleware.ex:268-275`).
+Warden replaces that shim with its own shim, which calls Absinthe's and appends the post
+middleware again (`lib/warden/middleware.ex`, `shim/2`).
+
+Adaptation: fields whose middleware is exactly `[{MapGet, key}]` skip middleware entirely
+(`phase/document/execution/resolution.ex:287`). Fields Warden wraps never match this;
+fields with no Warden entry keep the fast path.
+
+Adaptation: the verifier runs as Warden's own `@after_compile`, after Absinthe's, so it
+checks the compiled types (including any later user pipeline modifier) against a freshly
+computed plan, in both directions.
+
+**(b) `resolution.acc` lifetime.** `acc` starts as `%{}` per execution
+(`blueprint/execution.ex:42`) and is carried from field to field
+(`resolution.ex:347`). A stored subscription is only `%{initial_phases, source}`
+(`subscription.ex:153`); every publish re-runs the pipeline from the source
+(`subscription/local.ex:45`), so `acc` (and the cached actor) never survives into the
+next publish. The *context* does survive: it is packed with the phase options at
+subscribe time (`subscription/pipeline_serializer.ex:9`). The actor is therefore rebuilt
+per publish from the subscribe-time context; a revocation applies on the next event only
+if `roles/2` / `permissions/2` read current data rather than a user struct frozen in the
+context (tested in `test/subscription/subscription_test.exs`).
+`Absinthe.Pipeline.BatchResolver` merges `acc` and `context` across documents
+(`pipeline/batch_resolver.ex:15-16`); Absinthe's own publisher does not use it, but a
+custom `run_docset/3` that does would break per-subscriber identity (listed in README
+limits).
+
+**(c) Null propagation.** A field with errors resolves to `nil`
+(`resolution.ex:420`), a `nil` in a non-null position gets an error
+(`resolution.ex:450-472`) and `propagate_null_trimming` folds it to the nearest nullable
+parent (`resolution.ex:476`, `resolution.ex:493`). Warden relies on that for objects and
+single-level lists. Adaptation: for nested lists `null_allowed_in_list?/1`
+(`resolution.ex:551-565`) only looks at the innermost item type, so a null inner list in
+`[[T!]]` nulls the whole field (more than the spec requires, never less). Warden folds
+denied list items itself, and for shapes whose innermost item is non-null it reports all
+item errors on the field, so they are not dropped by that over-folding.
+
+**(d) Resolve-type for abstract types.** The executor uses
+`Type.Union.resolve_type/3` and `Type.Interface.resolve_type/3`
+(`resolution.ex:255`, `resolution.ex:259`; `type/union.ex:77`, `type/interface.ex:86`).
+Both are public; the post middleware calls the same functions with the resolution
+struct. A value whose concrete type resolves to `nil` is denied (fail closed) when any
+possible type has a rule.
+
+**(e) Subscription `config` and `context_id`.** `SubscribeSelf` reads `config` through
+`Absinthe.Type.function/2` (`phase/subscription/subscribe_self.ex:57-58`), which resolves
+`{:ref, module, identifier}` by calling `module.__absinthe_function__(identifier, :config)`
+(`type.ex:45`). Warden sets `config` to `{:ref, Warden.Subscription, {...}}` (escapable,
+so it survives `Compile`), whose function runs the subscribe-time checks and then the
+user's original `config` (or Absinthe's default topic). The subscription id is
+`"__absinthe__:doc:#{context_id}:#{document_id}"` with a unique integer when no
+`context_id` is set (`subscribe_self.ex:145`, `subscribe_self.ex:149`); on publish only
+the first registered document per id is resolved (`subscription.ex:195`,
+`subscription.ex:206`) and the result goes to every subscriber of that id. Warden appends
+`":warden:" <> actor_key` to a user-set `context_id`.
+
+**(f) `hydrate/2` and meta.** Supported: `{:meta, keyword}`
+(`phase/schema/hydrate.ex:71`). It *replaces* the node's meta
+(`hydrate.ex:74`), so `Warden.Hydrate.meta/2` takes the user's other meta as a second
+argument.
+
+**(g) Errors at a list item index.** An error map with `path:` is appended to the field
+path (`resolution.ex:571-576`), but any error on a field nulls the whole field
+(`resolution.ex:420`), and the result phase nulls every node that carries an error
+(`phase/document/result.ex:57`). So a field's middleware cannot report an error for one
+nullable item without nulling the list. Adaptation: the post middleware records item
+errors in `acc`; `Warden.Plugin` (added to the schema's `plugins/0` by
+`use Warden.Schema`) inserts `Warden.Phase.ItemErrors` after resolution, which attaches
+each error to the already-null item node. When the fold reaches the field itself
+(non-null items), the errors go on the field with `path: [index]` suffixes.
+
+### Other mechanism-level adaptations
+
+- **Rules in meta.** `authorize/1`, `authorize_args/1` and `list_policy/1` evaluate their
+  argument at compile time and record it with `Absinthe.Schema.Notation.put_attr/2`
+  directly. Going through `meta/1` would not work: it runs `Macro.expand/2` on every
+  3-tuple (`schema/notation.ex:2465`), and `{:check, name, opts}` looks like AST. Meta
+  keys: `:warden_rule`, `:warden_args`, `:warden_list_policy`.
+- **Interface fields are not wrapped.** The executor resolves the concrete object's
+  field, never the interface's (`resolution/projector.ex:147-151`), which is why
+  interface field rules are merged into each implementing object's field.
+- **Denial stops the chain.** On a pre denial Warden drops the rest of the field's
+  middleware (keeping only its own post entry for `{:replace, value}`), so no user
+  middleware, `Absinthe.Subscription` trigger or resolver runs for a denied field, even
+  middleware that ignores the resolution state.
+- **Post defers behind runtime appends.** If middleware is appended to the chain at
+  runtime after Warden's post entry, post moves itself to the end again
+  (`test/adversarial/execution_test.exs`, found by the adversarial suite).
+
+### Deviations from the design
+
+- **Interface object rules also apply to implementors reached directly.** An object's
+  effective object rule is its own rule (or `default_object_rule`) AND the object rule of
+  every interface it implements. Otherwise a client could skip an interface's rule by
+  selecting a field typed as the concrete object. Union rules still apply only through
+  the union.
+- **`null` for an argument with a non-null default counts as "differs".** The design
+  says a rule applies when the value is non-nil and differs from the default. Warden
+  applies it whenever the value differs from the default, `nil` included, so a client
+  cannot send `null` to escape a default such as `status: PUBLISHED`.
+- **`:filter` with an error.** Absinthe cannot attach an error to an item that is not in
+  the list (see (g)), so when the denial handler returns `{:error, term}` for a filtered
+  item, that item is kept as `null` with the error (as `:null_item`). The default
+  handler returns `:null` for filtered items, so they are removed silently.
+- **Subscribe-time denials always refuse.** A subscription cannot be `null`; when the
+  handler returns `:null` or `{:replace, _}` for `kind: :subscribe`, the default
+  Forbidden error is used.
+- **`{:replace, value}` outside field denials** raises `Warden.PolicyError` (a broken
+  handler, fail closed).
+- **Anonymous actors** get no roles and permissions; `roles/2` and `permissions/2` are
+  not called with a `nil` subject.
+- **`Warden.Denial` has an extra `list_policy` field**, so a handler can tell filtered
+  items apart.
+- **Authorizer options** add `expose_denial_reasons` (the opt-in for revealing missing
+  roles and permissions) and `spec_compliant_errors` (Absinthe nests every extra key under
+  `extensions` in that mode, `phase/document/result.ex:149`).
