@@ -216,21 +216,44 @@ defmodule Warden.Plan do
     |> Map.new()
   end
 
-  # Argument plan: a sorted list of {arg_ident, rule | nil, default, input_spec | nil}
-  # plus the input-object plans it references.
+  # Argument plan: a sorted list of {arg_ident, rule | nil, defaults, input_specs} plus
+  # the input-object plans it references.
+  #
+  # The arguments are the union of the object field's arguments and those of the
+  # same-named field on every interface the object implements: a client selecting
+  # through an interface is validated against the interface's arguments, and the
+  # concrete field then runs with them. `defaults` holds every declared non-nil default
+  # (a value is restricted if it differs from any of them); `input_specs` holds the input
+  # type walk of every declaration.
   defp arg_plan(object, field, types, inputs) do
     arg_rules = effective_arg_rules(object, field, types)
 
-    args =
-      field.args
-      |> Enum.sort_by(fn {ident, _} -> ident end)
-      |> Enum.flat_map(fn {ident, arg} ->
-        rule = Map.get(arg_rules, ident)
-        spec = input_spec(arg.type, types, inputs)
+    declarations =
+      [field | interface_fields(object, field, types)]
+      |> Enum.flat_map(fn f -> Map.to_list(f.args || %{}) end)
+      |> Enum.group_by(fn {ident, _} -> ident end, fn {_, arg} -> arg end)
 
-        if rule == nil and spec == nil,
+    args =
+      declarations
+      |> Enum.sort_by(fn {ident, _} -> ident end)
+      |> Enum.flat_map(fn {ident, decls} ->
+        rule = Map.get(arg_rules, ident)
+
+        specs =
+          decls
+          |> Enum.map(&input_spec(&1.type, types, inputs))
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+
+        defaults =
+          decls
+          |> Enum.map(& &1.default_value)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+
+        if rule == nil and specs == [],
           do: [],
-          else: [{ident, rule, arg.default_value, spec}]
+          else: [{ident, rule, defaults, specs}]
       end)
 
     case args do
@@ -241,6 +264,14 @@ defmodule Warden.Plan do
         referenced = referenced_inputs(args, inputs)
         %{args: args, inputs: Map.take(inputs, referenced)}
     end
+  end
+
+  defp interface_fields(object, field, types) do
+    for iface_ident <- List.wrap(object.interfaces),
+        %{fields: ifields} <- [Map.get(types, iface_ident)],
+        ifield = Map.get(ifields, field.identifier),
+        ifield != nil,
+        do: ifield
   end
 
   defp input_spec(%Type.NonNull{of_type: t}, types, inputs) do
@@ -265,7 +296,7 @@ defmodule Warden.Plan do
 
   defp referenced_inputs(args, inputs) do
     args
-    |> Enum.flat_map(fn {_, _, _, spec} -> spec_inputs(spec) end)
+    |> Enum.flat_map(fn {_, _, _, specs} -> Enum.flat_map(specs, &spec_inputs/1) end)
     |> close_over(inputs, MapSet.new())
     |> Enum.sort()
   end
@@ -279,7 +310,7 @@ defmodule Warden.Plan do
       nested =
         inputs
         |> Map.fetch!(ident)
-        |> Enum.flat_map(fn {_, _, _, spec} -> spec_inputs(spec) end)
+        |> Enum.flat_map(fn {_, _, _, specs} -> Enum.flat_map(specs, &spec_inputs/1) end)
 
       close_over(nested ++ rest, inputs, MapSet.put(seen, ident))
     end
@@ -316,11 +347,12 @@ defmodule Warden.Plan do
               r -> r
             end
 
-          spec = input_ref_spec(f.type, with_rules)
+          specs = List.wrap(input_ref_spec(f.type, with_rules))
+          defaults = if f.default_value == nil, do: [], else: [f.default_value]
 
-          if rule == nil and spec == nil,
+          if rule == nil and specs == [],
             do: [],
-            else: [{fident, rule, f.default_value, spec}]
+            else: [{fident, rule, defaults, specs}]
         end)
 
       {ident, fields}

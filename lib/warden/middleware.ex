@@ -118,19 +118,38 @@ defmodule Warden.Middleware do
   end
 
   defp run_check({:args, %{args: args, inputs: inputs}}, base, authorizer) do
-    Enum.reduce_while(args, :ok, fn {ident, rule, default, spec}, :ok ->
+    Enum.reduce_while(args, :ok, fn {ident, rule, defaults, specs}, :ok ->
+      present? = Map.has_key?(base.args, ident)
       value = Map.get(base.args, ident)
 
-      case check_input_value(value, rule, default, spec, [ident], inputs, base, authorizer) do
+      case check_input_value(
+             present?,
+             value,
+             rule,
+             defaults,
+             specs,
+             [ident],
+             inputs,
+             base,
+             authorizer
+           ) do
         :ok -> {:cont, :ok}
         denial -> {:halt, denial}
       end
     end)
   end
 
-  defp check_input_value(value, rule, default, spec, path, inputs, base, authorizer) do
+  @doc false
+  # An argument or input field is restricted when the client's value is present and:
+  # there is no declared default (so any value, `null` included, is a choice the client
+  # made), or it differs from any declared default.
+  def restricted?(false, _value, _defaults), do: false
+  def restricted?(true, _value, []), do: true
+  def restricted?(true, value, defaults), do: Enum.any?(defaults, &(value !== &1))
+
+  defp check_input_value(present?, value, rule, defaults, specs, path, inputs, base, authorizer) do
     rule_result =
-      if rule != nil and value !== default do
+      if rule != nil and restricted?(present?, value, defaults) do
         case Rule.evaluate(rule, %{base | argument: path}, authorizer) do
           :ok -> :ok
           {:deny, failure} -> {:deny, :argument, rule, failure, [argument: path]}
@@ -140,8 +159,16 @@ defmodule Warden.Middleware do
       end
 
     case rule_result do
-      :ok -> walk_input(value, spec, path, inputs, base, authorizer)
-      denial -> denial
+      :ok ->
+        Enum.reduce_while(specs, :ok, fn spec, :ok ->
+          case walk_input(value, spec, path, inputs, base, authorizer) do
+            :ok -> {:cont, :ok}
+            denial -> {:halt, denial}
+          end
+        end)
+
+      denial ->
+        denial
     end
   end
 
@@ -170,14 +197,16 @@ defmodule Warden.Middleware do
   defp walk_input(value, {:input, ident}, path, inputs, base, authorizer) when is_map(value) do
     inputs
     |> Map.fetch!(ident)
-    |> Enum.reduce_while(:ok, fn {field, rule, default, spec}, :ok ->
+    |> Enum.reduce_while(:ok, fn {field, rule, defaults, specs}, :ok ->
+      present? = Map.has_key?(value, field)
       field_value = Map.get(value, field)
 
       case check_input_value(
+             present?,
              field_value,
              rule,
-             default,
-             spec,
+             defaults,
+             specs,
              path ++ [field],
              inputs,
              base,
