@@ -415,6 +415,8 @@ defmodule Warden.Middleware do
   defp walk_items([], _i, _inner, _ctx, _idx, acc, attached),
     do: {:ok, Enum.reverse(acc), attached}
 
+  # `i` is the index in the OUTPUT list: filtered items do not count, so error paths
+  # never point at another item or reveal the original position.
   defp walk_items([value | rest], i, inner, ctx, idx, acc, attached) do
     item_idx = [i | idx]
 
@@ -427,7 +429,7 @@ defmodule Warden.Middleware do
         walk_items(rest, i + 1, inner, ctx, idx, [nil | acc], attached ++ a)
 
       :filter ->
-        walk_items(rest, i + 1, inner, ctx, idx, acc, attached)
+        walk_items(rest, i, inner, ctx, idx, acc, attached)
 
       {:bubble, pending} ->
         # The item cannot be null, so this list becomes null. Errors already attached
@@ -453,7 +455,7 @@ defmodule Warden.Middleware do
         collect_rest(rest, i + 1, inner, ctx, idx, pending ++ more)
 
       :filter ->
-        collect_rest(rest, i + 1, inner, ctx, idx, pending)
+        collect_rest(rest, i, inner, ctx, idx, pending)
 
       {:fail_list, _} = fail ->
         fail
