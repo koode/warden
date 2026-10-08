@@ -89,11 +89,11 @@ end
 defmodule Warden.RedteamExec.Data do
   @moduledoc false
 
-  def secret, do: %{kind: :secret, id: "s1", code: "ALPHA"}
-  def secret2, do: %{kind: :secret, id: "s2", code: "BRAVO"}
-  def post, do: %{kind: :post, id: "p1", title: "Hello", notes: "editor-notes"}
-  def tdoc(tenant), do: %{kind: :tdoc, id: "t-#{tenant}", tenant: tenant, body: "body-#{tenant}"}
-  def odoc(org), do: %{kind: :odoc, id: "o-#{org}", org: org, body: "body-#{org}"}
+  def secret, do: %{kind: :rx_secret, id: "s1", code: "ALPHA"}
+  def secret2, do: %{kind: :rx_secret, id: "s2", code: "BRAVO"}
+  def post, do: %{kind: :rx_post, id: "p1", title: "Hello", notes: "editor-notes"}
+  def tdoc(tenant), do: %{kind: :rx_tdoc, id: "t-#{tenant}", tenant: tenant, body: "body-#{tenant}"}
+  def odoc(org), do: %{kind: :rx_odoc, id: "o-#{org}", org: org, body: "body-#{org}"}
 
   def user(roles, opts \\ []) do
     %{id: Keyword.get(opts, :id, "u1"), roles: List.wrap(roles)}
