@@ -153,6 +153,8 @@ defmodule Warden.Schema do
   @doc false
   # The full configuration, including the authorizer's catalog. Called at compile time.
   def config!(schema) do
+    _ = Code.ensure_loaded(schema)
+
     unless function_exported?(schema, :__warden__, 1) do
       raise CompileError,
         description: "#{inspect(schema)} does not `use Warden.Schema`"
