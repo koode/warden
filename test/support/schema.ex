@@ -381,6 +381,11 @@ defmodule Warden.Test.Schema do
       resolve &R.subscription_root/3
     end
 
+    field :shared_user_map, :user do
+      config fn _args, _info -> {:ok, %{topic: "users", context_id: "global"}} end
+      resolve &R.subscription_root/3
+    end
+
     field :admin_feed, :string do
       authorize role(:admin)
       arg :verbose, :boolean, default_value: false

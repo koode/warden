@@ -142,6 +142,14 @@ defmodule Warden.SubscriptionTest do
       assert nobody_data.data == %{"sharedUser" => nil}
     end
 
+    test "a config returned as a map is fingerprinted too" do
+      doc = "subscription { sharedUserMap { id email } }"
+      {:ok, viewer_topic} = subscribe(doc, viewer())
+      {:ok, nobody_topic} = subscribe(doc, nobody())
+      assert viewer_topic != nobody_topic
+      assert String.contains?(viewer_topic, "global:warden:")
+    end
+
     test "subscribers with different subjects but the same roles get different keys" do
       doc = "subscription { sharedUser { id email } }"
       {:ok, bob} = subscribe(doc, Data.as(:viewer, "u2"))

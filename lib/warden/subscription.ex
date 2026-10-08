@@ -99,9 +99,14 @@ defmodule Warden.Subscription do
     end
   end
 
-  defp fingerprint(config, actor, authorizer) when is_list(config) do
-    case Keyword.fetch(config, :context_id) do
-      {:ok, context_id} when not is_nil(context_id) ->
+  # Absinthe reads the config with `config[:context_id]`, so it may be a keyword list or
+  # a map.
+  defp fingerprint(config, actor, authorizer) when is_list(config) or is_map(config) do
+    case config[:context_id] do
+      nil ->
+        config
+
+      context_id ->
         key = authorizer.actor_key(actor)
 
         unless is_binary(key) do
@@ -109,12 +114,12 @@ defmodule Warden.Subscription do
                 "#{inspect(authorizer)}.actor_key/1 must return a string, got: #{inspect(key)}"
         end
 
-        Keyword.put(config, :context_id, "#{context_id}:warden:#{key}")
-
-      _ ->
-        config
+        put_context_id(config, "#{context_id}:warden:#{key}")
     end
   end
 
   defp fingerprint(config, _actor, _authorizer), do: config
+
+  defp put_context_id(config, id) when is_list(config), do: Keyword.put(config, :context_id, id)
+  defp put_context_id(config, id) when is_map(config), do: Map.put(config, :context_id, id)
 end
