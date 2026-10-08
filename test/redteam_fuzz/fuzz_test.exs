@@ -146,7 +146,7 @@ defmodule Warden.RedteamFuzz.FuzzTest do
     f = fill_input(f, :item_filter)
 
     (f.include_hidden == false or role?(a, :a)) and
-      (Map.get(f, :owner) == nil or a != nil) and
+      (not Map.has_key?(f, :owner) or a != nil) and
       Enum.all?(Map.get(f, :and) || [], &filter_ok?(&1, a))
   end
 
@@ -374,7 +374,10 @@ defmodule Warden.RedteamFuzz.FuzzTest do
         not field_ok?(name, e, o.actor) ->
           {:deny, :field}
 
-        name == :related and eff_arg(args, :kind) != nil and not perm?(o.actor, "p3") ->
+        # Decision 5: an argument without a default is restricted whenever it is
+        # present, explicit null included.
+        name == :related and match?({:present, _}, eff_raw(Map.get(args, :kind, :omit))) and
+            not perm?(o.actor, "p3") ->
           {:deny, :argument}
 
         true ->
