@@ -348,7 +348,8 @@ defmodule Warden.Authorizer do
   defp validate_hierarchy(_, _role_set, errors),
     do: {["`:role_hierarchy` must be a map" | errors], %{}}
 
-  defp validate_role_permissions(role_perms, role_set, perm_set, errors) when is_map(role_perms) do
+  defp validate_role_permissions(role_perms, role_set, perm_set, errors)
+       when is_map(role_perms) do
     Enum.reduce(role_perms, errors, fn {role, perms}, errors ->
       errors =
         if MapSet.member?(role_set, role),

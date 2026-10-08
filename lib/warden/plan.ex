@@ -94,7 +94,11 @@ defmodule Warden.Plan do
               interface_rules =
                 object.interfaces
                 |> List.wrap()
-                |> Enum.map(&(types |> Map.get(&1) |> then(fn i -> i && meta(i, :warden_rule) end)))
+                |> Enum.map(
+                  &(types
+                    |> Map.get(&1)
+                    |> then(fn i -> i && meta(i, :warden_rule) end))
+                )
 
               Rule.conjoin([own | interface_rules])
 

@@ -224,10 +224,17 @@ defmodule Warden.Middleware do
   @doc false
   def call_deny(authorizer, %Denial{} = denial) do
     case authorizer.deny(denial) do
-      {:error, _} = result -> result
-      :null -> :null
-      {:replace, _} = result -> result
-      other -> raise Warden.PolicyError, "#{inspect(authorizer)}.deny/1 returned #{inspect(other)}"
+      {:error, _} = result ->
+        result
+
+      :null ->
+        :null
+
+      {:replace, _} = result ->
+        result
+
+      other ->
+        raise Warden.PolicyError, "#{inspect(authorizer)}.deny/1 returned #{inspect(other)}"
     end
   end
 
@@ -245,6 +252,12 @@ defmodule Warden.Middleware do
   ## Post
 
   @doc false
+  # Middleware appended to the chain at runtime (after this entry was placed) would run
+  # after the check and could change the value. Move the check behind it.
+  def post(%Resolution{middleware: [_ | _] = rest} = res, spec) do
+    %{res | middleware: rest ++ [post_spec(spec)]}
+  end
+
   def post(%Resolution{state: :resolved, errors: [], value: value} = res, spec) do
     {actor, res} = actor(res, spec.authorizer)
 
@@ -436,7 +449,12 @@ defmodule Warden.Middleware do
               nil ->
                 # Fail closed: a value whose concrete type cannot be determined cannot
                 # be checked against the concrete type's rule.
-                deny_object(:deny, %{failed_rule: :deny, missing_roles: [], missing_permissions: []}, spec.named, ctx)
+                deny_object(
+                  :deny,
+                  %{failed_rule: :deny, missing_roles: [], missing_permissions: []},
+                  spec.named,
+                  ctx
+                )
 
               concrete ->
                 check_rule(Map.get(spec.rules, concrete), concrete, value, ctx)

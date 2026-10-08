@@ -181,7 +181,10 @@ defmodule Warden.Schema do
     catalog = authorizer.__warden_catalog__()
 
     extra_errors =
-      [{:default_object_rule, options.default_object_rule}, {:introspection, options.introspection}]
+      [
+        {:default_object_rule, options.default_object_rule},
+        {:introspection, options.introspection}
+      ]
       |> Enum.flat_map(fn
         {_, nil} ->
           []

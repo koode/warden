@@ -56,8 +56,11 @@ defmodule Warden.Notation do
     rule = eval!(rule, env, "authorize")
 
     case Warden.Rule.validate(rule) do
-      :ok -> :ok
-      {:error, errors} -> compile_error!(env, "invalid rule in `authorize`: " <> Enum.join(errors, "; "))
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        compile_error!(env, "invalid rule in `authorize`: " <> Enum.join(errors, "; "))
     end
 
     record!(env, scope, :warden_rule, rule)

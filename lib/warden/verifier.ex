@@ -52,7 +52,9 @@ defmodule Warden.Verifier do
 
   defp check_field(object, field, plan) do
     where = "#{object.name}.#{field.name}"
-    {expected_pre, expected_post} = Map.get(plan.fields, {object.identifier, field.identifier}, {nil, nil})
+
+    {expected_pre, expected_post} =
+      Map.get(plan.fields, {object.identifier, field.identifier}, {nil, nil})
 
     middleware = List.wrap(field.middleware)
 
@@ -71,7 +73,8 @@ defmodule Warden.Verifier do
 
     [
       if(actual_pre != expected_pre,
-        do: "#{where}: pre middleware #{describe(actual_pre)}, plan requires #{describe(expected_pre)}"
+        do:
+          "#{where}: pre middleware #{describe(actual_pre)}, plan requires #{describe(expected_pre)}"
       ),
       if(actual_post != expected_post,
         do:
