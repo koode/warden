@@ -20,6 +20,13 @@ request still resolves. Queries, mutations and subscriptions are enforced the sa
 Supports Absinthe `>= 1.7.0`; developed against 1.12. See
 [`docs/DESIGN.md`](docs/DESIGN.md) for the design and the implementation notes.
 
+Absinthe 1.7.10 has two published high-severity advisories (EEF-CVE-2026-43967, a
+quadratic fragment-name check, and EEF-CVE-2026-42793, atom table exhaustion). Both are
+in Absinthe, not Warden, and Warden cannot mitigate them. Upgrade Absinthe if you can.
+
+absinthe_warden is a community library. It is not affiliated with the absinthe-graphql
+project.
+
 ## Installation
 
 ```elixir
