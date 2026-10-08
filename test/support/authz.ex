@@ -4,7 +4,11 @@ defmodule Warden.Test.Authz do
     roles: [:admin, :editor, :viewer, :auditor],
     permissions: ["posts:read", "posts:write", "secrets:read", "users:list"],
     role_hierarchy: %{admin: [:editor], editor: [:viewer]},
-    role_permissions: %{admin: :all, editor: ["posts:write", "posts:read"], viewer: ["posts:read"]},
+    role_permissions: %{
+      admin: :all,
+      editor: ["posts:write", "posts:read"],
+      viewer: ["posts:read"]
+    },
     checks: [:self, :owner, :configured]
 
   @impl true

@@ -97,7 +97,9 @@ defmodule Warden.RuleTest do
       assert eval(role(:admin), actor([:admin])) == :ok
       assert {:deny, %{missing_roles: [:admin]}} = eval(role(:admin), actor([:viewer]))
       assert eval(any_role([:admin, :viewer]), actor([:viewer])) == :ok
-      assert {:deny, %{missing_roles: [:admin, :editor]}} = eval(any_role([:admin, :editor]), actor([]))
+
+      assert {:deny, %{missing_roles: [:admin, :editor]}} =
+               eval(any_role([:admin, :editor]), actor([]))
     end
 
     test "permissions and the :all marker" do
@@ -117,7 +119,9 @@ defmodule Warden.RuleTest do
 
     test "all_of stops at the first failure and reports it" do
       rule = all_of([role(:viewer), permission("p"), role(:admin)])
-      assert {:deny, %{failed_rule: {:permission, "p"}, missing_permissions: ["p"]}} = eval(rule, actor([:viewer]))
+
+      assert {:deny, %{failed_rule: {:permission, "p"}, missing_permissions: ["p"]}} =
+               eval(rule, actor([:viewer]))
     end
 
     test "any_of reports the any rule and the union of what is missing" do
@@ -131,7 +135,9 @@ defmodule Warden.RuleTest do
 
     test "checks get the value and opts; only true grants" do
       assert eval(check(:self), actor([]), value: %{id: "me"}) == :ok
-      assert {:deny, %{failed_rule: {:check, :self, []}}} = eval(check(:self), actor([]), value: %{id: "x"})
+
+      assert {:deny, %{failed_rule: {:check, :self, []}}} =
+               eval(check(:self), actor([]), value: %{id: "x"})
 
       for bad <- [:ok, {:ok, true}, "yes", 1, nil, [], "true"] do
         assert_raise Warden.PolicyError, ~r/must return true or false/, fn ->
@@ -155,7 +161,10 @@ defmodule Warden.RuleTest do
       ctx = %{current_user: %{id: "u1", roles: [:admin]}}
       assert Warden.authorize(Authz, permission("secrets:read"), ctx) == :ok
       assert {:deny, _} = Warden.authorize(Authz, role(:admin), %{current_user: nil})
-      assert Warden.authorize(Authz, check(:self), %{current_user: %{id: "u1", roles: []}}, %{id: "u1"}) == :ok
+
+      assert Warden.authorize(Authz, check(:self), %{current_user: %{id: "u1", roles: []}}, %{
+               id: "u1"
+             }) == :ok
     end
   end
 end

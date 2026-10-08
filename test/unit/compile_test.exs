@@ -11,27 +11,31 @@ defmodule Warden.CompileTest do
 
   describe "rule validation" do
     test "a role outside the catalog fails compilation" do
-      assert_raise CompileError, ~r/role :superuser is not in the authorizer's role catalog/, fn ->
-        compile_schema("""
-          query do
-            field :a, :string do
-              authorize role(:superuser)
-            end
-          end
-        """)
-      end
+      assert_raise CompileError,
+                   ~r/role :superuser is not in the authorizer's role catalog/,
+                   fn ->
+                     compile_schema("""
+                       query do
+                         field :a, :string do
+                           authorize role(:superuser)
+                         end
+                       end
+                     """)
+                   end
     end
 
     test "a permission outside the catalog fails compilation" do
-      assert_raise CompileError, ~r/permission "posts:delete" is not in the authorizer's permission catalog/, fn ->
-        compile_schema("""
-          query do
-            field :a, :string do
-              authorize any_of([role(:admin), permission("posts:delete")])
-            end
-          end
-        """)
-      end
+      assert_raise CompileError,
+                   ~r/permission "posts:delete" is not in the authorizer's permission catalog/,
+                   fn ->
+                     compile_schema("""
+                       query do
+                         field :a, :string do
+                           authorize any_of([role(:admin), permission("posts:delete")])
+                         end
+                       end
+                     """)
+                   end
     end
 
     test "an undeclared check fails compilation" do
@@ -151,20 +155,22 @@ defmodule Warden.CompileTest do
     end
 
     test "authorize_args on an input object field fails" do
-      assert_raise CompileError, ~r/`authorize_args` is not supported on input object fields/, fn ->
-        compile_schema("""
-          input_object :i do
-            field :x, :string do
-              authorize_args x: role(:admin)
-            end
-          end
-          query do
-            field :a, :string do
-              arg :i, :i
-            end
-          end
-        """)
-      end
+      assert_raise CompileError,
+                   ~r/`authorize_args` is not supported on input object fields/,
+                   fn ->
+                     compile_schema("""
+                       input_object :i do
+                         field :x, :string do
+                           authorize_args x: role(:admin)
+                         end
+                       end
+                       query do
+                         field :a, :string do
+                           arg :i, :i
+                         end
+                       end
+                     """)
+                   end
     end
 
     test "use Warden.Schema before use Absinthe.Schema fails" do
@@ -189,7 +195,10 @@ defmodule Warden.CompileTest do
       end
 
       assert_raise CompileError, ~r/`:default_object_rule`: role :nobody/, fn ->
-        compile_schema(@query, "authorizer: Warden.Test.Authz, default_object_rule: role(:nobody)")
+        compile_schema(
+          @query,
+          "authorizer: Warden.Test.Authz, default_object_rule: role(:nobody)"
+        )
       end
     end
   end
@@ -299,7 +308,11 @@ defmodule Warden.CompileTest do
               %{fields: fields} = type when is_map(fields) ->
                 fields =
                   Map.new(fields, fn {k, f} ->
-                    {k, %{f | middleware: Enum.reject(f.middleware, &Warden.Middleware.warden_entry?/1)}}
+                    {k,
+                     %{
+                       f
+                       | middleware: Enum.reject(f.middleware, &Warden.Middleware.warden_entry?/1)
+                     }}
                   end)
 
                 %{type | fields: fields}
@@ -326,7 +339,8 @@ defmodule Warden.CompileTest do
           """)
         end
 
-      assert Exception.message(error) =~ "RootQueryType.a: pre middleware absent, plan requires present"
+      assert Exception.message(error) =~
+               "RootQueryType.a: pre middleware absent, plan requires present"
     end
 
     test "verify/1 passes on the test schema" do
@@ -373,7 +387,9 @@ defmodule Warden.CompileTest do
     end
 
     test "roles are required" do
-      assert_raise CompileError, ~r/`:roles` is required/, fn -> compile_authorizer("checks: []") end
+      assert_raise CompileError, ~r/`:roles` is required/, fn ->
+        compile_authorizer("checks: []")
+      end
     end
 
     test "declared checks require check/2" do

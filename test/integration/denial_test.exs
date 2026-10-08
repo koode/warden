@@ -96,7 +96,12 @@ defmodule Warden.Integration.DenialTest do
     test "missing roles are only revealed when the authorizer opts in" do
       result = run("{ salary }", user([:viewer]))
       [error] = result.errors
-      assert error.extensions == %{code: "FORBIDDEN", missing_roles: ["admin"], missing_permissions: []}
+
+      assert error.extensions == %{
+               code: "FORBIDDEN",
+               missing_roles: ["admin"],
+               missing_permissions: []
+             }
     end
   end
 
@@ -179,7 +184,11 @@ defmodule Warden.Integration.DenialTest do
 
     items = Enum.filter(denials, &(&1.field == :vaults))
     assert Enum.map(items, & &1.value_index) |> Enum.sort() == [[0], [1]]
-    assert Enum.all?(items, &(&1.kind == :object and &1.type == :vault and &1.list_policy == :null_item))
+
+    assert Enum.all?(
+             items,
+             &(&1.kind == :object and &1.type == :vault and &1.list_policy == :null_item)
+           )
 
     search = Enum.find(denials, &(&1.field == :search))
     assert search.kind == :argument
@@ -203,7 +212,11 @@ defmodule Warden.Integration.DenialTest do
   test "a :filter handler that returns an error nulls the item with that error" do
     result = run("{ filteredVaults { id } }", user([:viewer], fn _ -> {:error, "shown"} end))
     assert result.data == %{"filteredVaults" => [nil, nil]}
-    assert result.errors |> Enum.map(& &1.path) |> Enum.sort() == [["filteredVaults", 0], ["filteredVaults", 1]]
+
+    assert result.errors |> Enum.map(& &1.path) |> Enum.sort() == [
+             ["filteredVaults", 0],
+             ["filteredVaults", 1]
+           ]
   end
 
   describe "introspection guard" do

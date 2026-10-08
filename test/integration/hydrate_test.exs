@@ -26,18 +26,24 @@ defmodule Warden.Integration.HydrateTest do
       [Warden.Hydrate.meta([rule: role(:admin)], cache: false)]
     end
 
-    def hydrate(%FieldDefinition{identifier: :secret}, [%ObjectTypeDefinition{identifier: :query} | _]) do
+    def hydrate(%FieldDefinition{identifier: :secret}, [
+          %ObjectTypeDefinition{identifier: :query} | _
+        ]) do
       [{:resolve, &__MODULE__.secret/2}]
     end
 
-    def hydrate(%FieldDefinition{identifier: :salary}, [%ObjectTypeDefinition{identifier: :query} | _]) do
+    def hydrate(%FieldDefinition{identifier: :salary}, [
+          %ObjectTypeDefinition{identifier: :query} | _
+        ]) do
       [
         {:resolve, &__MODULE__.salary/2},
         Warden.Hydrate.meta(rule: authenticated(), args: [raw: role(:admin)])
       ]
     end
 
-    def hydrate(%FieldDefinition{identifier: :open}, [%ObjectTypeDefinition{identifier: :query} | _]) do
+    def hydrate(%FieldDefinition{identifier: :open}, [
+          %ObjectTypeDefinition{identifier: :query} | _
+        ]) do
       [{:resolve, &__MODULE__.open/2}]
     end
 
@@ -68,7 +74,11 @@ defmodule Warden.Integration.HydrateTest do
 
   test "Warden.Hydrate.meta validates its input" do
     assert_raise ArgumentError, ~r/invalid rule rule/, fn -> Warden.Hydrate.meta(rule: :admin) end
-    assert_raise ArgumentError, ~r/invalid list policy/, fn -> Warden.Hydrate.meta(list_policy: :x) end
+
+    assert_raise ArgumentError, ~r/invalid list policy/, fn ->
+      Warden.Hydrate.meta(list_policy: :x)
+    end
+
     assert_raise ArgumentError, ~r/unknown/, fn -> Warden.Hydrate.meta(nope: 1) end
   end
 

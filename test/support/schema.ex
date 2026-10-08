@@ -113,7 +113,12 @@ defmodule Warden.Test.Resolvers do
   # process while subscriber documents resolve.
   def rotate_secret(_, _, res) do
     Probe.hit(res, :rotate_secret)
-    :ok = Absinthe.Subscription.publish(Warden.Test.Pubsub, hd(Data.secrets()), secret_rotated: "secrets")
+
+    :ok =
+      Absinthe.Subscription.publish(Warden.Test.Pubsub, hd(Data.secrets()),
+        secret_rotated: "secrets"
+      )
+
     {:ok, true}
   end
 

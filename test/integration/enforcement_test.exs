@@ -102,14 +102,23 @@ defmodule Warden.Integration.EnforcementTest do
 
     test "allowed objects resolve" do
       result = run("{ secrets { id code } }", admin())
-      assert result.data == %{"secrets" => [%{"id" => "s1", "code" => "ALPHA"}, %{"id" => "s2", "code" => "BRAVO"}]}
+
+      assert result.data == %{
+               "secrets" => [
+                 %{"id" => "s1", "code" => "ALPHA"},
+                 %{"id" => "s2", "code" => "BRAVO"}
+               ]
+             }
+
       refute Map.has_key?(result, :errors)
     end
   end
 
   describe "unions and interfaces" do
     test "a union applies each concrete type's rule per item" do
-      result = run("{ search { __typename ... on Secret { code } ... on Post { title } } }", viewer())
+      result =
+        run("{ search { __typename ... on Secret { code } ... on Post { title } } }", viewer())
+
       types = Enum.map(result.data["search"], &(&1 && &1["__typename"]))
       assert types == ["User", "User", "User", "User", "Post", "Post", nil, nil]
       refute contains?(result.data, "ALPHA")
@@ -210,7 +219,10 @@ defmodule Warden.Integration.EnforcementTest do
     end
 
     test "input object field rules" do
-      assert run("{ posts(filter: {includeDrafts: true}) { id } }", viewer()).data == %{"posts" => nil}
+      assert run("{ posts(filter: {includeDrafts: true}) { id } }", viewer()).data == %{
+               "posts" => nil
+             }
+
       assert run("{ posts(filter: {includeDrafts: false}) { id } }", viewer()).data["posts"]
       assert run("{ posts(filter: {includeDrafts: true}) { id } }", editor()).data["posts"]
     end
@@ -272,7 +284,11 @@ defmodule Warden.Integration.EnforcementTest do
 
   describe "async, batch and dataloader" do
     test "post middleware sees the final value of async, batch and dataloader fields" do
-      result = run(~s|{ asyncSecret { code } batchSecrets { code } loaderSecret(id: "s2") { code } }|, viewer())
+      result =
+        run(
+          ~s|{ asyncSecret { code } batchSecrets { code } loaderSecret(id: "s2") { code } }|,
+          viewer()
+        )
 
       assert result.data == %{
                "asyncSecret" => nil,
@@ -287,7 +303,11 @@ defmodule Warden.Integration.EnforcementTest do
                ["loaderSecret"]
              ]
 
-      result = run(~s|{ asyncSecret { code } batchSecrets { code } loaderSecret(id: "s2") { code } }|, admin())
+      result =
+        run(
+          ~s|{ asyncSecret { code } batchSecrets { code } loaderSecret(id: "s2") { code } }|,
+          admin()
+        )
 
       assert result.data == %{
                "asyncSecret" => %{"code" => "ALPHA"},
@@ -299,8 +319,13 @@ defmodule Warden.Integration.EnforcementTest do
 
   describe "checks" do
     test "only a literal true grants" do
-      assert run("{ configured }", viewer(), context: %{check_result: true}).data == %{"configured" => "configured"}
-      assert run("{ configured }", viewer(), context: %{check_result: false}).data == %{"configured" => nil}
+      assert run("{ configured }", viewer(), context: %{check_result: true}).data == %{
+               "configured" => "configured"
+             }
+
+      assert run("{ configured }", viewer(), context: %{check_result: false}).data == %{
+               "configured" => nil
+             }
     end
 
     test "a non-boolean check return raises Warden.PolicyError" do
@@ -322,7 +347,9 @@ defmodule Warden.Integration.EnforcementTest do
     end
 
     test "unknown roles are dropped, never granted" do
-      result = run("{ adminStats }", viewer(), context: %{roles_fun: fn _ -> [:superuser, :root] end})
+      result =
+        run("{ adminStats }", viewer(), context: %{roles_fun: fn _ -> [:superuser, :root] end})
+
       assert result.data == %{"adminStats" => nil}
     end
   end

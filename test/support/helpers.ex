@@ -25,7 +25,8 @@ defmodule Warden.Test.Helpers do
   def error_paths(%{errors: errors}), do: errors |> Enum.map(& &1.path) |> Enum.sort()
   def error_paths(_), do: []
 
-  def forbidden?(error), do: error.message == "Forbidden" and error[:extensions][:code] == "FORBIDDEN"
+  def forbidden?(error),
+    do: error.message == "Forbidden" and error[:extensions][:code] == "FORBIDDEN"
 
   @doc "Collects every {:resolved, tag} message already in the mailbox."
   def resolved do
@@ -38,7 +39,10 @@ defmodule Warden.Test.Helpers do
 
   @doc "Deep-searches a response for a string value."
   def contains?(data, needle) when is_binary(data), do: data == needle
-  def contains?(data, needle) when is_map(data), do: Enum.any?(data, fn {_, v} -> contains?(v, needle) end)
+
+  def contains?(data, needle) when is_map(data),
+    do: Enum.any?(data, fn {_, v} -> contains?(v, needle) end)
+
   def contains?(data, needle) when is_list(data), do: Enum.any?(data, &contains?(&1, needle))
   def contains?(_, _), do: false
 end

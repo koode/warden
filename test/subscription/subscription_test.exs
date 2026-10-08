@@ -64,7 +64,9 @@ defmodule Warden.SubscriptionTest do
 
       publish(secret(), secret_rotated: "secrets")
 
-      assert receive_data(admin_topic) == %{data: %{"secretRotated" => %{"id" => "s1", "code" => "ALPHA"}}}
+      assert receive_data(admin_topic) == %{
+               data: %{"secretRotated" => %{"id" => "s1", "code" => "ALPHA"}}
+             }
 
       viewer_data = receive_data(viewer_topic)
       assert viewer_data.data == %{"secretRotated" => nil}
@@ -148,7 +150,10 @@ defmodule Warden.SubscriptionTest do
 
       publish(Data.user("u1"), shared_user: "users")
       # check(:self) lets Alice see her own email, Bob does not.
-      assert receive_data(alice).data == %{"sharedUser" => %{"id" => "u1", "email" => "alice@example.com"}}
+      assert receive_data(alice).data == %{
+               "sharedUser" => %{"id" => "u1", "email" => "alice@example.com"}
+             }
+
       assert receive_data(bob).data == %{"sharedUser" => %{"id" => "u1", "email" => nil}}
     end
   end

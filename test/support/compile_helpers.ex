@@ -19,7 +19,9 @@ defmodule Warden.Test.CompileHelpers do
   end
 
   def compile!(code) do
-    ExUnit.CaptureIO.capture_io(:stderr, fn -> send(self(), {:compiled, Code.compile_string(code)}) end)
+    ExUnit.CaptureIO.capture_io(:stderr, fn ->
+      send(self(), {:compiled, Code.compile_string(code)})
+    end)
 
     receive do
       {:compiled, mods} -> mods

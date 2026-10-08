@@ -34,7 +34,9 @@ defmodule Warden.ActorTest do
   test "unknown roles and permissions are dropped and logged, never granted" do
     log =
       capture_log(fn ->
-        actor = build(%{id: "x", roles: [:viewer, :root], permissions: ["posts:read", "god", :all]})
+        actor =
+          build(%{id: "x", roles: [:viewer, :root], permissions: ["posts:read", "god", :all]})
+
         send(self(), {:actor, actor})
       end)
 
@@ -89,12 +91,18 @@ defmodule Warden.ActorTest do
     end
 
     test "spec-compliant errors put code at the top level for Absinthe to nest" do
-      assert Authorizer.default_deny(%Denial{kind: :field}, %{@catalog | spec_compliant_errors: true}) ==
+      assert Authorizer.default_deny(%Denial{kind: :field}, %{
+               @catalog
+               | spec_compliant_errors: true
+             }) ==
                {:error, %{message: "Forbidden", code: "FORBIDDEN"}}
     end
 
     test "filtered list items get :null" do
-      assert Authorizer.default_deny(%Denial{kind: :object, list_policy: :filter, value_index: [0]}, @catalog) ==
+      assert Authorizer.default_deny(
+               %Denial{kind: :object, list_policy: :filter, value_index: [0]},
+               @catalog
+             ) ==
                :null
     end
   end
