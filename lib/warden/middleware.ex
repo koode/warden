@@ -264,8 +264,16 @@ defmodule Warden.Middleware do
         %{res | value: value}
 
       {:ok, value, attached} ->
-        res = %{res | value: value}
-        record_item_errors(res, attached)
+        if innermost_non_null?(spec.shape) do
+          # Absinthe's null propagation nulls the whole list field when a null appears
+          # at any depth of a list whose innermost item type is non-null
+          # (`null_allowed_in_list?/1` only looks at the innermost type). Report the
+          # errors on the field so they are not lost.
+          null_field(res, Enum.map(attached, fn {_at, ii, term} -> {ii, term} end))
+        else
+          res = %{res | value: value}
+          record_item_errors(res, attached)
+        end
 
       {tag, pending} when tag in [:null, :bubble] ->
         null_field(res, pending)
@@ -381,14 +389,38 @@ defmodule Warden.Middleware do
 
       {:bubble, pending} ->
         # The item cannot be null, so this list becomes null. Errors already attached
-        # to positions inside it move up with it.
+        # to positions inside it move up with it, and the remaining items are still
+        # checked so every denied item is reported.
         unattached = Enum.map(attached, fn {_at, ii, term} -> {ii, term} end)
-        {:null, unattached ++ pending}
+        collect_rest(rest, i + 1, inner, ctx, idx, unattached ++ pending)
 
       {:fail_list, _} = fail ->
         fail
     end
   end
+
+  defp collect_rest([], _i, _inner, _ctx, _idx, pending), do: {:null, pending}
+
+  defp collect_rest([value | rest], i, inner, ctx, idx, pending) do
+    case walk(value, inner, ctx, [i | idx]) do
+      {:ok, _value, a} ->
+        more = Enum.map(a, fn {_at, ii, term} -> {ii, term} end)
+        collect_rest(rest, i + 1, inner, ctx, idx, pending ++ more)
+
+      {tag, more} when tag in [:null, :bubble] ->
+        collect_rest(rest, i + 1, inner, ctx, idx, pending ++ more)
+
+      :filter ->
+        collect_rest(rest, i + 1, inner, ctx, idx, pending)
+
+      {:fail_list, _} = fail ->
+        fail
+    end
+  end
+
+  defp innermost_non_null?({:non_null, :named}), do: true
+  defp innermost_non_null?({_, inner}), do: innermost_non_null?(inner)
+  defp innermost_non_null?(:named), do: false
 
   defp check_object(value, %{spec: spec} = ctx) do
     case spec.abstract do
