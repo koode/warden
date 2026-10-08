@@ -9,7 +9,10 @@ defmodule Warden.Plan do
   alias Warden.Rule
 
   @root_types [:query, :mutation, :subscription]
-  @introspection_root_fields [:__schema, :__type]
+  # GraphQL names of the fields Absinthe's introspection adds. Matched by name, never by
+  # identifier prefix: a user field `:__internal` named "internal" is an ordinary field.
+  @introspection_fields ["__typename", "__schema", "__type"]
+  @introspection_schema_fields ["__schema", "__type"]
 
   defstruct fields: %{}, subscriptions: %{}, object_rules: %{}, errors: []
 
@@ -68,9 +71,7 @@ defmodule Warden.Plan do
   defp introspection_type?(%{name: "__" <> _}), do: true
   defp introspection_type?(_), do: false
 
-  defp introspection_field?(%{identifier: id}) do
-    id |> Atom.to_string() |> String.starts_with?("__")
-  end
+  defp introspection_field?(%{name: name}), do: name in @introspection_fields
 
   # The effective object rule of every type that has one.
   #
@@ -121,16 +122,35 @@ defmodule Warden.Plan do
   defp pre_spec(object, field, types, object_rules, inputs, config) do
     root? = object.identifier in @root_types
 
+    root_rule =
+      case root? && Map.get(object_rules, object.identifier) do
+        rule when rule not in [nil, false] -> [{:object, object.identifier, rule}]
+        _ -> []
+      end
+
     checks =
       cond do
-        object.identifier == :query and field.identifier in @introspection_root_fields ->
-          case config.introspection do
-            :public -> []
-            rule -> [{:introspection, rule}]
-          end
+        # Absinthe adds `__schema` and `__type` to every object named like a query root,
+        # so the introspection rule guards them wherever they appear. A root object rule
+        # applies too.
+        field.name in @introspection_schema_fields ->
+          parent =
+            case Map.get(object_rules, object.identifier) do
+              nil -> []
+              rule -> [{:object, object.identifier, rule}]
+            end
 
+          introspection =
+            case config.introspection do
+              :public -> []
+              rule -> [{:introspection, rule}]
+            end
+
+          parent ++ introspection
+
+        # `__typename` of a root type is guarded by the root's object rule.
         introspection_field?(field) ->
-          []
+          root_rule
 
         true ->
           parent =
