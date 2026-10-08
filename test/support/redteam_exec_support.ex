@@ -21,7 +21,7 @@ defmodule Warden.RedteamExec.Authz do
   @impl true
   def roles(user, context) do
     case context[:roles_fun] do
-      nil -> Map.get(user, :roles, [])
+      nil -> if is_map(user), do: Map.get(user, :roles, []), else: []
       fun -> fun.(user, context)
     end
   end
