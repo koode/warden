@@ -22,3 +22,7 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 absinthe_warden-*.tar
 
+
+# Absinthe 1.7 test matrix
+/deps_absinthe17/
+/_build_absinthe17/
