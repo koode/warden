@@ -109,6 +109,14 @@ defmodule Warden.Test.Resolvers do
 
   def subscription_root(root, _, _), do: {:ok, root}
 
+  # Publishes from inside a mutation, so the publisher's execution is live in the same
+  # process while subscriber documents resolve.
+  def rotate_secret(_, _, res) do
+    Probe.hit(res, :rotate_secret)
+    :ok = Absinthe.Subscription.publish(Warden.Test.Pubsub, hd(Data.secrets()), secret_rotated: "secrets")
+    {:ok, true}
+  end
+
   def resolve_kind(%{kind: kind}, _), do: kind
   def resolve_kind(_, _), do: nil
 end
@@ -339,6 +347,11 @@ defmodule Warden.Test.Schema do
       authorize authenticated()
       arg :input, non_null(:profile_input)
       resolve &R.update_profile/3
+    end
+
+    field :rotate_secret, :boolean do
+      authorize role(:admin)
+      resolve &R.rotate_secret/3
     end
 
     field :leak_secret, :secret do
