@@ -49,7 +49,9 @@ defmodule Warden.Redteam.SchemaConstructionTest do
 
     test "__type on a non-root object named Query escapes the introspection rule" do
       schema = compile_schema(@named_query, @authz <> ", introspection: role(:admin)")
-      r = run(~s|{ meta { __type(name: "RootQueryType") { name fields { name } } } }|, viewer(),
+
+      r =
+        run(~s|{ meta { __type(name: "RootQueryType") { name fields { name } } } }|, viewer(),
           schema: schema
         )
 
@@ -299,7 +301,11 @@ defmodule Warden.Redteam.SchemaConstructionTest do
       """
 
       schema = compile_schema(body, @authz)
-      assert run(~s|{ doc { note } }|, viewer(), schema: schema).data == %{"doc" => %{"note" => nil}}
+
+      assert run(~s|{ doc { note } }|, viewer(), schema: schema).data == %{
+               "doc" => %{"note" => nil}
+             }
+
       assert run(~s|{ doc { id } }|, nil, schema: schema).data == %{"doc" => nil}
     end
 

@@ -25,6 +25,12 @@ defmodule Warden.Test.FZ.Authz do
     actor.subject != nil and is_map(value) and Map.get(value, :owner) == actor.subject.id
   end
 
+  # Opt in to subscription sharing (decision 8: off by default). Every rule here reads
+  # only the subject id, roles and permissions, so the default key is sound and the
+  # fuzz keeps exercising shared resolutions.
+  @impl true
+  def actor_key(actor, _context), do: Warden.Authorizer.default_actor_key(actor)
+
   @impl true
   def deny(%Warden.Denial{} = denial) do
     case Process.get(:fz_deny_mode, :error) do

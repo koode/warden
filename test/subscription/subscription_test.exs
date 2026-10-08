@@ -8,6 +8,39 @@ defmodule Warden.SubscriptionTest do
 
   @schema Warden.Test.Schema
 
+  defmodule OptIn.Authz do
+    @moduledoc false
+    use Warden.Authorizer, roles: [:member]
+
+    def subject(ctx), do: ctx[:current_user]
+    def roles(user, _), do: user.roles
+
+    # The key covers the org from the context; nil opts out.
+    def actor_key(_actor, %{org: nil}), do: nil
+    def actor_key(actor, ctx), do: Warden.Authorizer.default_actor_key(actor) <> ":" <> ctx.org
+  end
+
+  defmodule OptIn.Schema do
+    @moduledoc false
+    use Absinthe.Schema
+    use Warden.Schema, authorizer: Warden.SubscriptionTest.OptIn.Authz
+
+    query do
+      field :ok, :string
+    end
+
+    object :item do
+      field :id, :id
+    end
+
+    subscription do
+      field :feed, :item do
+        config fn _, _ -> {:ok, topic: "feed", context_id: "global"} end
+        resolve fn root, _, _ -> {:ok, root} end
+      end
+    end
+  end
+
   defp subscribe(doc, user, extra \\ %{}) do
     context = Map.merge(%{pubsub: Pubsub, current_user: user, test_pid: self()}, extra)
 
@@ -122,47 +155,60 @@ defmodule Warden.SubscriptionTest do
   end
 
   describe "context_id" do
-    test "subscribers with the same context_id but different access do not share a payload" do
+    test "sharing is off by default: a user context_id is removed" do
       doc = "subscription { sharedUser { id email } }"
       {:ok, viewer_topic} = subscribe(doc, viewer())
       {:ok, nobody_topic} = subscribe(doc, nobody())
       {:ok, viewer2_topic} = subscribe(doc, viewer())
 
-      assert viewer_topic != nobody_topic
-      assert String.contains?(viewer_topic, "global:warden:")
-      # Same access, same key: sharing is still possible, as Absinthe intends.
-      assert viewer_topic == viewer2_topic
+      assert Enum.uniq([viewer_topic, nobody_topic, viewer2_topic]) |> length() == 3
+      refute String.contains?(viewer_topic, "global")
 
       publish(Data.user("u1"), shared_user: "users")
 
-      viewer_data = receive_data(viewer_topic)
-      nobody_data = receive_data(nobody_topic)
+      assert receive_data(viewer_topic).data == %{"sharedUser" => %{"id" => "u1", "email" => nil}}
 
-      assert viewer_data.data == %{"sharedUser" => %{"id" => "u1", "email" => nil}}
-      assert nobody_data.data == %{"sharedUser" => nil}
-    end
-
-    test "a config returned as a map is fingerprinted too" do
-      doc = "subscription { sharedUserMap { id email } }"
-      {:ok, viewer_topic} = subscribe(doc, viewer())
-      {:ok, nobody_topic} = subscribe(doc, nobody())
-      assert viewer_topic != nobody_topic
-      assert String.contains?(viewer_topic, "global:warden:")
-    end
-
-    test "subscribers with different subjects but the same roles get different keys" do
-      doc = "subscription { sharedUser { id email } }"
-      {:ok, bob} = subscribe(doc, Data.as(:viewer, "u2"))
-      {:ok, alice} = subscribe(doc, Data.as(:viewer, "u1"))
-      assert bob != alice
-
-      publish(Data.user("u1"), shared_user: "users")
-      # check(:self) lets Alice see her own email, Bob does not.
-      assert receive_data(alice).data == %{
-               "sharedUser" => %{"id" => "u1", "email" => "alice@example.com"}
+      assert receive_data(viewer2_topic).data == %{
+               "sharedUser" => %{"id" => "u1", "email" => nil}
              }
 
-      assert receive_data(bob).data == %{"sharedUser" => %{"id" => "u1", "email" => nil}}
+      assert receive_data(nobody_topic).data == %{"sharedUser" => nil}
+    end
+
+    test "a config returned as a map loses its context_id too" do
+      doc = "subscription { sharedUserMap { id email } }"
+      {:ok, a} = subscribe(doc, viewer())
+      {:ok, b} = subscribe(doc, viewer())
+      assert a != b
+      refute String.contains?(a, "global")
+    end
+
+    test "opt-in: actor_key/2 lets subscriptions with equal keys share" do
+      doc = "subscription { feed { id } }"
+      ctx = %{pubsub: Pubsub, test_pid: self()}
+
+      sub = fn user, org ->
+        {:ok, %{"subscribed" => topic}} =
+          Absinthe.run(doc, OptIn.Schema,
+            context: Map.merge(ctx, %{current_user: user, org: org})
+          )
+
+        :ok = Pubsub.subscribe(topic)
+        topic
+      end
+
+      a = sub.(%{id: "x", roles: [:member]}, "acme")
+      b = sub.(%{id: "x", roles: [:member]}, "acme")
+      c = sub.(%{id: "x", roles: [:member]}, "globex")
+      d = sub.(%{id: "x", roles: []}, "acme")
+
+      assert a == b
+      assert String.contains?(a, "global:warden:")
+      assert a != c
+      assert a != d
+
+      e = sub.(%{id: "x", roles: [:member]}, nil)
+      refute String.contains?(e, "global")
     end
   end
 end

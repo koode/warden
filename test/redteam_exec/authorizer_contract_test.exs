@@ -60,11 +60,19 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
 
     test ":all smuggled as a role from user data grants nothing" do
       ctx = %{current_user: viewer(), roles_fun: fn _, _ -> [:all] end}
-      assert run_ctx("{ adminOnly permField }", ctx).data == %{"adminOnly" => nil, "permField" => nil}
+
+      assert run_ctx("{ adminOnly permField }", ctx).data == %{
+               "adminOnly" => nil,
+               "permField" => nil
+             }
     end
 
     test "nested and tuple roles do not grant" do
-      ctx = %{current_user: viewer(), roles_fun: fn _, _ -> [[:admin], {:admin}, {:role, :admin}] end}
+      ctx = %{
+        current_user: viewer(),
+        roles_fun: fn _, _ -> [[:admin], {:admin}, {:role, :admin}] end
+      }
+
       assert run_ctx("{ adminOnly }", ctx).data == %{"adminOnly" => nil}
     end
 

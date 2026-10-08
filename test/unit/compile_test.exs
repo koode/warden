@@ -400,6 +400,14 @@ defmodule Warden.CompileTest do
       assert compile_authorizer("roles: [:a], checks: [:self]", "def check(:self, _), do: true")
     end
 
+    test "the retired actor_key/1 fails compilation instead of being ignored" do
+      assert_raise CompileError,
+                   ~r/defines actor_key\/1; the callback is actor_key\(actor, context\)/,
+                   fn ->
+                     compile_authorizer("roles: [:a]", "def actor_key(_), do: \"k\"")
+                   end
+    end
+
     test "unknown options fail" do
       assert_raise CompileError, ~r/unknown options: \[:rolez\]/, fn ->
         compile_authorizer("roles: [:a], rolez: []")

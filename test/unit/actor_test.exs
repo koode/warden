@@ -65,11 +65,11 @@ defmodule Warden.ActorTest do
       a2 = build(%{id: "2", roles: [:viewer]})
       a3 = build(%{id: "1", roles: [:editor]})
 
-      assert Authz.actor_key(a1) == Authz.actor_key(a1b)
-      assert Authz.actor_key(a1) != Authz.actor_key(a2)
-      assert Authz.actor_key(a1) != Authz.actor_key(a3)
-      assert Authz.actor_key(%Actor{}) == Authz.actor_key(%Actor{})
-      assert is_binary(Authz.actor_key(a1))
+      assert Authorizer.default_actor_key(a1) == Authorizer.default_actor_key(a1b)
+      assert Authorizer.default_actor_key(a1) != Authorizer.default_actor_key(a2)
+      assert Authorizer.default_actor_key(a1) != Authorizer.default_actor_key(a3)
+      assert Authorizer.default_actor_key(%Actor{}) == Authorizer.default_actor_key(%Actor{})
+      assert is_binary(Authorizer.default_actor_key(a1))
     end
   end
 

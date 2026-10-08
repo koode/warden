@@ -66,13 +66,21 @@ defmodule Warden.Authorizer do
   @callback deny(Denial.t()) :: denial_result
 
   @doc """
-  Returns a key that identifies what the actor may see. Used to keep subscribers with
-  different access from sharing one subscription resolution. The default hashes the
-  subject identity (its `:id` when it is a map with one), the roles and the permissions.
-  """
-  @callback actor_key(Actor.t()) :: String.t()
+  Opts in to subscription sharing. Absinthe resolves an event once per `context_id` and
+  document and sends the result to every subscriber with that id. By default Warden
+  removes any `context_id` your `config` sets, so every subscription resolves on its
+  own. When you define `actor_key/2`, Warden instead appends the key you return to the
+  `context_id`: subscriptions whose keys are equal share one resolution, and share its
+  fate (a revocation that should hit one of them hits the shared resolution only when
+  the key changes). Return `nil` to not share this subscription.
 
-  @optional_callbacks permissions: 2, check: 2, deny: 1, actor_key: 1
+  The key must cover everything your rules read: subject attributes, roles,
+  permissions, and any context values a `check` uses. `default_actor_key/1` hashes the
+  subject identity, roles and permissions, and can be a building block.
+  """
+  @callback actor_key(Actor.t(), context :: map) :: String.t() | nil
+
+  @optional_callbacks permissions: 2, check: 2, deny: 1, actor_key: 2
 
   @option_keys [
     :roles,
@@ -155,12 +163,18 @@ defmodule Warden.Authorizer do
         end
       end
 
+    if defines?.({:actor_key, 1}) and not defines?.({:actor_key, 2}) do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description:
+          "#{inspect(env.module)} defines actor_key/1; the callback is actor_key(actor, context)"
+    end
+
     actor_key_def =
-      unless defines?.({:actor_key, 1}) do
-        quote do
-          @doc false
-          def actor_key(actor), do: Warden.Authorizer.default_actor_key(actor)
-        end
+      quote do
+        @doc false
+        def __warden_dedup__, do: unquote(defines?.({:actor_key, 2}))
       end
 
     [check_def, permissions_def, deny_def, actor_key_def]

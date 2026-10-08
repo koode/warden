@@ -265,6 +265,7 @@ defmodule Warden.RedteamExec.SubscriptionTest do
     test "subjects without :id that differ only in a field get different keys" do
       a = %{name: "a", roles: [:viewer]}
       b = %{name: "b", roles: [:viewer]}
+
       assert Warden.Authorizer.default_actor_key(actor(a)) !=
                Warden.Authorizer.default_actor_key(actor(b))
     end

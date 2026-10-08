@@ -51,7 +51,11 @@ defmodule Warden.Redteam.VariablesTest do
   end
 
   test "restricted node id through a variable list" do
-    r = q(~s|query($ids: [ID!]) { nodes(ids: $ids) { id } }|, viewer(), variables: %{"ids" => ["s1"]})
+    r =
+      q(~s|query($ids: [ID!]) { nodes(ids: $ids) { id } }|, viewer(),
+        variables: %{"ids" => ["s1"]}
+      )
+
     assert r.data == %{"nodes" => [nil]}
   end
 end

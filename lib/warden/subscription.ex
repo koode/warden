@@ -28,7 +28,7 @@ defmodule Warden.Subscription do
 
     with :ok <- subscribe_checks(spec.pre, actor, field_ident, args, context, authorizer),
          {:ok, config} <- user_config(field_ident, original, args, info) do
-      {:ok, fingerprint(config, actor, authorizer)}
+      {:ok, fingerprint(config, actor, context, authorizer)}
     end
   end
 
@@ -100,25 +100,38 @@ defmodule Warden.Subscription do
   end
 
   # Absinthe reads the config with `config[:context_id]`, so it may be a keyword list or
-  # a map.
-  defp fingerprint(config, actor, authorizer) when is_list(config) or is_map(config) do
+  # a map. Sharing is off unless the authorizer opts in with `actor_key/2`; without a
+  # `context_id`, Absinthe gives every subscription its own id.
+  defp fingerprint(config, actor, context, authorizer)
+       when is_list(config) or is_map(config) do
     case config[:context_id] do
-      nil ->
+      empty when empty in [nil, false] ->
         config
 
       context_id ->
-        key = authorizer.actor_key(actor)
+        if authorizer.__warden_dedup__() do
+          case authorizer.actor_key(actor, context) do
+            nil ->
+              drop_context_id(config)
 
-        unless is_binary(key) do
-          raise Warden.PolicyError,
-                "#{inspect(authorizer)}.actor_key/1 must return a string, got: #{inspect(key)}"
+            key when is_binary(key) ->
+              put_context_id(config, "#{context_id}:warden:#{key}")
+
+            other ->
+              raise Warden.PolicyError,
+                    "#{inspect(authorizer)}.actor_key/2 must return a string or nil, got: " <>
+                      inspect(other)
+          end
+        else
+          drop_context_id(config)
         end
-
-        put_context_id(config, "#{context_id}:warden:#{key}")
     end
   end
 
-  defp fingerprint(config, _actor, _authorizer), do: config
+  defp fingerprint(config, _actor, _context, _authorizer), do: config
+
+  defp drop_context_id(config) when is_list(config), do: Keyword.delete(config, :context_id)
+  defp drop_context_id(config) when is_map(config), do: Map.delete(config, :context_id)
 
   defp put_context_id(config, id) when is_list(config), do: Keyword.put(config, :context_id, id)
   defp put_context_id(config, id) when is_map(config), do: Map.put(config, :context_id, id)

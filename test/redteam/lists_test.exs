@@ -56,7 +56,8 @@ defmodule Warden.Redteam.ListsTest do
   end
 
   test ":filter on a list of union members drops every denied member" do
-    r = q(~s|{ searchFilter(ids: ["u1", "s1", "u2", "p1", "s2", "t1"]) { __typename } }|, viewer())
+    r =
+      q(~s|{ searchFilter(ids: ["u1", "s1", "u2", "p1", "s2", "t1"]) { __typename } }|, viewer())
 
     assert r.data == %{
              "searchFilter" => [
@@ -75,7 +76,12 @@ defmodule Warden.Redteam.ListsTest do
   end
 
   test ":null_item error paths use the alias of the list field" do
-    r = q(~s|{ a: search(ids: ["t1", "s1"]) { __typename } b: search(ids: ["s2"]) { __typename } }|, viewer())
+    r =
+      q(
+        ~s|{ a: search(ids: ["t1", "s1"]) { __typename } b: search(ids: ["s2"]) { __typename } }|,
+        viewer()
+      )
+
     assert r.data == %{"a" => [%{"__typename" => "PublicThing"}, nil], "b" => [nil]}
     assert paths(r) == [["a", 1], ["b", 0]]
   end
@@ -113,6 +119,7 @@ defmodule Warden.Redteam.ListsTest do
     assert r.data == %{"searchFilter" => [nil]}
     assert [%{message: "hidden"}] = Map.get(r, :errors, [])
   end
+
   test ":filter error lands on the denied item, not on a later null item" do
     deny_fun = fn
       %{list_policy: :filter, type: :secret} -> {:error, "hidden"}

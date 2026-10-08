@@ -29,7 +29,8 @@ defmodule Warden.Redteam.Authz do
   end
 
   @impl true
-  def deny(%Warden.Denial{actor: %{subject: %{deny_fun: fun}}} = denial) when is_function(fun, 1) do
+  def deny(%Warden.Denial{actor: %{subject: %{deny_fun: fun}}} = denial)
+      when is_function(fun, 1) do
     case fun.(denial) do
       :default -> Warden.Authorizer.default_deny(denial, __warden_catalog__())
       other -> other

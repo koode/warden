@@ -36,7 +36,9 @@ defmodule Warden.Redteam.FragmentsAbstractTest do
     end
 
     test "type condition that does not match the runtime type is not a back door" do
-      doc = ~s|{ search(ids: ["s1", "t1"]) { ... on PublicThing { label } ... on Secret { code } } }|
+      doc =
+        ~s|{ search(ids: ["s1", "t1"]) { ... on PublicThing { label } ... on Secret { code } } }|
+
       r = q(doc, viewer())
       refute contains?(r.data, "ALPHA")
       assert r.data["search"] |> Enum.at(1) == %{"label" => "T1"}
@@ -168,7 +170,12 @@ defmodule Warden.Redteam.FragmentsAbstractTest do
     end
 
     test "Relay node: id of a restricted object is not returned via the Node interface" do
-      r = q(~s|{ a: node(id: "s1") { id } b: nodes(ids: ["s2", "t1"]) { id __typename } }|, viewer())
+      r =
+        q(
+          ~s|{ a: node(id: "s1") { id } b: nodes(ids: ["s2", "t1"]) { id __typename } }|,
+          viewer()
+        )
+
       assert r.data["a"] == nil
       refute contains?(r.data, "s2")
       refute contains?(r.data, "Secret")

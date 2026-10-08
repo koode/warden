@@ -2,7 +2,7 @@ defmodule Warden.RedteamExec.Authz do
   @moduledoc false
   # Authorizer for the execution / subscription / contract red-team suite. Most
   # callbacks can be bent per test through the context or the process dictionary
-  # (deny/1 and actor_key/1 get no context).
+  # (deny/1 gets no context).
   use Warden.Authorizer,
     roles: [:admin, :editor, :viewer],
     permissions: ["secrets:read", "posts:read", "posts:write"],
@@ -59,10 +59,12 @@ defmodule Warden.RedteamExec.Authz do
     end
   end
 
+  # Port to the actor_key/2 callback (opt-in sharing). Without a per-test key it opts
+  # out (nil), the same as an authorizer that does not define the callback.
   @impl true
-  def actor_key(actor) do
+  def actor_key(actor, _context) do
     case Process.get(:rx_actor_key) do
-      nil -> Warden.Authorizer.default_actor_key(actor)
+      nil -> nil
       fun -> fun.(actor)
     end
   end
@@ -92,7 +94,10 @@ defmodule Warden.RedteamExec.Data do
   def secret, do: %{kind: :rx_secret, id: "s1", code: "ALPHA"}
   def secret2, do: %{kind: :rx_secret, id: "s2", code: "BRAVO"}
   def post, do: %{kind: :rx_post, id: "p1", title: "Hello", notes: "editor-notes"}
-  def tdoc(tenant), do: %{kind: :rx_tdoc, id: "t-#{tenant}", tenant: tenant, body: "body-#{tenant}"}
+
+  def tdoc(tenant),
+    do: %{kind: :rx_tdoc, id: "t-#{tenant}", tenant: tenant, body: "body-#{tenant}"}
+
   def odoc(org), do: %{kind: :rx_odoc, id: "o-#{org}", org: org, body: "body-#{org}"}
 
   def user(roles, opts \\ []) do
