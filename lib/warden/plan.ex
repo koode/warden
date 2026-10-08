@@ -400,17 +400,25 @@ defmodule Warden.Plan do
       named = Type.unwrap(field.type)
       shape = shape(field.type)
 
+      # For abstract types the concrete type comes from user code (`resolve_type`), which
+      # may return a type outside the declared members. Every object rule is therefore
+      # in reach of an abstract field.
+      object_type_rules =
+        for {ident, rule} <- object_rules,
+            match?(%Type.Object{}, Map.get(types, ident)),
+            into: %{},
+            do: {ident, rule}
+
       {abstract_rule, concrete_rules, abstract_kind} =
         case Map.get(types, named) do
           %Type.Object{} ->
             {nil, Map.take(object_rules, [named]), nil}
 
           %Type.Interface{} ->
-            possible = implementors(types, named)
-            {Map.get(object_rules, named), Map.take(object_rules, possible), :interface}
+            {Map.get(object_rules, named), object_type_rules, :interface}
 
-          %Type.Union{types: members} ->
-            {Map.get(object_rules, named), Map.take(object_rules, members), :union}
+          %Type.Union{} ->
+            {Map.get(object_rules, named), object_type_rules, :union}
 
           _ ->
             {nil, %{}, nil}
