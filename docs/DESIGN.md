@@ -459,3 +459,70 @@ Three red-team agents attacked the first version (`test/redteam/`,
     a `null` in a non-null field. Warden records every non-null field it nulls inside a
     list (`middleware.ex`, `maybe_record_fold/1`) and `Warden.Phase.ItemErrors` folds it explicitly to the
     nearest nullable position (`phase/item_errors.ex:95`).
+
+## Outside Absinthe: core API and Plug (added 2026-10-09)
+
+The package becomes `warden` (app `:warden`). One authorizer module serves GraphQL and
+REST. Absinthe and Plug are optional dependencies.
+
+### Module layout
+
+| Layer | Modules | Needs |
+|---|---|---|
+| Core | `Warden`, `Warden.Rule`, `Warden.Authorizer`, `Warden.Actor`, `Warden.Check`, `Warden.Denial`, `Warden.PolicyError`, `Warden.ForbiddenError` | nothing |
+| Absinthe | `Warden.Absinthe` (was `Warden.Schema`; `use Warden.Absinthe, authorizer: ...`), `Warden.Absinthe.Notation`, `Warden.Absinthe.Hydrate`, internals under `Warden.Absinthe.*` | `absinthe` |
+| Plug | `Warden.Plug` | `plug` |
+
+Optional layers compile only when their dependency is loaded
+(`if Code.ensure_loaded?(Absinthe)`). The core must compile and work, with
+warnings-as-errors, in a project that has neither dependency.
+
+### Core API (`Warden`)
+
+```elixir
+actor = Warden.actor(MyApp.Authz, context)                 # build once per request
+:ok = Warden.authorize(MyApp.Authz, actor_or_context, rule, value: post)
+# -> :ok | {:error, %Warden.Denial{kind: :call}}
+Warden.allowed?(MyApp.Authz, actor_or_context, rule, value: post)   # -> boolean
+Warden.authorize!(MyApp.Authz, actor_or_context, rule, value: post) # raises Warden.ForbiddenError
+Warden.filter(MyApp.Authz, actor_or_context, rule, posts)           # keeps the permitted values
+```
+
+- `actor_or_context` is a `%Warden.Actor{}` or a context map. A map builds the actor
+  through the authorizer (same callbacks as for GraphQL).
+- An actor built by a different authorizer raises `Warden.PolicyError`.
+- The rule is validated against the authorizer's catalog on every call (cheap). An unknown
+  role, permission or check raises `Warden.PolicyError`: fail closed, never a silent deny.
+- Same evaluation, same strict-boolean contract and same `Warden.Check` struct as the
+  Absinthe path (`value` is the resource; GraphQL-only fields are nil).
+- `Warden.ForbiddenError` carries the denial and `plug_status: 403`, so Phoenix renders
+  it as 403 without Warden depending on Plug. Its message never names the missing
+  role or permission unless the authorizer sets `expose_denial_reasons: true`.
+
+### Plug (`Warden.Plug`)
+
+```elixir
+import Warden.Rule
+plug Warden.Plug, authorizer: MyApp.Authz, rule: role(:admin)
+
+# in a controller action, for a loaded resource:
+with {:ok, conn} <- Warden.Plug.authorize(conn, MyApp.Authz, any_of([role(:admin), check(:owner)]), value: post) do
+  ...
+end
+```
+
+- `init/1` validates the rule against the authorizer catalog. Phoenix runs `init/1` at
+  compile time, so a typo fails compilation.
+- The actor is built once per conn and cached in `conn.private[:warden_actor]`, keyed by
+  authorizer. Clients cannot write `conn.private`. Nothing is cached across requests or in
+  the process dictionary.
+- Context from a conn: optional authorizer callback `conn_context(conn)`, default
+  `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads `context[:current_user]`
+  works for both GraphQL and REST.
+- On denial the plug calls optional authorizer callback `deny_conn(conn, denial)`. The
+  plug option `on_deny: {mod, fun}` overrides it. The default sends 401 for an anonymous
+  actor and 403 otherwise, body `"Forbidden"` / `"Unauthorized"`, and halts. Whatever
+  the handler returns, the plug halts the conn: a handler cannot let a denied request
+  through by forgetting `halt/1`.
+- `Warden.Plug.authorize/4` returns `{:ok, conn}` (actor cached) or `{:error, denial}`
+  and does not send a response; `authorize!/4` raises `Warden.ForbiddenError`.
