@@ -9,6 +9,9 @@ defmodule Warden.ForbiddenError do
   the authorizer sets `expose_denial_reasons: true`.
   """
 
+  # The denial holds the actor and its subject (the whole user record). Keep them out of
+  # logs and crash reports; `error.denial` stays available to code.
+  @derive {Inspect, only: [:message, :plug_status]}
   defexception message: "Forbidden", denial: nil, plug_status: 403
 
   @type t :: %__MODULE__{message: String.t(), denial: Warden.Denial.t() | nil, plug_status: 403}

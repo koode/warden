@@ -17,7 +17,9 @@ if Code.ensure_loaded?(Plug) do
       * `:authorizer` - the authorizer module. Resolution order: this option, then the
         configured default (`config :warden, authorizer: MyApp.Authz`).
       * `:on_deny` - `{module, function}` called as `function(conn, denial)` on denial.
-        Overrides the authorizer's `c:Warden.Authorizer.deny_conn/2`.
+        Overrides the authorizer's `c:Warden.Authorizer.deny_conn/2`. `init/1` checks that
+        `module.function/2` exists (except for a module that is still being compiled,
+        such as the controller itself).
 
     `init/1` resolves the authorizer and validates the rule against its catalog. Phoenix
     runs `init/1` at compile time, so an unknown role, permission or check, or a missing
@@ -31,11 +33,19 @@ if Code.ensure_loaded?(Plug) do
 
     ## In a controller
 
+        # configured default
         with {:ok, conn} <- Warden.Plug.authorize(conn, check(:owner), value: post) do
           render(conn, :show, post: post)
         end
 
-        conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyApp.Authz)
+        # explicit authorizer
+        with {:ok, conn} <-
+               Warden.Plug.authorize(conn, check(:owner), value: post, authorizer: MyApp.Authz) do
+          render(conn, :show, post: post)
+        end
+
+        conn = Warden.Plug.authorize!(conn, check(:owner), value: post)                         # default
+        conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyApp.Authz) # explicit
 
     `authorize/3` returns `{:ok, conn}` or `{:error, %Warden.Denial{}}` and sends nothing;
     `authorize!/3` returns the conn or raises `Warden.ForbiddenError` (rendered as 403).
@@ -44,11 +54,13 @@ if Code.ensure_loaded?(Plug) do
 
     ## The actor
 
-    The actor is built once per conn, from `c:Warden.Authorizer.conn_context/1` (default
-    `Map.put(conn.assigns, :conn, conn)`), and cached in `conn.private[:warden_actor]`,
-    keyed by authorizer. Nothing is cached across requests or in the process dictionary.
-    The actor reflects the assigns at the first Warden check of the request; run your
-    authentication plug before the first Warden plug.
+    The actor is built from `c:Warden.Authorizer.conn_context/1` (default
+    `Map.put(conn.assigns, :conn, conn)`) and cached in `conn.private[:warden_actor]`,
+    keyed by authorizer, together with the subject it was built from. Every check calls
+    `subject/1` on the current conn context and uses the cached actor only when the
+    subject is the same value; when the user changes during the request (a logout, an
+    impersonation or sudo-drop plug, or a user record with different roles), the actor
+    is rebuilt. Nothing is cached across requests or in the process dictionary.
     """
 
     @behaviour Plug
@@ -95,6 +107,7 @@ if Code.ensure_loaded?(Plug) do
             nil
 
           {mod, fun} = handler when is_atom(mod) and is_atom(fun) ->
+            validate_on_deny!(mod, fun)
             handler
 
           other ->
@@ -103,6 +116,24 @@ if Code.ensure_loaded?(Plug) do
         end
 
       %{rule: rule, authorizer: authorizer, on_deny: on_deny}
+    end
+
+    # A handler module that is being compiled right now (a controller that passes
+    # `on_deny: {__MODULE__, :deny}`) cannot be checked yet; its function may be defined
+    # further down the file. Every other module must exist and export `fun/2`.
+    defp validate_on_deny!(mod, fun) do
+      cond do
+        Module.open?(mod) ->
+          :ok
+
+        match?({:module, _}, Code.ensure_compiled(mod)) and function_exported?(mod, fun, 2) ->
+          :ok
+
+        true ->
+          raise ArgumentError,
+                "Warden.Plug `on_deny: {#{inspect(mod)}, #{inspect(fun)}}`: " <>
+                  "#{inspect(mod)}.#{fun}/2 does not exist"
+      end
     end
 
     @impl Plug
@@ -117,7 +148,13 @@ if Code.ensure_loaded?(Plug) do
     end
 
     @doc """
-    Returns `{conn, actor}`: the actor for the conn, built once and cached in the conn.
+    Returns `{conn, actor}`: the actor for the conn, cached in the conn (rebuilt when the
+    subject changed). Pass it on to the core API.
+
+        {conn, actor} = Warden.Plug.actor(conn)                          # configured default
+        {conn, actor} = Warden.Plug.actor(conn, authorizer: MyApp.Authz) # explicit
+        Warden.filter(actor, check(:owner), posts)
+
     Option `:authorizer`: explicit option, else the configured default.
     """
     @spec actor(Plug.Conn.t(), keyword) :: {Plug.Conn.t(), Actor.t()}
@@ -176,17 +213,23 @@ if Code.ensure_loaded?(Plug) do
 
     ## Internals
 
+    # The cache holds `{subject, actor}` per authorizer. A hit is used only while
+    # `subject/1` still returns the same value for the current conn context; when the
+    # user changes during the request (logout, impersonation, a changed user record),
+    # the actor is rebuilt.
     defp fetch_actor(conn, authorizer) do
       context = conn_context(conn, authorizer)
+      subject = authorizer.subject(context)
       cache = Map.get(conn.private, @private_key, %{})
 
       case cache do
-        %{^authorizer => %Actor{} = actor} ->
+        %{^authorizer => {^subject, %Actor{} = actor}} ->
           {conn, actor, context}
 
         _ ->
           actor = Actor.build(authorizer, context)
-          {put_private(conn, @private_key, Map.put(cache, authorizer, actor)), actor, context}
+          cache = Map.put(cache, authorizer, {subject, actor})
+          {put_private(conn, @private_key, cache), actor, context}
       end
     end
 

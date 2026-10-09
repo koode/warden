@@ -89,14 +89,17 @@ defmodule Warden.Adversarial.RestAttacksTest do
   test "an actor from another authorizer planted in the conn cache is refused" do
     planted = Warden.actor(%{current_user: %{id: "u9", roles: [:admin]}}, authorizer: OtherAuthz)
 
-    conn =
-      conn(:get, "/")
-      |> viewer_conn()
-      |> put_private(:warden_actor, %{Warden.Test.Authz => planted})
+    # Planted under the current subject (anonymous here): used, then refused.
+    conn = conn(:get, "/") |> put_private(:warden_actor, %{Warden.Test.Authz => {nil, planted}})
 
     assert_raise PolicyError, ~r/the actor was built by/, fn ->
       Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin)))
     end
+
+    # Planted in any other shape: ignored, the actor is rebuilt from the conn.
+    conn = conn(:get, "/") |> put_private(:warden_actor, %{Warden.Test.Authz => planted})
+    conn = Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin)))
+    assert {conn.status, conn.halted} == {401, true}
   end
 
   test "a hand-built actor with admin roles is refused by the core API" do
@@ -119,15 +122,49 @@ defmodule Warden.Adversarial.RestAttacksTest do
     end
   end
 
-  test "privilege raised in assigns after the actor was cached" do
-    conn = conn(:get, "/") |> assign(:current_user, %{id: "u2", roles: [:viewer]})
-    assert {:error, _} = Warden.Plug.authorize(conn, role(:admin))
-    {:error, _} = Warden.Plug.authorize(conn, role(:admin))
+  test "stale cached actor: the user is switched to a viewer mid-request (sudo drop)" do
+    conn = conn(:get, "/") |> assign(:current_user, %{id: "u1", roles: [:admin]})
+    assert {:ok, conn} = Warden.Plug.authorize(conn, role(:admin))
 
-    {:ok, conn} = Warden.Plug.authorize(conn, role(:viewer))
-    conn = assign(conn, :current_user, %{id: "u2", roles: [:admin]})
-    # The actor cached for this request does not change: no escalation mid-request.
+    conn = assign(conn, :current_user, %{id: "u2", roles: [:viewer]})
     assert {:error, _} = Warden.Plug.authorize(conn, role(:admin))
+  end
+
+  test "stale cached actor: logout before a plug that requires authentication" do
+    conn = conn(:get, "/") |> assign(:current_user, %{id: "u1", roles: [:admin]})
+    assert {:ok, conn} = Warden.Plug.authorize(conn, authenticated())
+
+    conn = assign(conn, :current_user, nil)
+    conn = Warden.Plug.call(conn, Warden.Plug.init(rule: authenticated()))
+    assert {conn.status, conn.halted} == {401, true}
+  end
+
+  test "stale cached actor: only the roles in the same user struct change" do
+    user = %{id: "u1", roles: [:admin]}
+    conn = conn(:get, "/") |> assign(:current_user, user)
+    assert {:ok, conn} = Warden.Plug.authorize(conn, role(:admin))
+
+    conn = assign(conn, :current_user, %{user | roles: [:viewer]})
+    assert {:error, _} = Warden.Plug.authorize(conn, role(:admin))
+
+    # And back: the cache follows the current user in both directions.
+    conn = assign(conn, :current_user, user)
+    assert {:ok, _} = Warden.Plug.authorize(conn, role(:admin))
+  end
+
+  test "ForbiddenError inspect output does not include the user record" do
+    user = %{id: "u2", roles: [:viewer], email: "viewer@secret.example", token: "tok-123"}
+
+    error =
+      assert_raise ForbiddenError, fn ->
+        Warden.authorize!(%{current_user: user}, role(:admin))
+      end
+
+    refute inspect(error) =~ "secret.example"
+    refute inspect(error) =~ "tok-123"
+    assert inspect(error) =~ "Forbidden"
+    # Still available to code.
+    assert error.denial.actor.subject.email == "viewer@secret.example"
   end
 
   test "a rule built from untrusted input that names an unknown role fails closed" do

@@ -51,6 +51,7 @@ defmodule Warden.PlugTest do
     @moduledoc false
     def on_deny(conn, %Denial{}), do: send_resp(conn, 402, "pay")
     def on_deny_forget(conn, _denial), do: conn
+    def on_deny_arity1(conn), do: conn
   end
 
   # A pipeline: the Warden plug, then a plug that must not run on denial.
@@ -171,7 +172,8 @@ defmodule Warden.PlugTest do
       assert_received {:roles_called, "u2"}
       refute_received {:roles_called, _}
 
-      assert %{ConnAuthz => %Actor{authorizer: ConnAuthz}} = conn.private[:warden_actor]
+      assert %{ConnAuthz => {%{id: "u2"}, %Actor{authorizer: ConnAuthz}}} =
+               conn.private[:warden_actor]
     end
 
     test "never shared across conns" do
@@ -244,6 +246,17 @@ defmodule Warden.PlugTest do
 
       assert_raise ArgumentError, ~r/permission "nope"/, fn ->
         Warden.Plug.init(rule: permission("nope"))
+      end
+    end
+
+    test "on_deny must name an existing module and function of arity 2" do
+      assert %{on_deny: {Handler, :on_deny}} =
+               Warden.Plug.init(rule: public(), on_deny: {Handler, :on_deny})
+
+      for bad <- [{Handler, :missing}, {Warden.NoSuchHandler, :deny}, {Handler, :on_deny_arity1}] do
+        assert_raise ArgumentError, ~r/does not exist/, fn ->
+          Warden.Plug.init(rule: public(), on_deny: bad)
+        end
       end
     end
 
