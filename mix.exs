@@ -67,7 +67,17 @@ defmodule Warden.MixProject do
       main: "readme",
       source_url: @source_url,
       source_ref: "v#{@version}",
-      extras: ["README.md", "docs/DESIGN.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"]
+      extras: ["README.md", "docs/DESIGN.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"],
+      # Internal names that the README and the design notes mention on purpose. They are
+      # hidden from the docs, so ExDoc must not try to link them.
+      skip_code_autolink_to: [
+        "Absinthe.Pipeline.BatchResolver",
+        "Absinthe.Type.function/2",
+        "Warden.Absinthe.Hydrator",
+        "Warden.Absinthe.Phase.ItemErrors",
+        "Warden.Absinthe.Plugin",
+        "Warden.Plug.init/1"
+      ]
     ]
   end
 end

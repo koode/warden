@@ -121,7 +121,7 @@ if Code.ensure_loaded?(Absinthe) do
     Returns the authorization plan of a compiled schema: for every field that has Warden
     middleware, the pre and post specs. Meant for debugging and tests.
     """
-    @spec plan(module) :: Plan.t()
+    @spec plan(module) :: struct()
     def plan(schema) do
       Plan.build(Verifier.compiled_types(schema), Config.config!(schema))
     end
