@@ -27,6 +27,8 @@ defmodule Warden.Schema do
   schema. Any problem is a `CompileError`.
   """
 
+  alias Warden.Rule
+
   @option_keys [:authorizer, :strict_mode, :default_object_rule, :introspection, :list_policy]
 
   defmacro __using__(opts) do
@@ -114,7 +116,7 @@ defmodule Warden.Schema do
     default_rule = Keyword.get(opts, :default_object_rule)
 
     errors =
-      case default_rule && Warden.Rule.validate(default_rule) do
+      case default_rule && Rule.validate(default_rule) do
         r when r in [nil, :ok] -> errors
         {:error, es} -> Enum.map(es, &"`:default_object_rule`: #{&1}") ++ errors
       end
@@ -122,7 +124,7 @@ defmodule Warden.Schema do
     introspection = Keyword.get(opts, :introspection, :public)
 
     errors =
-      case Warden.Rule.validate(introspection) do
+      case Rule.validate(introspection) do
         :ok -> errors
         {:error, es} -> Enum.map(es, &"`:introspection`: #{&1}") ++ errors
       end
@@ -130,9 +132,9 @@ defmodule Warden.Schema do
     policy = Keyword.get(opts, :list_policy, :null_item)
 
     errors =
-      if policy in Warden.Rule.list_policies(),
+      if policy in Rule.list_policies(),
         do: errors,
-        else: ["`:list_policy` must be one of #{inspect(Warden.Rule.list_policies())}" | errors]
+        else: ["`:list_policy` must be one of #{inspect(Rule.list_policies())}" | errors]
 
     case errors do
       [] ->
@@ -190,7 +192,7 @@ defmodule Warden.Schema do
           []
 
         {key, rule} ->
-          case Warden.Rule.validate(rule, catalog) do
+          case Rule.validate(rule, catalog) do
             :ok -> []
             {:error, es} -> Enum.map(es, &"`#{inspect(key)}`: #{&1}")
           end

@@ -8,6 +8,7 @@ defmodule Warden.Phase.Attach do
 
   alias Absinthe.Blueprint
   alias Absinthe.Type
+  alias Warden.Middleware
 
   @doc false
   # Pipeline modifier entry point (`@pipeline_modifier Warden.Phase.Attach`).
@@ -97,7 +98,7 @@ defmodule Warden.Phase.Attach do
 
   @doc false
   def wrap(middleware, pre, post) do
-    pre_mw = if pre, do: [Warden.Middleware.pre_spec(pre)], else: []
+    pre_mw = if pre, do: [Middleware.pre_spec(pre)], else: []
 
     case {middleware, post} do
       {_, nil} ->
@@ -107,10 +108,10 @@ defmodule Warden.Phase.Attach do
       # Absinthe's shim, which replaces the remaining middleware. Warden's own shim calls
       # it and then appends the post middleware again.
       {[{{Absinthe.Middleware, :shim}, shim_args}], post} ->
-        pre_mw ++ [Warden.Middleware.shim_spec(shim_args, post)]
+        pre_mw ++ [Middleware.shim_spec(shim_args, post)]
 
       {middleware, post} ->
-        pre_mw ++ middleware ++ [Warden.Middleware.post_spec(post)]
+        pre_mw ++ middleware ++ [Middleware.post_spec(post)]
     end
   end
 

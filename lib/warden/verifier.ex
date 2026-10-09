@@ -65,9 +65,9 @@ defmodule Warden.Verifier do
       end
 
     {actual_post, middle} =
-      case List.last(rest) do
-        {{Middleware, :post}, spec} -> {spec, Enum.drop(rest, -1)}
-        {{Middleware, :shim}, {_, spec}} -> {spec, Enum.drop(rest, -1)}
+      case Enum.reverse(rest) do
+        [{{Middleware, :post}, spec} | before] -> {spec, Enum.reverse(before)}
+        [{{Middleware, :shim}, {_, spec}} | before] -> {spec, Enum.reverse(before)}
         _ -> {nil, rest}
       end
 
