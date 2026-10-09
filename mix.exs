@@ -33,7 +33,8 @@ defmodule Warden.MixProject do
 
   defp deps do
     [
-      {:absinthe, "~> 1.12"},
+      {:absinthe, "~> 1.12", optional: true},
+      {:plug, "~> 1.14", optional: true},
       {:stream_data, "~> 1.1", only: :test},
       {:dataloader, "~> 2.0", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
