@@ -236,9 +236,9 @@ defmodule Warden.Plan do
   # The arguments are the union of the object field's arguments and those of the
   # same-named field on every interface the object implements: a client selecting
   # through an interface is validated against the interface's arguments, and the
-  # concrete field then runs with them. `defaults` holds every declared non-nil default
-  # (a value is restricted if it differs from any of them); `input_specs` holds the input
-  # type walk of every declaration.
+  # concrete field then runs with them. `defaults` holds every declared default, or is
+  # empty when any declaration has none; `input_specs` holds the input type walk of every
+  # declaration.
   defp arg_plan(object, field, types, inputs) do
     arg_rules = effective_arg_rules(object, field, types)
 
@@ -259,11 +259,14 @@ defmodule Warden.Plan do
           |> Enum.reject(&is_nil/1)
           |> Enum.uniq()
 
+        # If any declaration has no default, a client value is a choice the client made
+        # (the field without a default runs with it), so every present value is
+        # restricted: `defaults` is empty. Otherwise a value is restricted when it differs
+        # from any declared default.
         defaults =
-          decls
-          |> Enum.map(& &1.default_value)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.uniq()
+          if Enum.any?(decls, &is_nil(&1.default_value)),
+            do: [],
+            else: decls |> Enum.map(& &1.default_value) |> Enum.uniq()
 
         if rule == nil and specs == [],
           do: [],

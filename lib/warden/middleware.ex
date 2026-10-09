@@ -569,16 +569,28 @@ defmodule Warden.Middleware do
           extra: extra
         }
 
-        {operation(res), field_path ++ Enum.reverse(attach_idx), error}
+        {field_path ++ Enum.reverse(attach_idx), error}
       end)
 
-    state = Map.get(res.acc, @acc_key, %{})
-    state = Map.update(state, :item_errors, entries, &(&1 ++ entries))
-    %{res | acc: Map.put(res.acc, @acc_key, state)}
+    put_marker(res, :items, entries)
   end
 
-  # The operation node is the root of `resolution.path`.
-  defp operation(%Resolution{path: path}), do: List.last(path)
+  # Markers travel in `resolution.extensions`, which Absinthe copies onto this field's
+  # result node (`to_result/4` in Absinthe's resolution phase). They live in the
+  # document's own result tree, so documents batched by `Absinthe.Pipeline.BatchResolver`
+  # (which share one accumulator) never see each other's markers. The accumulator only
+  # carries a flag that asks `Warden.Plugin` for the phase.
+  defp put_marker(res, kind, entries) do
+    marker = Map.get(res.extensions || %{}, @acc_key, %{items: [], folds: []})
+    marker = Map.update!(marker, kind, &(&1 ++ entries))
+    state = res.acc |> Map.get(@acc_key, %{}) |> Map.put(:pending, true)
+
+    %{
+      res
+      | extensions: Map.put(res.extensions || %{}, @acc_key, marker),
+        acc: Map.put(res.acc, @acc_key, state)
+    }
+  end
 
   @doc false
   # Absinthe folds a null in a non-null field into its parent object, except when that
@@ -589,9 +601,7 @@ defmodule Warden.Middleware do
 
     if match?(%Absinthe.Type.NonNull{}, res.definition.schema_node.type) and
          Enum.any?(path, &is_integer/1) do
-      state = Map.get(res.acc, @acc_key, %{})
-      state = Map.update(state, :folds, [{operation(res), path}], &[{operation(res), path} | &1])
-      %{res | acc: Map.put(res.acc, @acc_key, state)}
+      put_marker(res, :folds, [path])
     else
       res
     end

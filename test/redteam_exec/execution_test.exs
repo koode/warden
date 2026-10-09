@@ -16,7 +16,6 @@ defmodule Warden.RedteamExec.ExecutionTest do
   end
 
   defp viewer, do: Data.user(:viewer, id: "v1")
-  defp admin, do: Data.user(:admin, id: "a1")
 
   describe "deferred resolution never runs for a denied field" do
     test "Async: the task function is not started" do

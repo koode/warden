@@ -349,6 +349,9 @@ defmodule Warden.RedteamExec.Schema do
     end
 
     field :create_secret, :rx_secret do
+      # Deliberately open to every caller; declared so, which silences Warden's
+      # compile-time warning about mutations guarded only by their return type.
+      authorize public()
       resolve Res.probe(:create_secret, Data.secret())
     end
   end

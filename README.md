@@ -159,8 +159,10 @@ them from literals, module attributes or compile-time expressions.
   root field, including the root's `__typename`, `__schema` and `__type`.
 - **Argument rule** (`authorize_args`): applies when the client sends the argument
   (after variables and defaults) and either it has no default (any value, `null`
-  included, applies) or the value differs from a declared default (from any of them,
-  when the object field and an interface field declare different defaults).
+  included, applies) or the value differs from a declared default. When the object field
+  and its interface fields declare the argument differently: if any declaration has no
+  default, every present value is restricted (also one an interface default filled in);
+  otherwise a value is restricted when it differs from any declared default.
 - **Input-field rule** (`authorize` in an `input_object` field): same rule as arguments,
   checked through nested input objects and lists of input objects.
 
@@ -292,7 +294,8 @@ It does not protect against the following:
 - **Object rules on a mutation's return type do not stop the mutation.** They null the
   returned object after the resolver has run. Put a field rule on the mutation field to
   stop it. Warden prints a compile-time warning for every mutation that has an object rule
-  on its return type and no root, field or argument rule.
+  on its return type and no root, field or argument rule. Declare `authorize public()` on
+  a mutation that anyone may run to state that and silence the warning.
 - **The actor is cached per execution.** It is built from the context on the first
   Warden check of a request. Later changes to the context (by a resolver or middleware)
   do not change it; changes made before the first check do.
@@ -311,10 +314,6 @@ It does not protect against the following:
   the concrete type's rule may not match what is rendered.
 - **Existence of list items.** With `:null_item`, the response shows that a position
   exists in the list (as `null`). Use `:filter` to hide it.
-- **Item errors under `Absinthe.Pipeline.BatchResolver`.** In batch mode the documents
-  share one accumulator; Warden applies list-item errors only to their own document and
-  drops the rest after the last pass. The data is still `null`; only the message is
-  lost.
 - **Introspection output** is not filtered. Use the `introspection:` option to restrict
   `__schema` and `__type` as a whole.
 - **Batched subscription publishing.** A custom Pubsub `run_docset/3` that runs documents

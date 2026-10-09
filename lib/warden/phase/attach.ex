@@ -50,13 +50,16 @@ defmodule Warden.Phase.Attach do
 
   # An object rule on a mutation's return type only nulls the result: the resolver has
   # already run. Warn about mutations that have nothing else (no root, field or
-  # argument rule) to stop them.
+  # argument rule) to stop them. An explicit `authorize public()` on the mutation field
+  # states that anyone may run it and silences the warning.
   defp warn_unguarded_mutations(schema, types, plan) do
     mutation = Map.get(types, :mutation)
 
-    for {{:mutation, fident}, {nil, post}} <- Enum.sort(plan.fields), post != nil do
-      name = mutation && Map.get(mutation.fields, fident)
-      name = if name, do: name.name, else: Atom.to_string(fident)
+    for {{:mutation, fident}, {nil, post}} <- Enum.sort(plan.fields),
+        post != nil,
+        field = mutation && Map.get(mutation.fields, fident),
+        Type.meta(field, :warden_rule) == nil do
+      name = field.name
 
       IO.warn(
         "Warden: mutation #{inspect(name)} in #{inspect(schema)} is protected only by the " <>

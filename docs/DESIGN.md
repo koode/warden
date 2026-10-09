@@ -402,8 +402,12 @@ Three red-team agents attacked the first version (`test/redteam/`,
 4. **Interface arguments** (`plan.ex:242`, `plan.ex:283`, `plan.ex:219`). Absinthe
    validates a selection through an interface against the interface field's arguments
    and runs the concrete field with them. The argument plan is the union of the object
-   field's and every interface field's declarations, with every declared default and
-   every input-object walk.
+   field's and every interface field's declarations, with every input-object walk. If
+   any declaration has no default, every present value is restricted (an interface
+   default that fills an omitted argument included); otherwise a value is restricted
+   when it differs from any declared default. (Confirmer fix: dropping the declarations
+   without a default let `items(secret: true)` through when only the interface declared
+   `secret = true`.)
 5. **Present-key argument semantics** (`middleware.ex:146-148`).
 6. **`resolve_type` outside the declared members** (`plan.ex:420`). Abstract fields carry
    every object type's rule; the post check looks the returned concrete type up there.
@@ -421,19 +425,25 @@ Three red-team agents attacked the first version (`test/redteam/`,
 10. **`subject/1` contract** (`actor.ex:45`, `actor.ex:49`).
 11. **Default object denials are `:null`** (`authorizer.ex:194`).
 12. **Mutations guarded only by their return type** stay a documented limit; the attach
-    phase prints a compile-time warning for each (`phase/attach.ex:54`).
+    phase prints a compile-time warning for each (`phase/attach.ex:54`). An explicit
+    `authorize public()` on the mutation acknowledges it and silences the warning.
 13. **Hydrate.** A `rule:` on an argument node is an argument rule (`plan.ex:219`) and is
     validated with the others. `Warden.Hydrator` (`hydrator.ex:13`, installed by
     `phase/attach.ex`) keeps Warden keys across a later `{:meta, _}` and rejects
     conflicting Warden values.
-14. **No plugin loop.** `Absinthe.Pipeline.BatchResolver` re-runs plugins until they
-    return no phases (`pipeline/batch_resolver.ex`). `Warden.Plugin` now asks for its
-    phase only when no other plugin wants another pass (`plugin.ex:28`), and the phase
-    drains every entry, applied or not (`phase/item_errors.ex:24`). Entries are tagged
-    with their operation so a batched document never receives another document's item
-    error.
+14. **No plugin loop, per-document entries.** `Absinthe.Pipeline.BatchResolver` re-runs
+    plugins until they return no phases (`pipeline/batch_resolver.ex`) and shares one
+    accumulator between documents. Item errors and folds are therefore recorded as
+    markers in `resolution.extensions`, which Absinthe copies onto the field's result
+    node, so they live in each document's own result tree (`middleware.ex`,
+    `put_marker/3`). The accumulator only carries a `pending` flag. `Warden.Plugin` asks
+    for its phase only when no other plugin wants another pass and the flag is set
+    (`plugin.ex:28`); the phase collects and strips the markers of its own document and
+    clears the flag (`phase/item_errors.ex:23`). Identical documents in one batch each
+    get only their own errors and folds. (Confirmer fix: the first version tagged entries
+    with the operation struct and drained them all after the first document.)
 15. **Folding in nested lists.** Absinthe's `propagate_null_trimming` does not reach an
     object two or more list levels deep, so a nulled non-null field left the object with
     a `null` in a non-null field. Warden records every non-null field it nulls inside a
-    list (`middleware.ex:587`) and `Warden.Phase.ItemErrors` folds it explicitly to the
+    list (`middleware.ex`, `maybe_record_fold/1`) and `Warden.Phase.ItemErrors` folds it explicitly to the
     nearest nullable position (`phase/item_errors.ex:95`).

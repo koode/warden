@@ -93,9 +93,7 @@ defmodule Warden.Adversarial.PluginLoopTest do
   end
 
   test "the plugin asks for its phase at most once, then never again" do
-    entry = {:op, ["x", 0], %Absinthe.Phase.Error{message: "m", phase: __MODULE__}}
-
-    exec = %Absinthe.Blueprint.Execution{acc: %{Warden => %{item_errors: [entry], folds: []}}}
+    exec = %Absinthe.Blueprint.Execution{acc: %{Warden => %{pending: true}}}
 
     # Another plugin wants a pass: Warden waits.
     assert Warden.Plugin.pipeline([Absinthe.Phase.Document.Execution.Resolution], exec) ==
@@ -110,6 +108,18 @@ defmodule Warden.Adversarial.PluginLoopTest do
     {:ok, bp} = Warden.Phase.ItemErrors.run(bp, [])
 
     assert Warden.Plugin.pipeline([], bp.execution) == []
+  end
+
+  test "two identical documents in one batch each fold and get only their own errors" do
+    doc = "{ grid { rows { id hidden } } }"
+    assert {:ok, results} = batch([doc, doc], viewer())
+
+    for bp <- results do
+      {:ok, bp, _} = Absinthe.Pipeline.run(bp, [Absinthe.Phase.Document.Result])
+      assert bp.result.data == %{"grid" => %{"rows" => [[nil], [nil]]}}
+      # Each document reports its own two denials, no more.
+      assert length(bp.result.errors) == 2
+    end
   end
 
   test "outside batch mode the same documents return" do

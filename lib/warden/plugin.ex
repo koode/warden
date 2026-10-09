@@ -31,9 +31,6 @@ defmodule Warden.Plugin do
 
   def pipeline(pipeline, _exec), do: pipeline
 
-  defp pending?(%{Warden => state}) do
-    Map.get(state, :item_errors, []) != [] or Map.get(state, :folds, []) != []
-  end
-
+  defp pending?(%{Warden => %{pending: true}}), do: true
   defp pending?(_), do: false
 end

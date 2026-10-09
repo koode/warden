@@ -9,14 +9,13 @@ defmodule Warden.Phase.ItemErrors do
   #     levels deep is not folded by Absinthe's null propagation. Warden folds it here:
   #     the object becomes null, and further up while the positions are non-null.
   #
-  # Entries are tagged with the operation they came from. Under
-  # `Absinthe.Pipeline.BatchResolver` the accumulator is shared between documents; an
-  # entry is only applied to its own document, and entries that cannot be applied are
-  # dropped (the data is already null; only the error message is lost).
+  # The entries are markers in the result nodes' `extensions` (see
+  # `Warden.Middleware.put_marker/3`), so each document only ever applies its own, also
+  # when `Absinthe.Pipeline.BatchResolver` runs several documents with one shared
+  # accumulator. The phase clears the accumulator flag and strips the markers.
 
   use Absinthe.Phase
 
-  alias Absinthe.Blueprint
   alias Absinthe.Blueprint.Result
   alias Absinthe.Type
 
@@ -24,14 +23,9 @@ defmodule Warden.Phase.ItemErrors do
   def run(%{execution: %{acc: acc, result: result} = exec} = blueprint, _opts) do
     case acc do
       %{Warden => state} ->
-        operation = Blueprint.current_operation(blueprint)
-
-        items =
-          for {op, path, error} <- Map.get(state, :item_errors, []),
-              op == operation,
-              do: {path, error}
-
-        folds = for {op, path} <- Map.get(state, :folds, []), op == operation, do: path
+        {result, markers} = strip(result, [])
+        items = markers |> Enum.flat_map(& &1.items) |> Enum.uniq()
+        folds = markers |> Enum.flat_map(& &1.folds) |> Enum.uniq()
 
         result =
           Enum.reduce(items, result, fn {path, error}, tree ->
@@ -43,14 +37,30 @@ defmodule Warden.Phase.ItemErrors do
 
         result = Enum.reduce(folds, result, &fold(&2, &1))
 
-        state = state |> Map.put(:item_errors, []) |> Map.put(:folds, [])
-        acc = Map.put(acc, Warden, state)
+        acc = Map.put(acc, Warden, Map.put(state, :pending, false))
         {:ok, %{blueprint | execution: %{exec | result: result, acc: acc}}}
 
       _ ->
         {:ok, blueprint}
     end
   end
+
+  # Removes Warden markers from every node's extensions and collects them.
+  defp strip(%{extensions: %{Warden => marker} = ext} = node, acc) do
+    strip(%{node | extensions: Map.delete(ext, Warden)}, [marker | acc])
+  end
+
+  defp strip(%Result.Object{fields: fields} = node, acc) when is_list(fields) do
+    {fields, acc} = Enum.map_reduce(fields, acc, &strip/2)
+    {%{node | fields: fields}, acc}
+  end
+
+  defp strip(%Result.List{values: values} = node, acc) when is_list(values) do
+    {values, acc} = Enum.map_reduce(values, acc, &strip/2)
+    {%{node | values: values}, acc}
+  end
+
+  defp strip(node, acc), do: {node, acc}
 
   ## Item errors
 
