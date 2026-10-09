@@ -14,6 +14,17 @@ defmodule Warden.ActorTest do
     assert Actor.anonymous?(actor)
   end
 
+  test "a false subject is anonymous" do
+    actor = build(false, %{roles_fun: fn _ -> raise "must not be called" end})
+    assert actor == %Actor{}
+  end
+
+  test "an error subject raises Warden.PolicyError" do
+    for bad <- [:error, {:error, :expired}, {:error, :token, :details}] do
+      assert_raise Warden.PolicyError, ~r/subject\/1 returned/, fn -> build(bad) end
+    end
+  end
+
   test "the hierarchy is expanded" do
     actor = build(%{id: "a", roles: [:admin]})
     assert actor.roles == MapSet.new([:admin, :editor, :viewer])
@@ -96,6 +107,15 @@ defmodule Warden.ActorTest do
                | spec_compliant_errors: true
              }) ==
                {:error, %{message: "Forbidden", code: "FORBIDDEN"}}
+    end
+
+    test "object denials get :null, so denied and not found look the same" do
+      assert Authorizer.default_deny(%Denial{kind: :object, type: :secret}, @catalog) == :null
+
+      for kind <- [:field, :argument, :subscribe, :introspection] do
+        assert {:error, %{message: "Forbidden"}} =
+                 Authorizer.default_deny(%Denial{kind: kind}, @catalog)
+      end
     end
 
     test "filtered list items get :null" do
