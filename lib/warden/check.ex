@@ -30,6 +30,12 @@ defmodule Warden.Check do
           resolution: struct() | nil
         }
 
+  # A check is handed to user code, which may log it. The guarded value, the arguments,
+  # the context (assigns, the conn and its headers) and the resolution stay out of inspect
+  # output; the fields are still available to code. The actor has its own Inspect, which
+  # hides the subject.
+  @derive {Inspect, only: [:name, :opts, :actor, :argument, :field, :parent_type, :type]}
+
   defstruct [
     :name,
     :actor,

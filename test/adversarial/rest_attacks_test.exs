@@ -225,6 +225,27 @@ defmodule Warden.Adversarial.RestAttacksTest do
     assert Map.from_struct(actor).subject.token == "tok-SECRET-123"
   end
 
+  test "inspect of a check leaks no subject, resource, arguments or conn data" do
+    conn = conn(:get, "/") |> put_req_header("authorization", "Bearer HEADER-SECRET-789")
+
+    check = %Warden.Check{
+      name: :self,
+      opts: [scope: :own],
+      actor: Warden.actor(%{current_user: @secret_user}),
+      value: @secret_post,
+      args: %{note: "ARG-SECRET-321"},
+      context: %{current_user: @secret_user, conn: conn}
+    }
+
+    output = refute_leak(check)
+    refute output =~ "HEADER-SECRET-789"
+    refute output =~ "ARG-SECRET-321"
+    assert output =~ "name: :self"
+    assert output =~ "scope: :own"
+    # Still available to code.
+    assert check.value.body == "PRIVATE-BODY-456"
+  end
+
   test "inspect of a ForbiddenError leaks no subject or resource data" do
     error =
       assert_raise ForbiddenError, fn ->
