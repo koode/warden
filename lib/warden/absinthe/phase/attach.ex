@@ -10,9 +10,8 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Blueprint
     alias Absinthe.Type
-    alias Warden.Absinthe.Middleware
+    alias Warden.Absinthe.{Config, Middleware, Plan, Subscription}
 
-    @doc false
     # Pipeline modifier entry point (`@pipeline_modifier Warden.Absinthe.Phase.Attach`).
     def pipeline(pipeline) do
       pipeline
@@ -31,11 +30,11 @@ if Code.ensure_loaded?(Absinthe) do
 
     @impl Absinthe.Phase
     def run(%Blueprint{schema: schema} = blueprint, _opts) do
-      config = Warden.Absinthe.config!(schema)
+      config = Config.config!(schema)
       [schema_def] = blueprint.schema_definitions
 
       types = Map.new(schema_def.type_artifacts, &{&1.identifier, &1})
-      plan = Warden.Absinthe.Plan.build(types, config)
+      plan = Plan.build(types, config)
 
       if plan.errors != [] do
         raise CompileError,
@@ -99,7 +98,6 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp apply_plan(type, _plan), do: type
 
-    @doc false
     def wrap(middleware, pre, post) do
       pre_mw = if pre, do: [Middleware.pre_spec(pre)], else: []
 
@@ -118,10 +116,9 @@ if Code.ensure_loaded?(Absinthe) do
       end
     end
 
-    @doc false
     def wrap_config(field, spec) do
       original = Map.get(field, :config)
-      %{field | config: Warden.Absinthe.Subscription.config_ref(field.identifier, original, spec)}
+      %{field | config: Subscription.config_ref(field.identifier, original, spec)}
     end
   end
 end

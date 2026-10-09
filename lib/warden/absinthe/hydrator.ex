@@ -9,6 +9,8 @@ if Code.ensure_loaded?(Absinthe) do
     # rejects a later hydration that sets a Warden key to a different value.
     @behaviour Absinthe.Schema.Hydrator
 
+    alias Absinthe.Phase.Schema.Hydrate
+
     @warden_keys [:warden_rule, :warden_args, :warden_list_policy]
 
     @impl true
@@ -26,11 +28,11 @@ if Code.ensure_loaded?(Absinthe) do
       end
 
       merged = Keyword.merge(existing, keyword_list)
-      Absinthe.Phase.Schema.Hydrate.apply_hydration(node, {:meta, merged})
+      Hydrate.apply_hydration(node, {:meta, merged})
     end
 
     def apply_hydration(node, hydration) do
-      Absinthe.Phase.Schema.Hydrate.apply_hydration(node, hydration)
+      Hydrate.apply_hydration(node, hydration)
     end
 
     defp describe(%{name: name}) when is_binary(name), do: name

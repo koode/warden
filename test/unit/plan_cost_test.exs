@@ -12,7 +12,7 @@ defmodule Warden.PlanCostTest do
   @fields_per_object 15
 
   test "plan building grows linearly with the number of types" do
-    config = Warden.Absinthe.config!(Warden.Test.Schema)
+    config = Warden.Absinthe.Config.config!(Warden.Test.Schema)
 
     small = best_of(5, fn -> Warden.Absinthe.Plan.build(types(250), config) end)
     large = best_of(5, fn -> Warden.Absinthe.Plan.build(types(2_000), config) end)
@@ -23,7 +23,7 @@ defmodule Warden.PlanCostTest do
   end
 
   test "the synthetic schema is planned (the benchmark measures real work)" do
-    config = Warden.Absinthe.config!(Warden.Test.Schema)
+    config = Warden.Absinthe.Config.config!(Warden.Test.Schema)
     plan = Warden.Absinthe.Plan.build(types(10), config)
 
     assert plan.errors == []

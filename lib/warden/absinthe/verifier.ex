@@ -8,7 +8,7 @@ if Code.ensure_loaded?(Absinthe) do
     # every subscription field's `config` is wrapped.
 
     alias Absinthe.Type
-    alias Warden.Absinthe.Middleware
+    alias Warden.Absinthe.{Config, Middleware, Plan}
 
     def verify!(schema) do
       case verify(schema) do
@@ -24,9 +24,9 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     def verify(schema) do
-      config = Warden.Absinthe.config!(schema)
+      config = Config.config!(schema)
       types = compiled_types(schema)
-      plan = Warden.Absinthe.Plan.build(types, config)
+      plan = Plan.build(types, config)
 
       errors =
         plan.errors ++

@@ -12,7 +12,6 @@ if Code.ensure_loaded?(Absinthe) do
 
     @behaviour Absinthe.Plugin
 
-    @doc false
     def add_to(plugins), do: List.delete(plugins, __MODULE__) ++ [__MODULE__]
 
     @impl true

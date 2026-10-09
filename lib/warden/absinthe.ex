@@ -40,10 +40,7 @@ if Code.ensure_loaded?(Absinthe) do
     schema. Any problem is a `CompileError`.
     """
 
-    alias Warden.Rule
-    alias Warden.Absinthe.Rules
-
-    @option_keys [:authorizer, :strict_mode, :default_object_rule, :introspection, :list_policy]
+    alias Warden.Absinthe.{Config, Plan, Plugin, Verifier}
 
     defmacro __using__(opts) do
       env = __CALLER__
@@ -78,7 +75,7 @@ if Code.ensure_loaded?(Absinthe) do
         end
 
       config =
-        case validate_options(opts) do
+        case Config.validate_options(opts) do
           {:ok, config} ->
             config
 
@@ -98,7 +95,6 @@ if Code.ensure_loaded?(Absinthe) do
         @before_compile Warden.Absinthe
         @after_compile Warden.Absinthe
 
-        @doc false
         def __warden__(:options), do: unquote(Macro.escape(config))
       end
     end
@@ -108,141 +104,26 @@ if Code.ensure_loaded?(Absinthe) do
       quote do
         defoverridable plugins: 0
 
+        # Overrides the plugins/0 of the user's schema, so it must stay public; it is
+        # hidden from the user's docs like Absinthe's own default plugins/0.
+        # credo:disable-for-next-line ExSlop.Check.Readability.DocFalseOnPublicFunction
         @doc false
-        def plugins, do: Warden.Absinthe.Plugin.add_to(super())
+        def plugins, do: unquote(Plugin).add_to(super())
       end
     end
 
     @doc false
     def __after_compile__(env, _bytecode) do
-      Warden.Absinthe.Verifier.verify!(env.module)
-    end
-
-    @doc false
-    def validate_options(opts) do
-      errors = []
-
-      unknown = Keyword.keys(opts) -- @option_keys
-
-      errors =
-        if unknown == [], do: errors, else: ["unknown options: #{inspect(unknown)}" | errors]
-
-      authorizer = Keyword.get(opts, :authorizer)
-
-      errors =
-        if is_atom(authorizer) and authorizer != nil,
-          do: errors,
-          else: ["`:authorizer` must be a module" | errors]
-
-      strict = Keyword.get(opts, :strict_mode, false)
-
-      errors =
-        if strict in [false, :root, :all],
-          do: errors,
-          else: ["`:strict_mode` must be false, :root or :all, got: #{inspect(strict)}" | errors]
-
-      default_rule = Keyword.get(opts, :default_object_rule)
-
-      errors =
-        case default_rule && Rule.validate(default_rule) do
-          r when r in [nil, :ok] -> errors
-          {:error, es} -> Enum.map(es, &"`:default_object_rule`: #{&1}") ++ errors
-        end
-
-      introspection = Keyword.get(opts, :introspection, :public)
-
-      errors =
-        case Rule.validate(introspection) do
-          :ok -> errors
-          {:error, es} -> Enum.map(es, &"`:introspection`: #{&1}") ++ errors
-        end
-
-      policy = Keyword.get(opts, :list_policy, :null_item)
-
-      errors =
-        if policy in Rules.list_policies(),
-          do: errors,
-          else: ["`:list_policy` must be one of #{inspect(Rules.list_policies())}" | errors]
-
-      case errors do
-        [] ->
-          {:ok,
-           %{
-             authorizer: authorizer,
-             strict_mode: strict,
-             default_object_rule: default_rule,
-             introspection: introspection,
-             list_policy: policy
-           }}
-
-        errors ->
-          {:error, Enum.reverse(errors)}
-      end
-    end
-
-    @doc false
-    # The full configuration, including the authorizer's catalog. Called at compile time.
-    def config!(schema) do
-      _ = Code.ensure_loaded(schema)
-
-      unless function_exported?(schema, :__warden__, 1) do
-        raise CompileError,
-          description: "#{inspect(schema)} does not `use Warden.Absinthe`"
-      end
-
-      options = schema.__warden__(:options)
-      authorizer = options.authorizer
-
-      case Code.ensure_compiled(authorizer) do
-        {:module, _} ->
-          :ok
-
-        {:error, reason} ->
-          raise CompileError,
-            description:
-              "Warden authorizer #{inspect(authorizer)} could not be loaded: #{inspect(reason)}"
-      end
-
-      unless function_exported?(authorizer, :__warden_catalog__, 0) do
-        raise CompileError,
-          description: "#{inspect(authorizer)} does not `use Warden.Authorizer`"
-      end
-
-      catalog = authorizer.__warden_catalog__()
-
-      extra_errors =
-        [
-          {:default_object_rule, options.default_object_rule},
-          {:introspection, options.introspection}
-        ]
-        |> Enum.flat_map(fn
-          {_, nil} ->
-            []
-
-          {key, rule} ->
-            case Rule.validate(rule, catalog) do
-              :ok -> []
-              {:error, es} -> Enum.map(es, &"`#{inspect(key)}`: #{&1}")
-            end
-        end)
-
-      if extra_errors != [] do
-        raise CompileError,
-          description:
-            "invalid Warden.Absinthe options in #{inspect(schema)}:\n" <>
-              Enum.map_join(extra_errors, "\n", &("  * " <> &1))
-      end
-
-      Map.put(options, :catalog, catalog)
+      Verifier.verify!(env.module)
     end
 
     @doc """
     Returns the authorization plan of a compiled schema: for every field that has Warden
     middleware, the pre and post specs. Meant for debugging and tests.
     """
-    @spec plan(module) :: Warden.Absinthe.Plan.t()
+    @spec plan(module) :: Plan.t()
     def plan(schema) do
-      Warden.Absinthe.Plan.build(Warden.Absinthe.Verifier.compiled_types(schema), config!(schema))
+      Plan.build(Verifier.compiled_types(schema), Config.config!(schema))
     end
   end
 end
