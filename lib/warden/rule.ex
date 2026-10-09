@@ -26,6 +26,7 @@ defmodule Warden.Rule do
   """
 
   alias Warden.{Actor, Check}
+  alias Warden.Authorizer.Callbacks
 
   @type role :: atom
   @type permission :: term
@@ -50,11 +51,6 @@ defmodule Warden.Rule do
           missing_roles: [role],
           missing_permissions: [permission]
         }
-
-  @list_policies [:null_item, :filter, :fail_list]
-
-  @doc false
-  def list_policies, do: @list_policies
 
   @doc "Always passes."
   @spec public() :: t
@@ -194,21 +190,6 @@ defmodule Warden.Rule do
     end
   end
 
-  @doc false
-  # True when the rule is exactly `:public`, so no runtime check is needed.
-  def trivially_public?(:public), do: true
-  def trivially_public?(_), do: false
-
-  @doc false
-  # Combines rules with AND, dropping `:public` and `nil`.
-  def conjoin(rules) do
-    case rules |> Enum.reject(&(&1 in [nil, :public])) |> Enum.uniq() do
-      [] -> nil
-      [rule] -> rule
-      rules -> {:all, rules}
-    end
-  end
-
   ## Evaluation
 
   @doc """
@@ -268,7 +249,7 @@ defmodule Warden.Rule do
   end
 
   defp eval({:check, name, opts} = rule, %Check{} = check, authz) do
-    case authz.check(name, %{check | name: name, opts: opts}) do
+    case Callbacks.check(authz, name, %{check | name: name, opts: opts}) do
       true ->
         :ok
 

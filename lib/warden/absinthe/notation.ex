@@ -19,6 +19,8 @@ if Code.ensure_loaded?(Absinthe) do
     under `:warden_rule`, `:warden_args` and `:warden_list_policy`.
     """
 
+    alias Warden.Absinthe.Rules
+
     @doc false
     defmacro __using__(_opts) do
       quote do
@@ -116,10 +118,10 @@ if Code.ensure_loaded?(Absinthe) do
       scope = current_scope(env, :list_policy, [:field])
       policy = eval!(policy, env, "list_policy")
 
-      unless policy in Warden.Rule.list_policies() do
+      unless policy in Rules.list_policies() do
         compile_error!(
           env,
-          "`list_policy` must be one of #{inspect(Warden.Rule.list_policies())}, got: #{inspect(policy)}"
+          "`list_policy` must be one of #{inspect(Rules.list_policies())}, got: #{inspect(policy)}"
         )
       end
 

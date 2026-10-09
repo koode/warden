@@ -41,6 +41,7 @@ defmodule Warden.Authorizer do
   """
 
   alias Warden.{Actor, Check, Denial}
+  alias Warden.Authorizer.Catalog
 
   @typedoc "What a denial handler returns."
   @type denial_result :: {:error, term} | :null | {:replace, term}
@@ -122,21 +123,11 @@ defmodule Warden.Authorizer do
                       conn_context: 1,
                       deny_conn: 2
 
-  @option_keys [
-    :roles,
-    :permissions,
-    :role_hierarchy,
-    :role_permissions,
-    :checks,
-    :expose_denial_reasons,
-    :spec_compliant_errors
-  ]
-
   defmacro __using__(opts) do
     {opts, _} = Code.eval_quoted(opts, [], __CALLER__)
 
     catalog =
-      case build_catalog(opts) do
+      case Catalog.build(opts) do
         {:ok, catalog} ->
           catalog
 
@@ -154,54 +145,24 @@ defmodule Warden.Authorizer do
       @before_compile Warden.Authorizer
       @__warden_catalog__ unquote(Macro.escape(catalog))
 
-      @doc false
       def __warden_catalog__, do: unquote(Macro.escape(catalog))
     end
   end
 
+  # Optional callbacks are not injected: `Warden.Authorizer.Callbacks` falls back to the
+  # defaults when the authorizer does not define them. Only compile-time checks run here.
   defmacro __before_compile__(env) do
     catalog = Module.get_attribute(env.module, :__warden_catalog__)
     defines? = &Module.defines?(env.module, &1)
 
-    check_def =
-      cond do
-        defines?.({:check, 2}) ->
-          nil
-
-        catalog.checks != [] ->
-          raise CompileError,
-            file: env.file,
-            line: env.line,
-            description:
-              "#{inspect(env.module)} declares checks #{inspect(catalog.checks)} " <>
-                "but does not define check/2"
-
-        true ->
-          quote do
-            @doc false
-            def check(name, _check) do
-              raise Warden.PolicyError,
-                    "#{inspect(__MODULE__)} defines no check/2 but a rule used " <>
-                      "check(#{inspect(name)})"
-            end
-          end
-      end
-
-    permissions_def =
-      unless defines?.({:permissions, 2}) do
-        quote do
-          @doc false
-          def permissions(_subject, _context), do: []
-        end
-      end
-
-    deny_def =
-      unless defines?.({:deny, 1}) do
-        quote do
-          @doc false
-          def deny(denial), do: Warden.Authorizer.default_deny(denial, __warden_catalog__())
-        end
-      end
+    if catalog.checks != [] and not defines?.({:check, 2}) do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description:
+          "#{inspect(env.module)} declares checks #{inspect(catalog.checks)} " <>
+            "but does not define check/2"
+    end
 
     if defines?.({:actor_key, 1}) and not defines?.({:actor_key, 2}) do
       raise CompileError,
@@ -211,14 +172,9 @@ defmodule Warden.Authorizer do
           "#{inspect(env.module)} defines actor_key/1; the callback is actor_key(actor, context)"
     end
 
-    actor_key_def =
-      quote do
-        @doc false
-        def __warden_dedup__, do: unquote(defines?.({:actor_key, 2}))
-      end
-
-    [check_def, permissions_def, deny_def, actor_key_def]
-    |> Enum.reject(&is_nil/1)
+    quote do
+      def __warden_dedup__, do: unquote(defines?.({:actor_key, 2}))
+    end
   end
 
   @doc """
@@ -266,219 +222,5 @@ defmodule Warden.Authorizer do
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.url_encode64(padding: false)
-  end
-
-  ## Catalog
-
-  @doc false
-  def build_catalog(opts) when is_list(opts) do
-    errors = []
-
-    unknown = Keyword.keys(opts) -- @option_keys
-
-    errors =
-      if unknown == [],
-        do: errors,
-        else: ["unknown options: #{inspect(unknown)}" | errors]
-
-    roles = Keyword.get(opts, :roles)
-
-    errors =
-      cond do
-        roles == nil ->
-          ["`:roles` is required" | errors]
-
-        not is_list(roles) or roles == [] ->
-          ["`:roles` must be a non-empty list of atoms" | errors]
-
-        Enum.any?(roles, &(not is_atom(&1) or is_nil(&1) or is_boolean(&1))) ->
-          ["`:roles` must be a non-empty list of atoms, got: #{inspect(roles)}" | errors]
-
-        length(Enum.uniq(roles)) != length(roles) ->
-          ["`:roles` contains duplicates: #{inspect(roles -- Enum.uniq(roles))}" | errors]
-
-        true ->
-          errors
-      end
-
-    role_set = if is_list(roles), do: MapSet.new(roles), else: MapSet.new()
-
-    perms = Keyword.get(opts, :permissions)
-
-    errors =
-      cond do
-        perms == nil ->
-          errors
-
-        not is_list(perms) ->
-          ["`:permissions` must be a list or nil" | errors]
-
-        Enum.any?(perms, &(&1 in [nil, :all])) ->
-          ["`:permissions` must not contain nil or :all" | errors]
-
-        true ->
-          errors
-      end
-
-    perm_set = if is_list(perms), do: MapSet.new(perms), else: nil
-
-    hierarchy = Keyword.get(opts, :role_hierarchy, %{})
-    {errors, hierarchy} = validate_hierarchy(hierarchy, role_set, errors)
-
-    role_perms = Keyword.get(opts, :role_permissions, %{})
-    errors = validate_role_permissions(role_perms, role_set, perm_set, errors)
-
-    checks = Keyword.get(opts, :checks, [])
-
-    errors =
-      if is_list(checks) and Enum.all?(checks, &(is_atom(&1) and not is_nil(&1))),
-        do: errors,
-        else: ["`:checks` must be a list of atoms" | errors]
-
-    errors =
-      Enum.reduce([:expose_denial_reasons, :spec_compliant_errors], errors, fn key, errors ->
-        if is_boolean(Keyword.get(opts, key, false)),
-          do: errors,
-          else: ["`#{inspect(key)}` must be a boolean" | errors]
-      end)
-
-    case errors do
-      [] ->
-        implied =
-          Map.new(roles, fn role -> {role, reachable(role, hierarchy)} end)
-
-        {:ok,
-         %{
-           roles: role_set,
-           permissions: perm_set,
-           role_hierarchy: hierarchy,
-           implied_roles: implied,
-           role_permissions: role_perms,
-           checks: checks,
-           expose_denial_reasons: Keyword.get(opts, :expose_denial_reasons, false),
-           spec_compliant_errors: Keyword.get(opts, :spec_compliant_errors, false)
-         }}
-
-      errors ->
-        {:error, Enum.reverse(errors)}
-    end
-  end
-
-  def build_catalog(_), do: {:error, ["options must be a keyword list"]}
-
-  defp validate_hierarchy(hierarchy, role_set, errors) when is_map(hierarchy) do
-    errors =
-      Enum.reduce(hierarchy, errors, fn {role, implied}, errors ->
-        errors =
-          if MapSet.member?(role_set, role),
-            do: errors,
-            else: ["`:role_hierarchy` key #{inspect(role)} is not a catalog role" | errors]
-
-        cond do
-          not is_list(implied) ->
-            ["`:role_hierarchy` value for #{inspect(role)} must be a list of roles" | errors]
-
-          true ->
-            Enum.reduce(implied, errors, fn r, errors ->
-              if MapSet.member?(role_set, r),
-                do: errors,
-                else: [
-                  "`:role_hierarchy` #{inspect(role)} implies #{inspect(r)}, which is not a catalog role"
-                  | errors
-                ]
-            end)
-        end
-      end)
-
-    errors =
-      if errors == [] do
-        case find_cycle(hierarchy) do
-          nil -> errors
-          cycle -> ["`:role_hierarchy` has a cycle: #{Enum.map_join(cycle, " -> ", &inspect/1)}"]
-        end
-      else
-        errors
-      end
-
-    {errors, hierarchy}
-  end
-
-  defp validate_hierarchy(_, _role_set, errors),
-    do: {["`:role_hierarchy` must be a map" | errors], %{}}
-
-  defp validate_role_permissions(role_perms, role_set, perm_set, errors)
-       when is_map(role_perms) do
-    Enum.reduce(role_perms, errors, fn {role, perms}, errors ->
-      errors =
-        if MapSet.member?(role_set, role),
-          do: errors,
-          else: ["`:role_permissions` key #{inspect(role)} is not a catalog role" | errors]
-
-      cond do
-        perms == :all ->
-          errors
-
-        not is_list(perms) ->
-          [
-            "`:role_permissions` value for #{inspect(role)} must be a list or :all"
-            | errors
-          ]
-
-        Enum.any?(perms, &(&1 in [nil, :all])) ->
-          ["`:role_permissions` for #{inspect(role)} must not contain nil or :all" | errors]
-
-        perm_set == nil ->
-          errors
-
-        true ->
-          Enum.reduce(perms, errors, fn p, errors ->
-            if MapSet.member?(perm_set, p),
-              do: errors,
-              else: [
-                "`:role_permissions` for #{inspect(role)} names #{inspect(p)}, which is not in the permission catalog"
-                | errors
-              ]
-          end)
-      end
-    end)
-  end
-
-  defp validate_role_permissions(_, _, _, errors),
-    do: ["`:role_permissions` must be a map" | errors]
-
-  # The visited set is a plain map: Dialyzer on OTP 29 rejects a MapSet threaded through
-  # a recursive call as an opaque-type mismatch.
-  defp reachable(role, hierarchy) do
-    [role] |> reachable(hierarchy, %{}) |> Map.keys() |> MapSet.new()
-  end
-
-  defp reachable([], _hierarchy, seen), do: seen
-
-  defp reachable([role | rest], hierarchy, seen) do
-    if Map.has_key?(seen, role) do
-      reachable(rest, hierarchy, seen)
-    else
-      reachable(Map.get(hierarchy, role, []) ++ rest, hierarchy, Map.put(seen, role, true))
-    end
-  end
-
-  # Depth-first search for a cycle. Returns the cycle as a list of roles, or nil.
-  defp find_cycle(hierarchy) do
-    hierarchy
-    |> Map.keys()
-    |> Enum.sort()
-    |> Enum.find_value(fn role -> dfs(role, hierarchy, [role]) end)
-  end
-
-  defp dfs(role, hierarchy, stack) do
-    hierarchy
-    |> Map.get(role, [])
-    |> Enum.find_value(fn next ->
-      if next in stack do
-        Enum.reverse([next | stack])
-      else
-        dfs(next, hierarchy, [next | stack])
-      end
-    end)
   end
 end

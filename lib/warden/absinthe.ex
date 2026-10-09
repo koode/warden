@@ -41,6 +41,7 @@ if Code.ensure_loaded?(Absinthe) do
     """
 
     alias Warden.Rule
+    alias Warden.Absinthe.Rules
 
     @option_keys [:authorizer, :strict_mode, :default_object_rule, :introspection, :list_policy]
 
@@ -159,9 +160,9 @@ if Code.ensure_loaded?(Absinthe) do
       policy = Keyword.get(opts, :list_policy, :null_item)
 
       errors =
-        if policy in Rule.list_policies(),
+        if policy in Rules.list_policies(),
           do: errors,
-          else: ["`:list_policy` must be one of #{inspect(Rule.list_policies())}" | errors]
+          else: ["`:list_policy` must be one of #{inspect(Rules.list_policies())}" | errors]
 
       case errors do
         [] ->

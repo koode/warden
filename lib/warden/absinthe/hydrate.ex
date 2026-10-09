@@ -17,6 +17,7 @@ if Code.ensure_loaded?(Absinthe) do
     """
 
     alias Warden.Rule
+    alias Warden.Absinthe.Rules
 
     @doc """
     Builds a `{:meta, keyword}` hydration.
@@ -41,7 +42,7 @@ if Code.ensure_loaded?(Absinthe) do
             {:warden_args, args}
 
           {:list_policy, policy} ->
-            unless policy in Rule.list_policies() do
+            unless policy in Rules.list_policies() do
               raise ArgumentError, "invalid list policy: #{inspect(policy)}"
             end
 

@@ -9,6 +9,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Type
     alias Warden.Rule
+    alias Warden.Absinthe.Rules
 
     @root_types [:query, :mutation, :subscription]
     # GraphQL names of the fields Absinthe's introspection adds. Matched by name, never by
@@ -117,13 +118,13 @@ if Code.ensure_loaded?(Absinthe) do
                       |> then(fn i -> i && meta(i, :warden_rule) end))
                   )
 
-                Rule.conjoin([own | interface_rules])
+                Rules.conjoin([own | interface_rules])
 
               %Type.Interface{} = interface ->
-                Rule.conjoin([meta(interface, :warden_rule)])
+                Rules.conjoin([meta(interface, :warden_rule)])
 
               %Type.Union{} = union ->
-                Rule.conjoin([meta(union, :warden_rule)])
+                Rules.conjoin([meta(union, :warden_rule)])
 
               _ ->
                 nil
@@ -213,7 +214,7 @@ if Code.ensure_loaded?(Absinthe) do
           meta(ifield, :warden_rule)
         end
 
-      Rule.conjoin([meta(field, :warden_rule) | interface_rules])
+      Rules.conjoin([meta(field, :warden_rule) | interface_rules])
     end
 
     defp effective_arg_rules(object, field, types) do
@@ -235,7 +236,7 @@ if Code.ensure_loaded?(Absinthe) do
             do: %{ident => rule}
 
       Enum.reduce(interface_args ++ on_args, meta(field, :warden_args) || %{}, fn rules, acc ->
-        Map.merge(acc, rules, fn _k, a, b -> Rule.conjoin([a, b]) end)
+        Map.merge(acc, rules, fn _k, a, b -> Rules.conjoin([a, b]) end)
       end)
       |> Enum.reject(fn {_, rule} -> rule in [nil, :public] end)
       |> Map.new()
@@ -609,7 +610,7 @@ if Code.ensure_loaded?(Absinthe) do
             ["#{where}: `list_policy` is not supported on input object fields"]
 
           policy ->
-            if policy in Rule.list_policies(),
+            if policy in Rules.list_policies(),
               do: [],
               else: ["#{where}: invalid list policy #{inspect(policy)}"]
         end

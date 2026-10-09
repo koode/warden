@@ -18,6 +18,8 @@ defmodule Warden.Actor do
   anonymous, never the subject. `actor.subject` (and `Map.from_struct/1`) still expose it.
   """
 
+  alias Warden.Authorizer.Callbacks
+
   require Logger
 
   @type t :: %__MODULE__{
@@ -70,7 +72,7 @@ defmodule Warden.Actor do
 
         perms =
           subject
-          |> authorizer.permissions(context)
+          |> then(&Callbacks.permissions(authorizer, &1, context))
           |> ensure_list!(authorizer, :permissions)
           |> known_permissions(catalog, authorizer)
 

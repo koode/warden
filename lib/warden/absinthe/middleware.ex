@@ -255,7 +255,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     @doc false
     def call_deny(authorizer, %Denial{} = denial) do
-      case authorizer.deny(denial) do
+      case Warden.Authorizer.Callbacks.deny(authorizer, denial) do
         {:error, _} = result ->
           result
 
