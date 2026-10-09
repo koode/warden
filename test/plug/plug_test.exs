@@ -165,31 +165,48 @@ defmodule Warden.PlugTest do
     end
   end
 
-  describe "the actor cache" do
-    test "built once per conn, cached in conn.private keyed by authorizer" do
+  describe "no actor cache" do
+    test "every check builds the actor from the current conn; nothing is stored" do
       conn = Double.call(conn_as(viewer(), test_pid: self()), [])
       assert conn.status == 200
+      # Two plugs, two builds.
       assert_received {:roles_called, "u2"}
-      refute_received {:roles_called, _}
-
-      assert %{ConnAuthz => {%{id: "u2"}, %Actor{authorizer: ConnAuthz}}} =
-               conn.private[:warden_actor]
+      assert_received {:roles_called, "u2"}
+      refute Map.has_key?(conn.private, :warden_actor)
     end
 
-    test "never shared across conns" do
-      Double.call(conn_as(viewer(), test_pid: self()), [])
-      Double.call(conn_as(admin(), test_pid: self()), [])
-      assert_received {:roles_called, "u2"}
-      assert_received {:roles_called, "u1"}
+    test "two checks on one conn each see the current assigns" do
+      conn = conn_as(viewer())
+      assert {:error, _} = Warden.Plug.authorize(conn, role(:admin), authorizer: ConnAuthz)
+
+      conn = assign(conn, :user, admin())
+      assert {:ok, conn} = Warden.Plug.authorize(conn, role(:admin), authorizer: ConnAuthz)
+
+      conn = assign(conn, :user, viewer())
+      assert {:error, _} = Warden.Plug.authorize(conn, role(:admin), authorizer: ConnAuthz)
     end
 
-    test "Warden.Plug.actor/2 returns the cached actor" do
-      {conn, actor} =
-        Warden.Plug.actor(conn_as(viewer(), test_pid: self()), authorizer: ConnAuthz)
+    test "a value planted in conn.private[:warden_actor] has no effect" do
+      planted = Warden.actor(%{current_user: admin()}, authorizer: ConnAuthz)
 
-      {_conn, ^actor} = Warden.Plug.actor(conn, authorizer: ConnAuthz)
+      conn =
+        conn_as(viewer())
+        |> put_private(:warden_actor, %{ConnAuthz => planted, Warden.Test.Authz => planted})
+
+      assert {:error, _} = Warden.Plug.authorize(conn, role(:admin), authorizer: ConnAuthz)
+      assert Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin))).status == 403
+    end
+
+    test "Warden.Plug.actor/2 builds a fresh actor and stores nothing" do
+      conn = conn_as(viewer(), test_pid: self())
+      actor = Warden.Plug.actor(conn, authorizer: ConnAuthz)
+      assert %Actor{authorizer: ConnAuthz} = actor
+      assert Warden.Plug.actor(conn, authorizer: ConnAuthz) == actor
       assert_received {:roles_called, "u2"}
-      refute_received {:roles_called, _}
+      assert_received {:roles_called, "u2"}
+
+      # Reuse is explicit: the same actor passed to the core API.
+      assert Warden.allowed?(actor, role(:viewer))
     end
   end
 
@@ -203,7 +220,7 @@ defmodule Warden.PlugTest do
                  authorizer: ConnAuthz
                )
 
-      assert conn.private[:warden_actor][ConnAuthz]
+      refute Map.has_key?(conn.private, :warden_actor)
       refute conn.halted
       assert conn.state == :unset
 

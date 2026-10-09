@@ -86,20 +86,48 @@ defmodule Warden.Adversarial.RestAttacksTest do
     assert conn.params["current_user"] == %{"roles" => ["admin"]}
   end
 
-  test "an actor from another authorizer planted in the conn cache is refused" do
+  test "an actor planted in conn.private[:warden_actor] has no effect" do
     planted = Warden.actor(%{current_user: %{id: "u9", roles: [:admin]}}, authorizer: OtherAuthz)
+    admin = Warden.actor(%{current_user: %{id: "u1", roles: [:admin]}})
 
-    # Planted under the current subject (anonymous here): used, then refused.
-    conn = conn(:get, "/") |> put_private(:warden_actor, %{Warden.Test.Authz => {nil, planted}})
+    for value <- [
+          planted,
+          admin,
+          %{Warden.Test.Authz => admin},
+          %{Warden.Test.Authz => {nil, admin}}
+        ] do
+      conn = conn(:get, "/") |> put_private(:warden_actor, value)
+      conn = Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin)))
+      assert {conn.status, conn.halted} == {401, true}
+    end
+  end
 
-    assert_raise PolicyError, ~r/the actor was built by/, fn ->
-      Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin)))
+  test "stale actor: the tenant switches the org roles, same subject" do
+    defmodule OrgAuthz do
+      @moduledoc false
+      use Warden.Authorizer, roles: [:admin, :viewer]
+
+      @impl true
+      def subject(ctx), do: ctx[:current_user]
+
+      @impl true
+      def roles(user, ctx), do: ctx[:org_roles] || user.roles
     end
 
-    # Planted in any other shape: ignored, the actor is rebuilt from the conn.
-    conn = conn(:get, "/") |> put_private(:warden_actor, %{Warden.Test.Authz => planted})
-    conn = Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin)))
-    assert {conn.status, conn.halted} == {401, true}
+    user = %{id: "u1", roles: []}
+
+    conn =
+      conn(:get, "/")
+      |> assign(:current_user, user)
+      |> assign(:org_roles, [:admin])
+
+    assert {:ok, conn} = Warden.Plug.authorize(conn, role(:admin), authorizer: OrgAuthz)
+
+    conn = assign(conn, :org_roles, [:viewer])
+    assert {:error, _} = Warden.Plug.authorize(conn, role(:admin), authorizer: OrgAuthz)
+
+    halted = Warden.Plug.call(conn, Warden.Plug.init(rule: role(:admin), authorizer: OrgAuthz))
+    assert {halted.status, halted.halted} == {403, true}
   end
 
   test "a hand-built actor with admin roles is refused by the core API" do
@@ -150,6 +178,60 @@ defmodule Warden.Adversarial.RestAttacksTest do
     # And back: the cache follows the current user in both directions.
     conn = assign(conn, :current_user, user)
     assert {:ok, _} = Warden.Plug.authorize(conn, role(:admin))
+  end
+
+  @secret_user %{
+    id: "u2",
+    roles: [:viewer],
+    email: "viewer@secret.example",
+    token: "tok-SECRET-123"
+  }
+  @secret_post %{id: "p1", owner: "u1", body: "PRIVATE-BODY-456"}
+
+  defp refute_leak(term) do
+    output = inspect(term)
+
+    for secret <- ["secret.example", "tok-SECRET-123", "PRIVATE-BODY-456"] do
+      refute output =~ secret, "#{secret} leaked in: #{output}"
+    end
+
+    output
+  end
+
+  test "inspect of a core API denial leaks neither the subject nor the resource" do
+    {:error, denial} =
+      Warden.authorize(%{current_user: @secret_user}, check(:self), value: @secret_post)
+
+    output = refute_leak(denial)
+    assert output =~ "kind: :call"
+    assert output =~ "failed_rule:"
+    # Still available to code.
+    assert denial.actor.subject.email == "viewer@secret.example"
+  end
+
+  test "inspect of a Warden.Plug.authorize/3 denial leaks neither the subject nor the resource" do
+    conn = conn(:get, "/") |> assign(:current_user, @secret_user)
+    {:error, denial} = Warden.Plug.authorize(conn, check(:self), value: @secret_post)
+    refute_leak(denial)
+  end
+
+  test "inspect of an actor shows roles but never the subject" do
+    actor = Warden.actor(%{current_user: @secret_user})
+    output = refute_leak(actor)
+    assert output =~ "#Warden.Actor<"
+    assert output =~ ":viewer"
+    assert output =~ "anonymous: false"
+    assert output =~ "Warden.Test.Authz"
+    assert Map.from_struct(actor).subject.token == "tok-SECRET-123"
+  end
+
+  test "inspect of a ForbiddenError leaks no subject or resource data" do
+    error =
+      assert_raise ForbiddenError, fn ->
+        Warden.authorize!(%{current_user: @secret_user}, check(:self), value: @secret_post)
+      end
+
+    refute_leak(error)
   end
 
   test "ForbiddenError inspect output does not include the user record" do

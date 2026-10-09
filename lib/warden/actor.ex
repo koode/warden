@@ -11,7 +11,11 @@ defmodule Warden.Actor do
   actor built by a different authorizer than the one it is asked to use.
 
   In GraphQL the actor is built once per document execution and cached in
-  `resolution.acc`; in Plug once per conn, cached in `conn.private`.
+  `resolution.acc`. `Warden.Plug` builds it on every check, from the current conn; there
+  is no conn cache.
+
+  `inspect/1` shows the authorizer, roles, permissions and whether the actor is
+  anonymous, never the subject. `actor.subject` (and `Map.from_struct/1`) still expose it.
   """
 
   require Logger
@@ -126,5 +130,22 @@ defmodule Warden.Actor do
         perms -> MapSet.union(acc, MapSet.new(perms))
       end
     end)
+  end
+end
+
+defimpl Inspect, for: Warden.Actor do
+  # The subject is the user record (email, tokens, ...). Keep it out of logs and crash
+  # reports; `actor.subject` stays available to code.
+  import Inspect.Algebra
+
+  def inspect(actor, opts) do
+    fields = [
+      authorizer: actor.authorizer,
+      anonymous: Warden.Actor.anonymous?(actor),
+      roles: actor.roles |> Enum.sort(),
+      permissions: actor.permissions |> Enum.sort()
+    ]
+
+    concat(["#Warden.Actor<", to_doc(fields, opts), ">"])
   end
 end

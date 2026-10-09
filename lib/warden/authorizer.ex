@@ -45,13 +45,34 @@ defmodule Warden.Authorizer do
   @typedoc "What a denial handler returns."
   @type denial_result :: {:error, term} | :null | {:replace, term}
 
-  @doc "Returns the subject (the user) from the Absinthe context. `nil` means anonymous."
+  @doc """
+  Returns the subject (the user) from the context. `nil` or `false` means anonymous;
+  `:error` or `{:error, _}` raises `Warden.PolicyError`.
+
+  The context is the Absinthe context (GraphQL), the conn context (`Warden.Plug`, see
+  `c:conn_context/1`) or the map given to the core API.
+
+  How often `subject/1`, `roles/2` and `permissions/2` run:
+
+    * GraphQL: once per document execution (and once per subscription publish);
+    * `Warden.Plug`: once per check (`call/2`, `authorize/3`, `authorize!/3`);
+    * the core API: once per call given a context map; never for a call given an actor.
+
+  Keep them cheap: read from the context (assigns), and load the user and its roles in
+  an earlier plug or in the code that builds the context, not in these callbacks.
+  """
   @callback subject(context :: map) :: term
 
-  @doc "Returns the subject's roles. Must return a list of catalog roles."
+  @doc """
+  Returns the subject's roles. Must return a list of catalog roles. Runs as often as
+  `c:subject/1`; read from the subject or the context, do not load data here.
+  """
   @callback roles(subject :: term, context :: map) :: [atom]
 
-  @doc "Returns extra permissions for the subject. Must return a list. Default: `[]`."
+  @doc """
+  Returns extra permissions for the subject. Must return a list. Default: `[]`. Runs as
+  often as `c:subject/1`; read from the subject or the context, do not load data here.
+  """
   @callback permissions(subject :: term, context :: map) :: [term]
 
   @doc "Handles a `check(name, opts)` rule. Must return `true` or `false`."
@@ -83,7 +104,8 @@ defmodule Warden.Authorizer do
   @doc """
   `Warden.Plug` only. Returns the context to build the actor from for a conn. Default:
   `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads
-  `context[:current_user]` serves GraphQL and REST alike.
+  `context[:current_user]` serves GraphQL and REST alike. Runs on every Plug check (there
+  is no actor cache); keep it cheap.
   """
   @callback conn_context(conn :: struct()) :: map
 

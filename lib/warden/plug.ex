@@ -49,18 +49,20 @@ if Code.ensure_loaded?(Plug) do
 
     `authorize/3` returns `{:ok, conn}` or `{:error, %Warden.Denial{}}` and sends nothing;
     `authorize!/3` returns the conn or raises `Warden.ForbiddenError` (rendered as 403).
-    Options: `:value`, and `:authorizer` (explicit option, then the configured default;
-    there is no actor argument, the conn caches one actor per authorizer).
+    Options: `:value`, and `:authorizer` (explicit option, then the configured default).
 
     ## The actor
 
-    The actor is built from `c:Warden.Authorizer.conn_context/1` (default
-    `Map.put(conn.assigns, :conn, conn)`) and cached in `conn.private[:warden_actor]`,
-    keyed by authorizer, together with the subject it was built from. Every check calls
-    `subject/1` on the current conn context and uses the cached actor only when the
-    subject is the same value; when the user changes during the request (a logout, an
-    impersonation or sudo-drop plug, or a user record with different roles), the actor
-    is rebuilt. Nothing is cached across requests or in the process dictionary.
+    There is no cache. Every check (`call/2`, `authorize/3`, `authorize!/3`) builds the
+    actor from the current conn: `c:Warden.Authorizer.conn_context/1` (default
+    `Map.put(conn.assigns, :conn, conn)`), then `subject/1`, `roles/2` and
+    `permissions/2`. A later plug that logs out, impersonates, drops privileges or
+    switches the tenant is always seen. Keep those callbacks cheap: read from the assigns
+    or the context, and load data in an earlier plug.
+
+    To reuse one actor across several checks, build it once with `actor/2` (or
+    `Warden.actor/2`) and pass it to the core API. That is a deliberate choice: the roles
+    are frozen for as long as you hold that actor.
     """
 
     @behaviour Plug
@@ -69,7 +71,6 @@ if Code.ensure_loaded?(Plug) do
 
     alias Warden.{Actor, Denial, Rule}
 
-    @private_key :warden_actor
     @option_keys [:rule, :authorizer, :on_deny]
 
     @typedoc "The compiled plug options."
@@ -139,7 +140,7 @@ if Code.ensure_loaded?(Plug) do
     @impl Plug
     @spec call(Plug.Conn.t(), config) :: Plug.Conn.t()
     def call(conn, %{rule: rule, authorizer: authorizer} = config) do
-      {conn, actor, context} = fetch_actor(conn, authorizer)
+      {actor, context} = build_actor(conn, authorizer)
 
       case Warden.authorize(actor, rule, authorizer: authorizer, context: context) do
         :ok -> conn
@@ -148,39 +149,39 @@ if Code.ensure_loaded?(Plug) do
     end
 
     @doc """
-    Returns `{conn, actor}`: the actor for the conn, cached in the conn (rebuilt when the
-    subject changed). Pass it on to the core API.
+    Builds the actor for the conn now, from the current conn context. Nothing is stored
+    in the conn. Pass it to the core API to reuse it for several checks; the roles are
+    then frozen for as long as you hold it.
 
-        {conn, actor} = Warden.Plug.actor(conn)                          # configured default
-        {conn, actor} = Warden.Plug.actor(conn, authorizer: MyApp.Authz) # explicit
+        actor = Warden.Plug.actor(conn)                          # configured default
+        actor = Warden.Plug.actor(conn, authorizer: MyApp.Authz) # explicit
         Warden.filter(actor, check(:owner), posts)
 
     Option `:authorizer`: explicit option, else the configured default.
     """
-    @spec actor(Plug.Conn.t(), keyword) :: {Plug.Conn.t(), Actor.t()}
+    @spec actor(Plug.Conn.t(), keyword) :: Actor.t()
     def actor(%Plug.Conn{} = conn, opts \\ []) do
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
-      {conn, actor, _context} = fetch_actor(conn, authorizer)
-      {conn, actor}
+      {actor, _context} = build_actor(conn, authorizer)
+      actor
     end
 
     @doc """
-    Authorizes the conn's actor for `rule`, for a resource given as `value:`. Returns
-    `{:ok, conn}` (with the actor cached) or `{:error, %Warden.Denial{}}`; sends no
-    response.
+    Authorizes the conn's actor (built now from the current conn) for `rule`, for a
+    resource given as `value:`. Returns `{:ok, conn}` (the conn unchanged) or
+    `{:error, %Warden.Denial{}}`; sends no response.
 
         Warden.Plug.authorize(conn, check(:owner), value: post)
         Warden.Plug.authorize(conn, check(:owner), value: post, authorizer: MyApp.Authz)
 
-    Options: `:value`; `:authorizer` (explicit option, then the configured default; the
-    conn caches one actor per authorizer). An unknown role, permission or check raises
-    `Warden.PolicyError`.
+    Options: `:value`; `:authorizer` (explicit option, then the configured default). An
+    unknown role, permission or check raises `Warden.PolicyError`.
     """
     @spec authorize(Plug.Conn.t(), Rule.t(), keyword) ::
             {:ok, Plug.Conn.t()} | {:error, Denial.t()}
     def authorize(%Plug.Conn{} = conn, rule, opts \\ []) do
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
-      {conn, actor, context} = fetch_actor(conn, authorizer)
+      {actor, context} = build_actor(conn, authorizer)
 
       case Warden.authorize(actor, rule,
              authorizer: authorizer,
@@ -213,24 +214,10 @@ if Code.ensure_loaded?(Plug) do
 
     ## Internals
 
-    # The cache holds `{subject, actor}` per authorizer. A hit is used only while
-    # `subject/1` still returns the same value for the current conn context; when the
-    # user changes during the request (logout, impersonation, a changed user record),
-    # the actor is rebuilt.
-    defp fetch_actor(conn, authorizer) do
+    # No cache: the actor always reflects the conn as it is now.
+    defp build_actor(conn, authorizer) do
       context = conn_context(conn, authorizer)
-      subject = authorizer.subject(context)
-      cache = Map.get(conn.private, @private_key, %{})
-
-      case cache do
-        %{^authorizer => {^subject, %Actor{} = actor}} ->
-          {conn, actor, context}
-
-        _ ->
-          actor = Actor.build(authorizer, context)
-          cache = Map.put(cache, authorizer, {subject, actor})
-          {put_private(conn, @private_key, cache), actor, context}
-      end
+      {Actor.build(authorizer, context), context}
     end
 
     defp conn_context(conn, authorizer) do

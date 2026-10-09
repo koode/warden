@@ -535,11 +535,12 @@ conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyAp
 
 - `init/1` validates the rule against the authorizer catalog. Phoenix runs `init/1` at
   compile time, so a typo fails compilation.
-- The actor is cached in `conn.private[:warden_actor]`, keyed by authorizer, together
-  with the subject it was built from; it is rebuilt whenever `subject/1` returns a
-  different value for the current conn (logout, impersonation, changed roles). Clients
-  cannot write `conn.private`. Nothing is cached across requests or in the process
-  dictionary.
+- No actor cache: every Plug check (`call/2`, `authorize/3`, `authorize!/3`) builds the
+  actor from the current conn context, so `conn_context/1`, `subject/1`, `roles/2` and
+  `permissions/2` run on every check. Nothing is stored in `conn.private` or the process
+  dictionary. Reuse within a request is explicit: build the actor once with
+  `Warden.actor/2` or `Warden.Plug.actor/2` and pass it to the core API, which freezes
+  the roles for as long as the caller holds it.
 - Context from a conn: optional authorizer callback `conn_context(conn)`, default
   `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads `context[:current_user]`
   works for both GraphQL and REST.
@@ -548,7 +549,7 @@ conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyAp
   actor and 403 otherwise, body `"Forbidden"` / `"Unauthorized"`, and halts. Whatever
   the handler returns, the plug halts the conn: a handler cannot let a denied request
   through by forgetting `halt/1`.
-- `Warden.Plug.authorize/3` returns `{:ok, conn}` (actor cached) or `{:error, denial}`
+- `Warden.Plug.authorize/3` returns `{:ok, conn}` (conn unchanged) or `{:error, denial}`
   and does not send a response; `authorize!/3` raises `Warden.ForbiddenError`.
 
 ### Default authorizer
@@ -589,13 +590,15 @@ config :warden, authorizer: MyApp.Authz
   throwaway projects without the optional deps, with only `plug`, with only `absinthe`,
   and with only the configured default, compiles them with warnings as errors (and
   asserts Warden's own dependency compile prints no warning) and runs Warden in them.
-- **Plug actor cache** (confirmer fix). The cache entry is `{subject, actor}`; each check
-  calls `subject/1` on the current conn context and rebuilds the actor when the subject
-  differs, so a logout, an impersonation or a changed user record is never served a
-  stale actor. `on_deny: {mod, fun}` is checked in `init/1` (`mod.fun/2` must exist,
-  except for a module still being compiled). `Warden.ForbiddenError` derives `Inspect`
-  with only `message` and `plug_status`, so the user record in the denial stays out of
-  logs.
+- **No Plug actor cache** (decided after two confirmer rounds). A per-conn cache kept
+  failing open when the context changed under it (a subject swap first, then a tenant
+  switch with the same subject). Every Plug check now builds the actor from the current
+  conn; REST requests run one to three checks. `on_deny: {mod, fun}` is checked in
+  `init/1` (`mod.fun/2` must exist, except for a module still being compiled).
+- **Inspect hardening.** `Warden.Actor` (custom `Inspect`: authorizer, anonymous, roles,
+  permissions), `Warden.Denial` (derived: kind, failed_rule, missing roles and
+  permissions, path, field, parent_type, type) and `Warden.ForbiddenError` (message,
+  plug_status) never show the subject or the guarded resource.
 - **Plug halting.** After the handler runs, the plug takes its return value only if it is
   a conn, sends the default response when nothing was set, sends a set-but-unsent
   response, and halts in every case.
@@ -606,8 +609,8 @@ config :warden, authorizer: MyApp.Authz
   and the values are both positional, as in the design's example.
 - **A `context:` option** on the core API gives checks a context when the first argument
   is an actor (`Warden.Plug` passes the conn context this way).
-- **`Warden.Plug.actor/2`** (not in the design) returns `{conn, actor}`, with the actor
-  cached; useful to pass the actor on to the core API.
+- **`Warden.Plug.actor/2`** (not in the design) returns a freshly built actor and stores
+  nothing; useful to pass one actor to several core API calls.
 - **Hand-built actors are refused.** An `%Warden.Actor{}` whose `authorizer` is `nil` (not
   built by `Warden.actor/2`, `Warden.Plug.actor/2` or GraphQL) raises
   `Warden.PolicyError` in the core API, since it cannot be checked against an

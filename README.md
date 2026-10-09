@@ -127,7 +127,8 @@ end
 | `spec_compliant_errors` | Set to `true` if you run Absinthe with `spec_compliant_errors: true`. |
 
 The actor (`%Warden.Actor{subject, roles, permissions, authorizer}`) is built once per
-request: roles are expanded through the hierarchy, `role_permissions` are merged with
+GraphQL execution, on every `Warden.Plug` check, and on every core call given a context
+map (never for a core call given an actor): roles are expanded through the hierarchy, `role_permissions` are merged with
 `permissions/2`. `roles/2` and `permissions/2` must return lists. Roles and permissions
 outside the catalog are dropped and logged, never granted. A `nil` or `false` subject is
 anonymous: no roles, no permissions, and `roles/2` is not called. A subject of `:error`
@@ -201,14 +202,16 @@ plug Warden.Plug, rule: authenticated(), on_deny: {MyAppWeb.Auth, :deny}, author
 - `init/1` resolves the authorizer and validates the rule against its catalog. Phoenix
   and `Plug.Builder` run `init/1` at compile time, so a typo in a role, permission or
   check fails compilation.
-- The actor is built from the authorizer's `conn_context/1` (default
+- There is no actor cache. Every check (`call/2`, `authorize/3`, `authorize!/3`) builds
+  the actor from the current conn: the authorizer's `conn_context/1` (default
   `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads
-  `context[:current_user]` serves GraphQL and REST alike) and cached in
-  `conn.private[:warden_actor]`, keyed by authorizer, with the subject it was built from.
-  Each check calls `subject/1` again and rebuilds the actor when the subject changed
-  (logout, impersonation, a user record with other roles).
-- `Warden.Plug.actor(conn)` / `Warden.Plug.actor(conn, authorizer: MyApp.Authz)` returns
-  `{conn, actor}` to pass on to the core API.
+  `context[:current_user]` serves GraphQL and REST alike), then `subject/1`, `roles/2`
+  and `permissions/2`. A later plug that logs out, impersonates, drops privileges or
+  switches the tenant is always seen. Keep these callbacks cheap: read from the assigns,
+  and load the user and its roles in an earlier plug, not in the callbacks.
+- `Warden.Plug.actor(conn)` / `Warden.Plug.actor(conn, authorizer: MyApp.Authz)` builds
+  an actor now and stores nothing. Pass it to the core API to reuse it for several checks
+  in one request; that deliberately freezes the roles for as long as you hold it.
 - `on_deny: {module, function}` must name an existing `function/2` (checked by
   `init/1`, except for a module still being compiled, such as the controller itself).
 - On denial: `on_deny: {module, function}`, else the authorizer's `deny_conn/2`, else the
@@ -257,7 +260,7 @@ defmodule MyAppWeb.PostController do
 end
 ```
 
-`Warden.Plug.authorize/3` returns `{:ok, conn}` (with the actor cached) or
+`Warden.Plug.authorize/3` returns `{:ok, conn}` (the conn unchanged) or
 `{:error, %Warden.Denial{}}` and sends nothing; `Warden.Plug.authorize!/3` returns the
 conn or raises `Warden.ForbiddenError`. Both take `value:` and `authorizer:`.
 
@@ -474,10 +477,11 @@ data, not a user struct stored in the context.
 - **Warden authorizes; your authentication decides who the user is.** The actor comes
   from `conn_context/1` (default: `conn.assigns`). Run your authentication plug before
   the first Warden plug, and never assign the user from params, headers or the body
-  without verifying them. Clients cannot write `conn.private`, where the actor is cached.
-- **The actor is cached per conn.** It is built at the first Warden check of a request.
-  Assigns changed later in the same request do not change it (no escalation
-  mid-request, and no de-escalation either).
+  without verifying them.
+- **No actor cache in the Plug.** Each Plug check builds the actor from the conn as it is
+  at that moment, so changed assigns (logout, impersonation, a tenant switch) always
+  apply. An actor you build with `Warden.actor/2` or `Warden.Plug.actor/2` and reuse
+  keeps the roles it was built with; that is your choice.
 - **Route rules do not cover resources.** `plug Warden.Plug, rule: ...` checks the actor,
   not the record. Use `Warden.Plug.authorize/3` with `value:` (or `Warden.filter/4` for
   lists) for record-level checks inside actions; queries that load records are still
@@ -490,8 +494,11 @@ data, not a user struct stored in the context.
   whatever it returns. Code that runs in the handler itself (logging, redirects) is
   yours.
 - **Hand-built actors** are refused by the core API; an actor must come from
-  `Warden.actor/2` or `Warden.Plug.actor/2`. Code that writes `conn.private` itself is
-  trusted.
+  `Warden.actor/2` or `Warden.Plug.actor/2`. Warden does not read `conn.private`.
+- **Inspect output.** `inspect/1` of `Warden.Actor`, `Warden.Denial` and
+  `Warden.ForbiddenError` never shows the subject (the user record) or the guarded
+  resource, so they stay out of logs and crash reports. Direct field access
+  (`denial.actor.subject`) and `Map.from_struct/1` still expose them, on purpose.
 - **The default authorizer is compile-time configuration** (`Application.compile_env`).
   A different value in `config/runtime.exs` stops the release at boot.
 

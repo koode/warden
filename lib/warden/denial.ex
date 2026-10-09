@@ -35,6 +35,19 @@ defmodule Warden.Denial do
           list_policy: nil | Warden.Rule.list_policy()
         }
 
+  # The actor (and its subject, the user record) and the rule's argument data stay out of
+  # inspect output; the fields are still available to code.
+  @derive {Inspect,
+           only: [
+             :kind,
+             :failed_rule,
+             :missing_roles,
+             :missing_permissions,
+             :path,
+             :field,
+             :parent_type,
+             :type
+           ]}
   defstruct [
     :kind,
     :rule,
