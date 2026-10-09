@@ -480,12 +480,14 @@ warnings-as-errors, in a project that has neither dependency.
 ### Core API (`Warden`)
 
 ```elixir
-actor = Warden.actor(MyApp.Authz, context)                 # build once per request
-:ok = Warden.authorize(MyApp.Authz, actor_or_context, rule, value: post)
+actor = Warden.actor(context)                          # build once per request
+:ok = Warden.authorize(actor_or_context, rule, value: post)
 # -> :ok | {:error, %Warden.Denial{kind: :call}}
-Warden.allowed?(MyApp.Authz, actor_or_context, rule, value: post)   # -> boolean
-Warden.authorize!(MyApp.Authz, actor_or_context, rule, value: post) # raises Warden.ForbiddenError
-Warden.filter(MyApp.Authz, actor_or_context, rule, posts)           # keeps the permitted values
+Warden.allowed?(actor_or_context, rule, value: post)   # -> boolean
+Warden.authorize!(actor_or_context, rule, value: post) # raises Warden.ForbiddenError
+Warden.filter(actor_or_context, rule, posts)           # keeps the permitted values
+
+# Every function takes `authorizer: MyApp.OtherAuthz` to override the default.
 ```
 
 - `actor_or_context` is a `%Warden.Actor{}` or a context map. A map builds the actor
@@ -503,10 +505,11 @@ Warden.filter(MyApp.Authz, actor_or_context, rule, posts)           # keeps the 
 
 ```elixir
 import Warden.Rule
-plug Warden.Plug, authorizer: MyApp.Authz, rule: role(:admin)
+plug Warden.Plug, rule: role(:admin)              # default authorizer
+plug Warden.Plug, rule: role(:admin), authorizer: MyApp.AdminAuthz
 
 # in a controller action, for a loaded resource:
-with {:ok, conn} <- Warden.Plug.authorize(conn, MyApp.Authz, any_of([role(:admin), check(:owner)]), value: post) do
+with {:ok, conn} <- Warden.Plug.authorize(conn, any_of([role(:admin), check(:owner)]), value: post) do
   ...
 end
 ```
@@ -524,5 +527,27 @@ end
   actor and 403 otherwise, body `"Forbidden"` / `"Unauthorized"`, and halts. Whatever
   the handler returns, the plug halts the conn: a handler cannot let a denied request
   through by forgetting `halt/1`.
-- `Warden.Plug.authorize/4` returns `{:ok, conn}` (actor cached) or `{:error, denial}`
-  and does not send a response; `authorize!/4` raises `Warden.ForbiddenError`.
+- `Warden.Plug.authorize/3` returns `{:ok, conn}` (actor cached) or `{:error, denial}`
+  and does not send a response; `authorize!/3` raises `Warden.ForbiddenError`.
+
+### Default authorizer
+
+```elixir
+# config/config.exs
+config :warden, authorizer: MyApp.Authz
+```
+
+- Every entry point takes an optional authorizer: the `authorizer:` option of the core
+  API, `Warden.Plug` and `Warden.Plug.authorize/3`, and `use Warden.Absinthe`. Without
+  one, Warden uses the configured default. An explicit option always wins. When the first
+  argument is a `%Warden.Actor{}`, its own authorizer is used, and an `authorizer:` option
+  that names a different module raises `Warden.PolicyError`.
+- The default is read with `Application.compile_env(:warden, :authorizer)` in one core
+  function that every layer uses. `use Warden.Absinthe` and Plug `init/1` resolve it at
+  compile time anyway; compile_env makes the core agree with them. If `config/runtime.exs`
+  sets a different value, Elixir raises at boot instead of letting the layers disagree.
+- No authorizer anywhere raises an `ArgumentError` that names the fix
+  (`config :warden, authorizer: MyApp.Authz` in config/config.exs). For the Plug and the
+  schema this happens at compile time.
+- The configured module must `use Warden.Authorizer`; anything else raises at first
+  resolution (compile time for the Plug and the schema).
