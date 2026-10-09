@@ -119,6 +119,7 @@ defmodule Warden.Test.Resolvers do
         secret_rotated: "secrets"
       )
 
+    :ok = Absinthe.Subscription.publish(Warden.Test.Pubsub, Data.user("u1"), shared_user: "users")
     {:ok, true}
   end
 

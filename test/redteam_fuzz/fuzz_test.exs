@@ -169,6 +169,9 @@ defmodule Warden.RedteamFuzz.FuzzTest do
         :touch -> a != nil
         :purge -> role?(a, :b)
         :doc_updated -> a != nil
+        # Decision 9: the :hit union's value-independent rule (authenticated) refuses
+        # the subscription up front.
+        :hit_updated -> a != nil
         _ -> true
       end
 

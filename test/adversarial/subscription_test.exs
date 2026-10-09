@@ -25,13 +25,20 @@ defmodule Warden.Adversarial.SubscriptionTest do
   end
 
   test "two subscribers with different roles on one topic" do
-    admin_topic = subscribe("subscription { secretRotated { code } }", admin())
-    viewer_topic = subscribe("subscription { secretRotated { code } }", viewer())
+    admin_topic = subscribe("subscription { sharedUser { email } }", admin())
+    nobody_topic = subscribe("subscription { sharedUser { email } }", nobody())
 
-    :ok = Absinthe.Subscription.publish(Pubsub, hd(Data.secrets()), secret_rotated: "secrets")
+    :ok = Absinthe.Subscription.publish(Pubsub, Data.user("u2"), shared_user: "users")
 
-    assert receive_data(admin_topic).data == %{"secretRotated" => %{"code" => "ALPHA"}}
-    assert receive_data(viewer_topic).data == %{"secretRotated" => nil}
+    assert receive_data(admin_topic).data == %{"sharedUser" => %{"email" => "bob@example.com"}}
+    assert receive_data(nobody_topic).data == %{"sharedUser" => nil}
+  end
+
+  test "subscribing to a type the actor can never see (event-timing oracle)" do
+    assert {:ok, %{errors: [%{message: "Forbidden"}]}} =
+             Absinthe.run("subscription { secretRotated { code } }", Warden.Test.Schema,
+               context: %{pubsub: Pubsub, current_user: viewer()}
+             )
   end
 
   test "context_id shared between a privileged and an unprivileged subscriber" do

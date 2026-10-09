@@ -27,6 +27,8 @@ defmodule Warden.Subscription do
     actor = Actor.build(authorizer, context)
 
     with :ok <- subscribe_checks(spec.pre, actor, field_ident, args, context, authorizer),
+         :ok <-
+           return_checks(Map.get(spec, :return), actor, field_ident, args, context, authorizer),
          {:ok, config} <- user_config(field_ident, original, args, info) do
       {:ok, fingerprint(config, actor, context, authorizer)}
     end
@@ -61,6 +63,70 @@ defmodule Warden.Subscription do
           parent_type: :subscription,
           type: Keyword.get(extra, :type),
           argument: Keyword.get(extra, :argument)
+        }
+
+        {:error, subscribe_error(authorizer, denial)}
+    end
+  end
+
+  defp return_checks(nil, _actor, _field, _args, _context, _authorizer), do: :ok
+
+  defp return_checks(
+         %{type: type, rule: rule, members: members},
+         actor,
+         field,
+         args,
+         context,
+         authorizer
+       ) do
+    base = %Check{
+      actor: actor,
+      value: nil,
+      args: args || %{},
+      context: context,
+      field: field,
+      parent_type: :subscription
+    }
+
+    abstract_denial =
+      if rule do
+        case Warden.Rule.evaluate(rule, %{base | type: type}, authorizer) do
+          :ok -> nil
+          {:deny, failure} -> {type, rule, failure}
+        end
+      end
+
+    member_denial =
+      if members do
+        results =
+          Enum.map(members, fn {member, member_rule} ->
+            case Warden.Rule.evaluate(member_rule, %{base | type: member}, authorizer) do
+              :ok -> :ok
+              {:deny, failure} -> {member, member_rule, failure}
+            end
+          end)
+
+        if Enum.all?(results, &(&1 != :ok)), do: hd(results)
+      end
+
+    denial = abstract_denial || member_denial
+
+    case denial do
+      nil ->
+        :ok
+
+      {denied_type, denied_rule, failure} ->
+        denial = %Denial{
+          kind: :subscribe,
+          rule: denied_rule,
+          failed_rule: failure.failed_rule,
+          missing_roles: failure.missing_roles,
+          missing_permissions: failure.missing_permissions,
+          actor: actor,
+          path: [Atom.to_string(field)],
+          field: field,
+          parent_type: :subscription,
+          type: denied_type
         }
 
         {:error, subscribe_error(authorizer, denial)}

@@ -91,19 +91,28 @@ defmodule Warden.SubscriptionTest do
 
   describe "publish time" do
     test "two subscribers with different roles on the same topic each get their own view" do
-      {:ok, admin_topic} = subscribe("subscription { secretRotated { id code } }", admin())
-      {:ok, viewer_topic} = subscribe("subscription { secretRotated { id code } }", viewer())
-      assert admin_topic != viewer_topic
+      # User: viewer or self (value-dependent, so both may subscribe).
+      {:ok, admin_topic} = subscribe("subscription { sharedUser { id email } }", admin())
+      {:ok, nobody_topic} = subscribe("subscription { sharedUser { id email } }", nobody())
+      assert admin_topic != nobody_topic
 
-      publish(secret(), secret_rotated: "secrets")
+      publish(Data.user("u2"), shared_user: "users")
 
       assert receive_data(admin_topic) == %{
-               data: %{"secretRotated" => %{"id" => "s1", "code" => "ALPHA"}}
+               data: %{"sharedUser" => %{"id" => "u2", "email" => "bob@example.com"}}
              }
 
-      viewer_data = receive_data(viewer_topic)
-      assert viewer_data.data == %{"secretRotated" => nil}
-      assert [%{message: "Forbidden"}] = viewer_data.errors
+      nobody_data = receive_data(nobody_topic)
+      assert nobody_data.data == %{"sharedUser" => nil}
+      assert [%{message: "Forbidden"}] = nobody_data.errors
+    end
+
+    test "a return type whose value-independent rule denies refuses the subscription" do
+      # Secret requires admin, with no check: a viewer could never see an event.
+      assert {:error, [%{message: "Forbidden"}]} =
+               subscribe("subscription { secretRotated { id code } }", viewer())
+
+      assert {:ok, _} = subscribe("subscription { secretRotated { id code } }", admin())
     end
 
     test "a revoked role applies on the next publish" do
@@ -141,7 +150,7 @@ defmodule Warden.SubscriptionTest do
     end
 
     test "the publisher's identity is never used" do
-      {:ok, topic} = subscribe("subscription { secretRotated { code } }", viewer())
+      {:ok, topic} = subscribe("subscription { sharedUser { id email } }", nobody())
 
       # An admin's mutation publishes; the subscriber documents resolve in the same
       # process while the admin's execution is live.
@@ -149,7 +158,7 @@ defmodule Warden.SubscriptionTest do
       assert result.data == %{"rotateSecret" => true}
 
       data = receive_data(topic)
-      assert data.data == %{"secretRotated" => nil}
+      assert data.data == %{"sharedUser" => nil}
       assert [%{message: "Forbidden"}] = data.errors
     end
   end

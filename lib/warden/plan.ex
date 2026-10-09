@@ -48,7 +48,12 @@ defmodule Warden.Plan do
 
           subs =
             if object.identifier == :subscription and not introspection_field?(field),
-              do: Map.put(subs, field.identifier, subscribe_spec(pre, config)),
+              do:
+                Map.put(
+                  subs,
+                  field.identifier,
+                  subscribe_spec(pre, field, types, object_rules, config)
+                ),
               else: subs
 
           {fields, subs}
@@ -468,9 +473,45 @@ defmodule Warden.Plan do
 
   ## Subscriptions
 
-  defp subscribe_spec(pre, config) do
-    %{authorizer: config.authorizer, pre: pre}
+  # At subscribe time the payload is unknown, but object rules that do not depend on the
+  # value (no `check`) can already be evaluated. The subscription is refused when the
+  # return type's own rule denies, or when every possible concrete type has such a rule
+  # and it denies: the subscriber could never see an event.
+  defp subscribe_spec(pre, field, types, object_rules, config) do
+    named = Type.unwrap(field.type)
+
+    {abstract_rule, members} =
+      case Map.get(types, named) do
+        %Type.Object{} -> {nil, [named]}
+        %Type.Interface{} -> {Map.get(object_rules, named), implementors(types, named)}
+        %Type.Union{types: members} -> {Map.get(object_rules, named), members}
+        _ -> {nil, []}
+      end
+
+    member_rules = Enum.map(Enum.sort(members), &Map.get(object_rules, &1))
+
+    rule = if value_independent?(abstract_rule), do: abstract_rule
+    members_ok? = members != [] and Enum.all?(member_rules, &value_independent?/1)
+    members = if members_ok?, do: Enum.zip(Enum.sort(members), member_rules)
+
+    return =
+      if rule == nil and members == nil,
+        do: nil,
+        else: %{type: named, rule: rule, members: members}
+
+    %{authorizer: config.authorizer, pre: pre, return: return}
   end
+
+  defp value_independent?(nil), do: false
+  defp value_independent?(:public), do: false
+  defp value_independent?(rule), do: not contains_check?(rule)
+
+  defp contains_check?({:check, _, _}), do: true
+
+  defp contains_check?({tag, rules}) when tag in [:all, :any],
+    do: Enum.any?(rules, &contains_check?/1)
+
+  defp contains_check?(_), do: false
 
   ## Validation
 
