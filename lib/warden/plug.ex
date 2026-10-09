@@ -79,20 +79,30 @@ if Code.ensure_loaded?(Plug) do
     @impl Plug
     @spec init(keyword) :: config
     def init(opts) when is_list(opts) do
-      unknown = Keyword.keys(opts) -- @option_keys
-
-      if unknown != [] do
-        raise ArgumentError, "unknown Warden.Plug options: #{inspect(unknown)}"
-      end
-
-      rule =
-        case Keyword.fetch(opts, :rule) do
-          {:ok, rule} -> rule
-          :error -> raise ArgumentError, "Warden.Plug needs a `rule:` option"
-        end
-
+      reject_unknown_options!(opts)
+      rule = fetch_rule!(opts)
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
+      validate_rule!(rule, authorizer)
+      on_deny = fetch_on_deny!(opts)
 
+      %{rule: rule, authorizer: authorizer, on_deny: on_deny}
+    end
+
+    defp reject_unknown_options!(opts) do
+      case Keyword.keys(opts) -- @option_keys do
+        [] -> :ok
+        unknown -> raise ArgumentError, "unknown Warden.Plug options: #{inspect(unknown)}"
+      end
+    end
+
+    defp fetch_rule!(opts) do
+      case Keyword.fetch(opts, :rule) do
+        {:ok, rule} -> rule
+        :error -> raise ArgumentError, "Warden.Plug needs a `rule:` option"
+      end
+    end
+
+    defp validate_rule!(rule, authorizer) do
       case Rule.validate(rule, authorizer.__warden_catalog__()) do
         :ok ->
           :ok
@@ -101,22 +111,21 @@ if Code.ensure_loaded?(Plug) do
           raise ArgumentError,
                 "invalid Warden.Plug rule for #{inspect(authorizer)}: " <> Enum.join(errors, "; ")
       end
+    end
 
-      on_deny =
-        case Keyword.get(opts, :on_deny) do
-          nil ->
-            nil
+    defp fetch_on_deny!(opts) do
+      case Keyword.get(opts, :on_deny) do
+        nil ->
+          nil
 
-          {mod, fun} = handler when is_atom(mod) and is_atom(fun) ->
-            validate_on_deny!(mod, fun)
-            handler
+        {mod, fun} = handler when is_atom(mod) and is_atom(fun) ->
+          validate_on_deny!(mod, fun)
+          handler
 
-          other ->
-            raise ArgumentError,
-                  "Warden.Plug `on_deny:` must be {module, function}, got: #{inspect(other)}"
-        end
-
-      %{rule: rule, authorizer: authorizer, on_deny: on_deny}
+        other ->
+          raise ArgumentError,
+                "Warden.Plug `on_deny:` must be {module, function}, got: #{inspect(other)}"
+      end
     end
 
     # A handler module that is being compiled right now (a controller that passes
