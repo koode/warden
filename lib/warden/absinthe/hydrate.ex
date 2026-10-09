@@ -16,8 +16,8 @@ if Code.ensure_loaded?(Absinthe) do
     Rules declared this way are validated at compile time like `authorize/1` rules.
     """
 
-    alias Warden.Rule
     alias Warden.Absinthe.Rules
+    alias Warden.Rule
 
     @doc """
     Builds a `{:meta, keyword}` hydration.
