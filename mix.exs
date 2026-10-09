@@ -5,13 +5,14 @@ defmodule Warden.MixProject do
 
   def project do
     [
-      app: :absinthe_warden,
+      app: :warden,
       version: @version,
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
-      description: "Role- and permission-based authorization for Absinthe GraphQL.",
+      description:
+        "Role- and permission-based authorization for Elixir, with Absinthe and Plug integrations.",
       package: package(),
       docs: docs(),
       dialyzer: [
@@ -42,8 +43,10 @@ defmodule Warden.MixProject do
 
   defp package do
     [
+      name: "warden",
       licenses: ["MIT"],
-      links: %{}
+      links: %{},
+      files: ~w(lib mix.exs README.md docs/DESIGN.md .formatter.exs)
     ]
   end
 

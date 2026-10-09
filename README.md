@@ -1,4 +1,4 @@
-# absinthe_warden
+# warden
 
 Role- and permission-based authorization for [Absinthe](https://github.com/absinthe-graphql/absinthe)
 GraphQL schemas.
@@ -20,7 +20,7 @@ request still resolves. Queries, mutations and subscriptions are enforced the sa
 Requires Absinthe `~> 1.12`. See
 [`docs/DESIGN.md`](docs/DESIGN.md) for the design and the implementation notes.
 
-absinthe_warden is a community library. It is not affiliated with the absinthe-graphql
+Warden is a community library. It is not affiliated with the absinthe-graphql
 project.
 
 ## Installation
@@ -28,7 +28,7 @@ project.
 ```elixir
 def deps do
   [
-    {:absinthe_warden, "~> 0.1"}
+    {:warden, "~> 0.1"}
   ]
 end
 ```

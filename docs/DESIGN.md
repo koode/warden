@@ -1,11 +1,11 @@
-# absinthe_warden: design
+# warden: design
 
 Role- and permission-based authorization for Absinthe. Rules attach to fields, object
 types, interfaces, unions, arguments and input fields. Denied data becomes `null` (folded to
 the nearest nullable parent), never a failed request. Works the same for queries,
 mutations and subscriptions.
 
-Package `absinthe_warden`, top module `Warden`. Absinthe `~> 1.12`.
+Package `warden` (was `absinthe_warden`), top module `Warden`. Absinthe `~> 1.12`.
 
 ## Security goals (the contract)
 
