@@ -23,3 +23,6 @@ erl_crash.dump
 warden-*.tar
 
 
+
+# Dialyzer PLTs (see the dialyzer config in mix.exs).
+/priv/plts/
