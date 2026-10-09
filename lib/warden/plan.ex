@@ -32,6 +32,15 @@ defmodule Warden.Plan do
     object_rules = object_rules(types, config)
     inputs = input_plans(types)
 
+    # For abstract types the concrete type comes from user code (`resolve_type`), which
+    # may return a type outside the declared members, so every object rule is in reach
+    # of an abstract field. Built once here, not per field.
+    object_type_rules =
+      for {ident, rule} <- object_rules,
+          match?(%Type.Object{}, Map.get(types, ident)),
+          into: %{},
+          do: {ident, rule}
+
     {fields, subs} =
       for {_, %Type.Object{} = object} <- types,
           not introspection_type?(object),
@@ -39,7 +48,7 @@ defmodule Warden.Plan do
           reduce: {%{}, %{}} do
         {fields, subs} ->
           pre = pre_spec(object, field, types, object_rules, inputs, config)
-          post = post_spec(object, field, types, object_rules, config)
+          post = post_spec(object, field, types, object_rules, object_type_rules, config)
 
           fields =
             if pre || post,
@@ -412,21 +421,12 @@ defmodule Warden.Plan do
 
   ## Post
 
-  defp post_spec(object, field, types, object_rules, config) do
+  defp post_spec(object, field, types, object_rules, object_type_rules, config) do
     if introspection_field?(field) do
       nil
     else
       named = Type.unwrap(field.type)
       shape = shape(field.type)
-
-      # For abstract types the concrete type comes from user code (`resolve_type`), which
-      # may return a type outside the declared members. Every object rule is therefore
-      # in reach of an abstract field.
-      object_type_rules =
-        for {ident, rule} <- object_rules,
-            match?(%Type.Object{}, Map.get(types, ident)),
-            into: %{},
-            do: {ident, rule}
 
       {abstract_rule, concrete_rules, abstract_kind} =
         case Map.get(types, named) do
