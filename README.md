@@ -568,3 +568,8 @@ mise exec -- mix format --check-formatted
 mise exec -- mix dialyzer
 MIX_ENV=test mise exec -- mix dialyzer   # also covers test/support, like ElixirLS
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, the checks CI runs, and the commit
+message format ([Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)).
