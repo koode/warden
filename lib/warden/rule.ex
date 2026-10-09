@@ -89,7 +89,7 @@ defmodule Warden.Rule do
   def any_permission(permissions), do: {:any_permission, permissions}
 
   @doc "Passes when `c:Warden.Authorizer.check/2` returns `true` for `name`."
-  @spec check(atom, keyword) :: t
+  @spec check(atom, keyword) :: {:check, atom, keyword}
   def check(name, opts \\ []), do: {:check, name, opts}
 
   @doc "Passes when every rule passes. Evaluates left to right and stops at the first failure."

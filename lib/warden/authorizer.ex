@@ -186,7 +186,7 @@ defmodule Warden.Authorizer do
   only when the authorizer sets `expose_denial_reasons: true`, the missing roles and
   permissions. Items filtered by the `:filter` list policy get `:null` (no error).
   """
-  @spec default_deny(Denial.t(), map) :: denial_result
+  @spec default_deny(Denial.t(), map) :: {:error, map} | :null
   def default_deny(%Denial{list_policy: :filter, value_index: [_ | _]}, _catalog), do: :null
 
   # A denied object reads as "not found": no error, so a client cannot tell an object it
@@ -406,15 +406,19 @@ defmodule Warden.Authorizer do
   defp validate_role_permissions(_, _, _, errors),
     do: ["`:role_permissions` must be a map" | errors]
 
-  defp reachable(role, hierarchy), do: reachable([role], hierarchy, MapSet.new())
+  # The visited set is a plain map: Dialyzer on OTP 29 rejects a MapSet threaded through
+  # a recursive call as an opaque-type mismatch.
+  defp reachable(role, hierarchy) do
+    [role] |> reachable(hierarchy, %{}) |> Map.keys() |> MapSet.new()
+  end
 
   defp reachable([], _hierarchy, seen), do: seen
 
   defp reachable([role | rest], hierarchy, seen) do
-    if MapSet.member?(seen, role) do
+    if Map.has_key?(seen, role) do
       reachable(rest, hierarchy, seen)
     else
-      reachable(Map.get(hierarchy, role, []) ++ rest, hierarchy, MapSet.put(seen, role))
+      reachable(Map.get(hierarchy, role, []) ++ rest, hierarchy, Map.put(seen, role, true))
     end
   end
 

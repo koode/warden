@@ -20,7 +20,10 @@ defmodule Warden.MixProject do
       deps: deps(),
       description: "Role- and permission-based authorization for Absinthe GraphQL.",
       package: package(),
-      docs: docs()
+      docs: docs(),
+      dialyzer: [
+        flags: [:error_handling, :extra_return, :missing_return, :unmatched_returns]
+      ]
     ]
   end
 
@@ -38,7 +41,8 @@ defmodule Warden.MixProject do
       {:absinthe, @absinthe_requirement},
       {:stream_data, "~> 1.1", only: :test},
       {:dataloader, "~> 2.0", only: :test},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

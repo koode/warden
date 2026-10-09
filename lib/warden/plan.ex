@@ -314,14 +314,16 @@ defmodule Warden.Plan do
   defp referenced_inputs(args, inputs) do
     args
     |> Enum.flat_map(fn {_, _, _, specs} -> Enum.flat_map(specs, &spec_inputs/1) end)
-    |> close_over(inputs, MapSet.new())
+    |> close_over(inputs, %{})
+    |> Map.keys()
     |> Enum.sort()
   end
 
+  # The visited set is a plain map; see `reachable/3` in Warden.Authorizer.
   defp close_over([], _inputs, seen), do: seen
 
   defp close_over([ident | rest], inputs, seen) do
-    if MapSet.member?(seen, ident) do
+    if Map.has_key?(seen, ident) do
       close_over(rest, inputs, seen)
     else
       nested =
@@ -329,7 +331,7 @@ defmodule Warden.Plan do
         |> Map.fetch!(ident)
         |> Enum.flat_map(fn {_, _, _, specs} -> Enum.flat_map(specs, &spec_inputs/1) end)
 
-      close_over(nested ++ rest, inputs, MapSet.put(seen, ident))
+      close_over(nested ++ rest, inputs, Map.put(seen, ident, true))
     end
   end
 

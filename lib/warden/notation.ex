@@ -221,6 +221,7 @@ defmodule Warden.Notation do
     ]
   end
 
+  @spec compile_error!(Macro.Env.t(), String.t()) :: no_return()
   defp compile_error!(env, message) do
     raise CompileError, file: env.file, line: env.line, description: message
   end

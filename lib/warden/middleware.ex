@@ -548,6 +548,7 @@ defmodule Warden.Middleware do
     end
   end
 
+  @spec object_replace_error!(map, term) :: no_return()
   defp object_replace_error!(spec, other) do
     raise Warden.PolicyError,
           "#{inspect(spec.authorizer)}.deny/1 returned #{inspect(other)} for an object " <>
