@@ -238,9 +238,10 @@ if Code.ensure_loaded?(Plug) do
 
     defp default_response(conn, %Denial{actor: actor}) do
       {status, body} =
-        if match?(%Actor{}, actor) and Actor.anonymous?(actor),
-          do: {401, "Unauthorized"},
-          else: {403, "Forbidden"}
+        case actor do
+          %Actor{subject: nil} -> {401, "Unauthorized"}
+          _ -> {403, "Forbidden"}
+        end
 
       conn
       |> put_resp_content_type("text/plain")
