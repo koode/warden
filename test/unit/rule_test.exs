@@ -152,7 +152,7 @@ defmodule Warden.RuleTest do
     end
 
     test "an invalid rule term raises" do
-      assert_raise Warden.PolicyError, fn -> eval({:not, :public}, actor([])) end
+      assert_raise Warden.PolicyError, fn -> apply(&eval/2, [{:not, :public}, actor([])]) end
     end
   end
 
