@@ -12,7 +12,17 @@ defmodule Warden.Phase.Attach do
   @doc false
   # Pipeline modifier entry point (`@pipeline_modifier Warden.Phase.Attach`).
   def pipeline(pipeline) do
-    Absinthe.Pipeline.insert_after(pipeline, Absinthe.Phase.Schema.InlineFunctions, __MODULE__)
+    pipeline
+    |> Enum.map(fn
+      # Keep Warden meta across later `{:meta, _}` hydrations (see `Warden.Hydrator`).
+      # A schema that configures its own hydrator keeps it.
+      {Absinthe.Phase.Schema.Hydrate, opts} ->
+        {Absinthe.Phase.Schema.Hydrate, Keyword.put_new(opts, :hydrator, Warden.Hydrator)}
+
+      phase ->
+        phase
+    end)
+    |> Absinthe.Pipeline.insert_after(Absinthe.Phase.Schema.InlineFunctions, __MODULE__)
   end
 
   @impl Absinthe.Phase

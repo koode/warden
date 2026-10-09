@@ -214,7 +214,16 @@ defmodule Warden.Plan do
         meta(ifield, :warden_args) || %{}
       end
 
-    Enum.reduce(interface_args, meta(field, :warden_args) || %{}, fn rules, acc ->
+    # A rule can also sit on the argument itself (`Warden.Hydrate.meta(rule: ...)` on an
+    # argument node).
+    on_args =
+      for f <- [field | interface_fields(object, field, types)],
+          {ident, arg} <- f.args || %{},
+          rule = meta(arg, :warden_rule),
+          rule != nil,
+          do: %{ident => rule}
+
+    Enum.reduce(interface_args ++ on_args, meta(field, :warden_args) || %{}, fn rules, acc ->
       Map.merge(acc, rules, fn _k, a, b -> Rule.conjoin([a, b]) end)
     end)
     |> Enum.reject(fn {_, rule} -> rule in [nil, :public] end)
@@ -598,7 +607,27 @@ defmodule Warden.Plan do
             else: ["#{where}: invalid list policy #{inspect(policy)}"]
       end
 
-    rule_errors ++ args_errors ++ policy_errors
+    arg_rule_errors =
+      for {ident, arg} <- Enum.sort_by(Map.get(field, :args) || %{}, &elem(&1, 0)),
+          error <- validate_arg(arg, "#{where}(#{ident})", catalog),
+          do: error
+
+    rule_errors ++ args_errors ++ policy_errors ++ arg_rule_errors
+  end
+
+  defp validate_arg(arg, where, catalog) do
+    rule =
+      case meta(arg, :warden_rule) do
+        nil -> []
+        rule -> rule_errors(rule, catalog, where)
+      end
+
+    stray =
+      for key <- [:warden_args, :warden_list_policy], meta(arg, key) != nil do
+        "#{where}: #{inspect(key)} is not supported on an argument"
+      end
+
+    rule ++ stray
   end
 
   defp rule_errors(rule, catalog, where) do
