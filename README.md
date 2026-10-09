@@ -340,6 +340,14 @@ mise exec -- mix test
 
 The property tests run 500 cases by default; set `WARDEN_PROPERTY_RUNS` for more.
 
+Static checks (Dialyzer must report 0 warnings):
+
+```sh
+mise exec -- mix compile --warnings-as-errors --force
+mise exec -- mix format --check-formatted
+mise exec -- mix dialyzer
+```
+
 To run the suite against Absinthe 1.7.10 (separate lockfile, deps and build dirs):
 
 ```sh
