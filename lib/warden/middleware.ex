@@ -420,8 +420,10 @@ defmodule Warden.Middleware do
     end
   end
 
+  # `acc` and `attached` are built in reverse (prepending) so the walk stays linear in
+  # the number of items.
   defp walk_items([], _i, _inner, _ctx, _idx, acc, attached),
-    do: {:ok, Enum.reverse(acc), attached}
+    do: {:ok, Enum.reverse(acc), Enum.reverse(attached)}
 
   # `i` is the index in the OUTPUT list: filtered items do not count, so error paths
   # never point at another item or reveal the original position.
@@ -430,11 +432,11 @@ defmodule Warden.Middleware do
 
     case walk(value, inner, ctx, item_idx) do
       {:ok, value, a} ->
-        walk_items(rest, i + 1, inner, ctx, idx, [value | acc], attached ++ a)
+        walk_items(rest, i + 1, inner, ctx, idx, [value | acc], Enum.reverse(a, attached))
 
       {:null, pending} ->
         a = Enum.map(pending, fn {ii, term} -> {item_idx, ii, term} end)
-        walk_items(rest, i + 1, inner, ctx, idx, [nil | acc], attached ++ a)
+        walk_items(rest, i + 1, inner, ctx, idx, [nil | acc], Enum.reverse(a, attached))
 
       :filter ->
         walk_items(rest, i, inner, ctx, idx, acc, attached)
@@ -443,24 +445,25 @@ defmodule Warden.Middleware do
         # The item cannot be null, so this list becomes null. Errors already attached
         # to positions inside it move up with it, and the remaining items are still
         # checked so every denied item is reported.
-        unattached = Enum.map(attached, fn {_at, ii, term} -> {ii, term} end)
-        collect_rest(rest, i + 1, inner, ctx, idx, unattached ++ pending)
+        unattached = attached |> Enum.reverse() |> Enum.map(fn {_at, ii, term} -> {ii, term} end)
+        collect_rest(rest, i + 1, inner, ctx, idx, Enum.reverse(unattached ++ pending))
 
       {:fail_list, _} = fail ->
         fail
     end
   end
 
-  defp collect_rest([], _i, _inner, _ctx, _idx, pending), do: {:null, pending}
+  # `pending` is built in reverse here.
+  defp collect_rest([], _i, _inner, _ctx, _idx, pending), do: {:null, Enum.reverse(pending)}
 
   defp collect_rest([value | rest], i, inner, ctx, idx, pending) do
     case walk(value, inner, ctx, [i | idx]) do
       {:ok, _value, a} ->
         more = Enum.map(a, fn {_at, ii, term} -> {ii, term} end)
-        collect_rest(rest, i + 1, inner, ctx, idx, pending ++ more)
+        collect_rest(rest, i + 1, inner, ctx, idx, Enum.reverse(more, pending))
 
       {tag, more} when tag in [:null, :bubble] ->
-        collect_rest(rest, i + 1, inner, ctx, idx, pending ++ more)
+        collect_rest(rest, i + 1, inner, ctx, idx, Enum.reverse(more, pending))
 
       :filter ->
         collect_rest(rest, i, inner, ctx, idx, pending)
@@ -580,9 +583,21 @@ defmodule Warden.Middleware do
   # document's own result tree, so documents batched by `Absinthe.Pipeline.BatchResolver`
   # (which share one accumulator) never see each other's markers. The accumulator only
   # carries a flag that asks `Warden.Plugin` for the phase.
+  #
+  # Absinthe also copies `extensions` onto every list item node and into later fields'
+  # resolutions. Each marker therefore names its owner (the field's response path); the
+  # phase takes a marker only from the node at that path and skips inherited copies, and
+  # a field never extends a marker it inherited.
   defp put_marker(res, kind, entries) do
-    marker = Map.get(res.extensions || %{}, @acc_key, %{items: [], folds: []})
-    marker = Map.update!(marker, kind, &(&1 ++ entries))
+    owner = Resolution.path(res)
+
+    marker =
+      case Map.get(res.extensions || %{}, @acc_key) do
+        %{owner: ^owner} = own -> own
+        _ -> %{owner: owner, items: [], folds: []}
+      end
+
+    marker = Map.update!(marker, kind, &(entries ++ &1))
     state = res.acc |> Map.get(@acc_key, %{}) |> Map.put(:pending, true)
 
     %{

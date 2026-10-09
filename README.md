@@ -162,7 +162,12 @@ them from literals, module attributes or compile-time expressions.
   included, applies) or the value differs from a declared default. When the object field
   and its interface fields declare the argument differently: if any declaration has no
   default, every present value is restricted (also one an interface default filled in);
-  otherwise a value is restricted when it differs from any declared default.
+  otherwise a value is restricted when it differs from any declared default. This is
+  fail-closed on purpose: Warden cannot tell which declaration Absinthe used to fill in
+  a default for a given selection (Absinthe swaps the interface field for the concrete
+  field before execution, and merges same-named selections into one), so with an object
+  default of `false` and no interface default, an omitted argument on the concrete type
+  is still restricted.
 - **Input-field rule** (`authorize` in an `input_object` field): same rule as arguments,
   checked through nested input objects and lists of input objects.
 
@@ -316,6 +321,11 @@ It does not protect against the following:
   exists in the list (as `null`). Use `:filter` to hide it.
 - **Introspection output** is not filtered. Use the `introspection:` option to restrict
   `__schema` and `__type` as a whole.
+- **`Absinthe.Pipeline.BatchResolver` merges contexts.** It merges the context of every
+  document in a batch into one (`deps/absinthe/lib/absinthe/pipeline/batch_resolver.ex:16`;
+  the first document's keys win), so every document in a batch runs as the same user.
+  That is Absinthe's behaviour, not Warden's; do not batch documents from different
+  users.
 - **Batched subscription publishing.** A custom Pubsub `run_docset/3` that runs documents
   through `Absinthe.Pipeline.BatchResolver` shares `acc` and merges contexts across
   subscribers; per-subscriber identity cannot hold there. Absinthe's own publisher runs

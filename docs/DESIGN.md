@@ -407,7 +407,12 @@ Three red-team agents attacked the first version (`test/redteam/`,
    default that fills an omitted argument included); otherwise a value is restricted
    when it differs from any declared default. (Confirmer fix: dropping the declarations
    without a default let `items(secret: true)` through when only the interface declared
-   `secret = true`.)
+   `secret = true`.) An exact rule ("unrestricted only if the value equals the default
+   of the declaration Absinthe used") is not implementable: the projector replaces the
+   document's field definition with the concrete one before middleware runs
+   (`resolution/projector.ex:151`) and keeps one occurrence of merged same-named
+   selections (`rectify_order/1`), so the declaration used cannot be recovered. Warden
+   stays fail-closed.
 5. **Present-key argument semantics** (`middleware.ex:146-148`).
 6. **`resolve_type` outside the declared members** (`plan.ex:420`). Abstract fields carry
    every object type's rule; the post check looks the returned concrete type up there.
@@ -442,6 +447,11 @@ Three red-team agents attacked the first version (`test/redteam/`,
     clears the flag (`phase/item_errors.ex:23`). Identical documents in one batch each
     get only their own errors and folds. (Confirmer fix: the first version tagged entries
     with the operation struct and drained them all after the first document.)
+    Absinthe copies a field's `extensions` onto its list items and into later
+    resolutions, so each marker names its owner (the field's response path) and is taken
+    only from that node; the phase then applies all entries in one walk over a trie of
+    their paths. Cost stays linear (`test/adversarial/cost_test.exs`; the second confirmer
+    pass measured 8,000 denied items at 12 s before this, quadratic).
 15. **Folding in nested lists.** Absinthe's `propagate_null_trimming` does not reach an
     object two or more list levels deep, so a nulled non-null field left the object with
     a `null` in a non-null field. Warden records every non-null field it nulls inside a
