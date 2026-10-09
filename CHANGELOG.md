@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 (2026-10-09)
+
 First release.
 
 - One authorizer module (`use Warden.Authorizer`) with a role catalog, role hierarchy,
