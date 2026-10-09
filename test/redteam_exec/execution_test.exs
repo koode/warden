@@ -390,6 +390,15 @@ defmodule Warden.RedteamExec.ExecutionTest do
 
   describe "plugins/0 overridden by the user" do
     test "item errors and data hiding still work when plugins/0 omits the defaults" do
+      # Decision 11: object denials default to :null; report them as item errors.
+      Process.put(:rx_deny, fn
+        %{kind: :object} ->
+          {:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}
+
+        denial ->
+          Warden.Authorizer.default_deny(denial, Warden.RedteamExec.Authz.__warden_catalog__())
+      end)
+
       schema =
         compile_schema(
           """

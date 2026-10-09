@@ -28,8 +28,12 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
     end
 
     test "a subject of {:error, _} from a failed token lookup is not authenticated" do
-      result = run_ctx("{ authed }", %{subject_fun: fn _ -> {:error, :expired} end})
-      refute contains?(result, "authed-data")
+      # Decision 10: an error subject is a broken subject/1 contract and raises; the
+      # request returns no data and no resolver runs.
+      assert_raise Warden.PolicyError, ~r/subject\/1 returned \{:error, :expired\}/, fn ->
+        run_ctx("{ authed }", %{subject_fun: fn _ -> {:error, :expired} end})
+      end
+
       assert ran() == []
     end
 
@@ -146,6 +150,16 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
 
   describe "error contents" do
     test "default errors reveal nothing beyond Forbidden for field, argument and object denials" do
+      # Decision 11: object denials default to :null; report them so the test can check
+      # every error says only Forbidden.
+      Process.put(:rx_deny, fn
+        %{kind: :object} ->
+          {:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}
+
+        denial ->
+          Warden.Authorizer.default_deny(denial, Warden.RedteamExec.Authz.__warden_catalog__())
+      end)
+
       result =
         run(
           ~s|{ adminOnly guardedArg(filter: {includeHidden: true}) secret(id: "s1") { code } }|,

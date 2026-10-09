@@ -10,6 +10,18 @@ defmodule Warden.Redteam.ListsTest do
 
   defp q(doc, user, opts \\ []), do: run(doc, user, Keyword.put(opts, :schema, @schema))
 
+  # Decision 11: object denials default to :null. These tests check where errors land,
+  # so they report object denials with Forbidden through the test handler.
+  defp reporting(user) do
+    Map.put(user, :deny_fun, fn
+      %{kind: :object, list_policy: policy} when policy != :filter ->
+        {:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}
+
+      _ ->
+        :default
+    end)
+  end
+
   defp paths(r), do: r |> Map.get(:errors, []) |> Enum.map(& &1[:path]) |> Enum.sort()
 
   test "[T!]! with a denied item folds up to data: null and leaks nothing" do
@@ -31,7 +43,7 @@ defmodule Warden.Redteam.ListsTest do
   end
 
   test "[[Node]!]! null_item: denied items are null and error paths point at those items" do
-    r = q(~s|{ g: grid { id } }|, viewer())
+    r = q(~s|{ g: grid { id } }|, reporting(viewer()))
 
     assert r.data == %{
              "g" => [
@@ -79,7 +91,7 @@ defmodule Warden.Redteam.ListsTest do
     r =
       q(
         ~s|{ a: search(ids: ["t1", "s1"]) { __typename } b: search(ids: ["s2"]) { __typename } }|,
-        viewer()
+        reporting(viewer())
       )
 
     assert r.data == %{"a" => [%{"__typename" => "PublicThing"}, nil], "b" => [nil]}

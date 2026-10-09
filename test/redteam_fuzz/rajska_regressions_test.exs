@@ -96,20 +96,40 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
     end
 
     test "object rules run on every publish, with the subscriber's actor" do
-      {:ok, member_topic} = subscribe("subscription { docChanged { id body } }", member())
+      # Decision 9: SecretDoc's rule (role(:admin)) does not depend on the payload, so a
+      # member could never see an event: the subscription is refused up front.
+      assert {:error, [%{message: "Forbidden"}]} =
+               subscribe("subscription { docChanged { id body } }", member())
+
       {:ok, admin_topic} = subscribe("subscription { docChanged { id body } }", admin())
 
       :ok = Absinthe.Subscription.publish(Pubsub, Data.doc("s1"), doc_changed: "rf_docs")
-
-      member_data = receive_data(member_topic)
-      refute contains?(member_data.data, "TOPSECRET")
-      assert member_data.data == %{"docChanged" => nil}
 
       assert receive_data(admin_topic).data == %{
                "docChanged" => %{"id" => "s1", "body" => "TOPSECRET-s1"}
              }
 
-      cleanup([member_topic, admin_topic])
+      cleanup([admin_topic])
+    end
+
+    test "a value-dependent return-type rule subscribes, then delivers null per subscriber" do
+      # Account: any_of([role(:admin), check(:self)]). The check needs the payload, so
+      # both members may subscribe; each publish is checked per subscriber.
+      doc = "subscription { accountChanged { id email } }"
+      {:ok, alice} = subscribe(doc, Data.user("u1", [:member]))
+      {:ok, bob} = subscribe(doc, Data.user("u2", [:member]))
+
+      :ok =
+        Absinthe.Subscription.publish(Pubsub, Data.account("a1"), account_changed: "rf_accounts")
+
+      assert receive_data(alice).data == %{
+               "accountChanged" => %{"id" => "a1", "email" => "alice@secret.example"}
+             }
+
+      bob_data = receive_data(bob)
+      assert bob_data.data == %{"accountChanged" => nil}
+      refute contains?(bob_data, "alice@secret.example")
+      cleanup([alice, bob])
     end
 
     test "shared context_id: different users never share one resolution" do
