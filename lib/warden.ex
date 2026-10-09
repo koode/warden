@@ -81,15 +81,24 @@ defmodule Warden do
   else the authorizer of `actor` (an `%Warden.Actor{}` or `nil`), else the configured
   default (`config :warden, authorizer: MyApp.Authz`).
 
-  Raises `Warden.PolicyError` when an explicit authorizer differs from the actor's, and
-  `ArgumentError` when there is no authorizer or it does not `use Warden.Authorizer`.
+  Raises `Warden.PolicyError` when an explicit authorizer differs from the actor's or the
+  actor was not built by an authorizer, and `ArgumentError` when there is no authorizer
+  or it does not `use Warden.Authorizer`.
   """
   @spec resolve_authorizer!(module | nil, Actor.t() | nil) :: module
   def resolve_authorizer!(explicit, actor \\ nil) do
     actor_authorizer =
       case actor do
-        %Actor{authorizer: authorizer} -> authorizer
-        _ -> nil
+        %Actor{authorizer: nil} ->
+          raise Warden.PolicyError,
+                "the actor has no authorizer; build actors with Warden.actor/2 (or " <>
+                  "Warden.Plug.actor/2), not by hand"
+
+        %Actor{authorizer: authorizer} ->
+          authorizer
+
+        _ ->
+          nil
       end
 
     resolve_authorizer!(explicit, actor_authorizer, @default_authorizer)

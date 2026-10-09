@@ -84,7 +84,7 @@ defmodule Warden.CoreApiTest do
     end
 
     test "the first argument must be an actor or a map" do
-      assert_raise ArgumentError, fn -> Warden.authorize("admin", role(:admin)) end
+      assert_raise ArgumentError, fn -> apply(Warden, :authorize, ["admin", role(:admin)]) end
     end
   end
 
