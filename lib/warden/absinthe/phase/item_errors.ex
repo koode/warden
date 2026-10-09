@@ -32,20 +32,7 @@ if Code.ensure_loaded?(Absinthe) do
           {result, markers} = strip(result, [], [])
 
           trie =
-            Enum.reduce(markers, %{}, fn marker, trie ->
-              trie =
-                Enum.reduce(marker.items, trie, fn {path, error}, trie ->
-                  trie_put(
-                    trie,
-                    path,
-                    &Map.update(&1, :errors, [error], fn es -> [error | es] end)
-                  )
-                end)
-
-              Enum.reduce(marker.folds, trie, fn path, trie ->
-                trie_put(trie, path, &Map.put(&1, :fold, true))
-              end)
-            end)
+            Enum.reduce(markers, %{}, &add_marker/2)
 
           result =
             case process(result, trie, nil) do
@@ -86,6 +73,17 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     defp strip(node, _path, acc), do: {node, acc}
+
+    defp add_marker(marker, trie) do
+      trie = Enum.reduce(marker.items, trie, &add_item_error/2)
+      Enum.reduce(marker.folds, trie, &add_fold/2)
+    end
+
+    defp add_item_error({path, error}, trie) do
+      trie_put(trie, path, &Map.update(&1, :errors, [error], fn errors -> [error | errors] end))
+    end
+
+    defp add_fold(path, trie), do: trie_put(trie, path, &Map.put(&1, :fold, true))
 
     defp trie_put(trie, [], fun), do: fun.(trie)
 
@@ -129,16 +127,9 @@ if Code.ensure_loaded?(Absinthe) do
          when is_list(fields) do
       {fields, bubbled?} =
         Enum.map_reduce(fields, false, fn field, bubbled? ->
-          case Map.fetch(children, response_key(field)) do
-            {:ok, trie} ->
-              case process(field, trie, field.emitter.schema_node.type) do
-                {:ok, field} -> {field, bubbled?}
-                {:bubble, field} -> {field, true}
-              end
-
-            :error ->
-              {field, bubbled?}
-          end
+          children
+          |> Map.fetch(response_key(field))
+          |> process_child(field, field_slot(field), bubbled?)
         end)
 
       {%{node | fields: fields}, bubbled?}
@@ -150,22 +141,31 @@ if Code.ensure_loaded?(Absinthe) do
 
       {values, {_, bubbled?}} =
         Enum.map_reduce(values, {0, false}, fn value, {index, bubbled?} ->
-          case Map.fetch(children, index) do
-            {:ok, trie} ->
-              case process(value, trie, item_slot) do
-                {:ok, value} -> {value, {index + 1, bubbled?}}
-                {:bubble, value} -> {value, {index + 1, true}}
-              end
+          {value, bubbled?} =
+            children
+            |> Map.fetch(index)
+            |> process_child(value, item_slot, bubbled?)
 
-            :error ->
-              {value, {index + 1, bubbled?}}
-          end
+          {value, {index + 1, bubbled?}}
         end)
 
       {%{node | values: values}, bubbled?}
     end
 
     defp process_children(node, _children, _slot), do: {node, false}
+
+    # Processes one child that has recorded entries (`{:ok, trie}`) and reports whether
+    # it bubbled a null up; children without entries are left as they are.
+    defp process_child(:error, node, _slot, bubbled?), do: {node, bubbled?}
+
+    defp process_child({:ok, trie}, node, slot, bubbled?) do
+      case process(node, trie, slot) do
+        {:ok, node} -> {node, bubbled?}
+        {:bubble, node} -> {node, true}
+      end
+    end
+
+    defp field_slot(field), do: field.emitter.schema_node.type
 
     defp null_here(node, slot, errors) do
       leaf = %Result.Leaf{
