@@ -1,15 +1,15 @@
-defmodule Warden.Hydrate do
+defmodule Warden.Absinthe.Hydrate do
   @moduledoc """
   Declares Warden rules for SDL schemas through `hydrate/2`.
 
       def hydrate(%Absinthe.Blueprint.Schema.FieldDefinition{identifier: :email}, [%{identifier: :user} | _]) do
-        [Warden.Hydrate.meta(rule: Warden.Rule.role(:admin))]
+        [Warden.Absinthe.Hydrate.meta(rule: Warden.Rule.role(:admin))]
       end
 
   Absinthe's `{:meta, keyword}` hydration replaces the node's whole `meta`, so pass any
   other meta you need as the second argument:
 
-      Warden.Hydrate.meta([rule: role(:admin)], cache: false)
+      Warden.Absinthe.Hydrate.meta([rule: role(:admin)], cache: false)
 
   Rules declared this way are validated at compile time like `authorize/1` rules.
   """
@@ -46,7 +46,7 @@ defmodule Warden.Hydrate do
           {:warden_list_policy, policy}
 
         {key, _} ->
-          raise ArgumentError, "unknown Warden.Hydrate.meta option: #{inspect(key)}"
+          raise ArgumentError, "unknown Warden.Absinthe.Hydrate.meta option: #{inspect(key)}"
       end)
 
     {:meta, extra_meta ++ entries}

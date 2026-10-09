@@ -8,7 +8,7 @@ defmodule Warden.Test.CompileHelpers do
     code = """
     defmodule #{name} do
       use Absinthe.Schema
-      use Warden.Schema, #{opts}
+      use Warden.Absinthe, #{opts}
 
     #{body}
     end

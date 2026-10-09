@@ -406,12 +406,12 @@ defmodule Warden.Redteam.SchemaConstructionTest do
       """
 
       def hydrate(%Absinthe.Blueprint.Schema.InterfaceTypeDefinition{identifier: :classified}, _) do
-        [Warden.Hydrate.meta(rule: role(:editor)), {:resolve_type, &__MODULE__.file_type/2}]
+        [Warden.Absinthe.Hydrate.meta(rule: role(:editor)), {:resolve_type, &__MODULE__.file_type/2}]
       end
 
       def hydrate(%Absinthe.Blueprint.Schema.UnionTypeDefinition{identifier: :pile}, _) do
         [
-          Warden.Hydrate.meta(rule: role(:admin)),
+          Warden.Absinthe.Hydrate.meta(rule: role(:admin)),
           {:resolve_type, &__MODULE__.pile_type/2}
         ]
       end
@@ -419,7 +419,7 @@ defmodule Warden.Redteam.SchemaConstructionTest do
       def hydrate(%Absinthe.Blueprint.Schema.FieldDefinition{identifier: :note}, [
             %Absinthe.Blueprint.Schema.InterfaceTypeDefinition{} | _
           ]) do
-        Warden.Hydrate.meta(rule: role(:admin))
+        Warden.Absinthe.Hydrate.meta(rule: role(:admin))
       end
 
       def hydrate(%Absinthe.Blueprint.Schema.FieldDefinition{identifier: :file}, _) do

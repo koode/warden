@@ -146,7 +146,7 @@ end
 defmodule Warden.Test.RF.Schema do
   @moduledoc false
   use Absinthe.Schema
-  use Warden.Schema, authorizer: Warden.Test.RF.Authz
+  use Warden.Absinthe, authorizer: Warden.Test.RF.Authz
 
   alias Warden.Test.RF.{Probe, Resolvers}
 
@@ -389,7 +389,7 @@ defmodule Warden.Test.RF.PersistentSchema do
   # schema pipeline differs (InlineFunctions with inline_always, PopulatePersistentTerm).
   use Absinthe.Schema
   @schema_provider Absinthe.Schema.PersistentTerm
-  use Warden.Schema, authorizer: Warden.Test.RF.Authz
+  use Warden.Absinthe, authorizer: Warden.Test.RF.Authz
 
   object :secret_doc do
     authorize role(:admin)

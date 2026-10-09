@@ -364,7 +364,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
           compile!("""
           defmodule #{name} do
             use Absinthe.Schema
-            use Warden.Schema, authorizer: Warden.RedteamExec.Authz
+            use Warden.Absinthe, authorizer: Warden.RedteamExec.Authz
 
             import_sdl \"\"\"
             type Query {
@@ -375,7 +375,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
             alias Absinthe.Blueprint.Schema.{FieldDefinition, InputValueDefinition}
 
             def hydrate(%InputValueDefinition{identifier: :raw}, [%FieldDefinition{identifier: :salary} | _]) do
-              [Warden.Hydrate.meta(rule: role(:admin))]
+              [Warden.Absinthe.Hydrate.meta(rule: role(:admin))]
             end
 
             def hydrate(%FieldDefinition{identifier: :salary}, _) do
@@ -406,7 +406,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
           compile!("""
           defmodule #{name} do
             use Absinthe.Schema
-            use Warden.Schema, authorizer: Warden.RedteamExec.Authz
+            use Warden.Absinthe, authorizer: Warden.RedteamExec.Authz
 
             import_sdl \"\"\"
             type Query {
@@ -418,7 +418,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
 
             def hydrate(%FieldDefinition{identifier: :salary}, _) do
               [
-                Warden.Hydrate.meta(rule: role(:admin)),
+                Warden.Absinthe.Hydrate.meta(rule: role(:admin)),
                 {:meta, [cache: false]},
                 {:resolve, &__MODULE__.salary/2}
               ]

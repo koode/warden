@@ -1,4 +1,4 @@
-defmodule Warden.Verifier do
+defmodule Warden.Absinthe.Verifier do
   @moduledoc false
   # Runs after the schema module and its compiled types exist. Recomputes the plan from
   # the compiled types and checks, in both directions, that every field carries exactly
@@ -6,7 +6,7 @@ defmodule Warden.Verifier do
   # every subscription field's `config` is wrapped.
 
   alias Absinthe.Type
-  alias Warden.Middleware
+  alias Warden.Absinthe.Middleware
 
   def verify!(schema) do
     case verify(schema) do
@@ -22,9 +22,9 @@ defmodule Warden.Verifier do
   end
 
   def verify(schema) do
-    config = Warden.Schema.config!(schema)
+    config = Warden.Absinthe.config!(schema)
     types = compiled_types(schema)
-    plan = Warden.Plan.build(types, config)
+    plan = Warden.Absinthe.Plan.build(types, config)
 
     errors =
       plan.errors ++
@@ -93,7 +93,10 @@ defmodule Warden.Verifier do
         for {ident, field} <- Enum.sort_by(fields, &elem(&1, 0)),
             Map.has_key?(plan.subscriptions, ident),
             expected = Map.fetch!(plan.subscriptions, ident),
-            not match?({:ref, Warden.Subscription, {:config, ^ident, _, ^expected}}, field.config) do
+            not match?(
+              {:ref, Warden.Absinthe.Subscription, {:config, ^ident, _, ^expected}},
+              field.config
+            ) do
           "Subscription.#{field.name}: config is not wrapped by Warden"
         end
 

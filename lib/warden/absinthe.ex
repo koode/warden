@@ -1,15 +1,15 @@
-defmodule Warden.Schema do
+defmodule Warden.Absinthe do
   @moduledoc """
   Adds Warden authorization to an Absinthe schema.
 
       defmodule MyApp.Schema do
         use Absinthe.Schema
-        use Warden.Schema, authorizer: MyApp.Authz
+        use Warden.Absinthe, authorizer: MyApp.Authz
 
         # ...
       end
 
-  `use Warden.Schema` must come after `use Absinthe.Schema`.
+  `use Warden.Absinthe` must come after `use Absinthe.Schema`.
 
   ## Options
 
@@ -39,7 +39,7 @@ defmodule Warden.Schema do
       raise CompileError,
         file: env.file,
         line: env.line,
-        description: "`use Warden.Schema` must come after `use Absinthe.Schema`"
+        description: "`use Warden.Absinthe` must come after `use Absinthe.Schema`"
     end
 
     {opts, _} =
@@ -62,15 +62,15 @@ defmodule Warden.Schema do
             file: env.file,
             line: env.line,
             description:
-              "invalid Warden.Schema options:\n" <> Enum.map_join(errors, "\n", &("  * " <> &1))
+              "invalid Warden.Absinthe options:\n" <> Enum.map_join(errors, "\n", &("  * " <> &1))
       end
 
     quote do
-      use Warden.Notation
+      use Warden.Absinthe.Notation
 
-      @pipeline_modifier Warden.Phase.Attach
-      @before_compile Warden.Schema
-      @after_compile Warden.Schema
+      @pipeline_modifier Warden.Absinthe.Phase.Attach
+      @before_compile Warden.Absinthe
+      @after_compile Warden.Absinthe
 
       @doc false
       def __warden__(:options), do: unquote(Macro.escape(config))
@@ -83,13 +83,13 @@ defmodule Warden.Schema do
       defoverridable plugins: 0
 
       @doc false
-      def plugins, do: Warden.Plugin.add_to(super())
+      def plugins, do: Warden.Absinthe.Plugin.add_to(super())
     end
   end
 
   @doc false
   def __after_compile__(env, _bytecode) do
-    Warden.Verifier.verify!(env.module)
+    Warden.Absinthe.Verifier.verify!(env.module)
   end
 
   @doc false
@@ -159,7 +159,7 @@ defmodule Warden.Schema do
 
     unless function_exported?(schema, :__warden__, 1) do
       raise CompileError,
-        description: "#{inspect(schema)} does not `use Warden.Schema`"
+        description: "#{inspect(schema)} does not `use Warden.Absinthe`"
     end
 
     options = schema.__warden__(:options)
@@ -201,7 +201,7 @@ defmodule Warden.Schema do
     if extra_errors != [] do
       raise CompileError,
         description:
-          "invalid Warden.Schema options in #{inspect(schema)}:\n" <>
+          "invalid Warden.Absinthe options in #{inspect(schema)}:\n" <>
             Enum.map_join(extra_errors, "\n", &("  * " <> &1))
     end
 
@@ -212,8 +212,8 @@ defmodule Warden.Schema do
   Returns the authorization plan of a compiled schema: for every field that has Warden
   middleware, the pre and post specs. Meant for debugging and tests.
   """
-  @spec plan(module) :: Warden.Plan.t()
+  @spec plan(module) :: Warden.Absinthe.Plan.t()
   def plan(schema) do
-    Warden.Plan.build(Warden.Verifier.compiled_types(schema), config!(schema))
+    Warden.Absinthe.Plan.build(Warden.Absinthe.Verifier.compiled_types(schema), config!(schema))
   end
 end

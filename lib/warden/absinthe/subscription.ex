@@ -1,4 +1,4 @@
-defmodule Warden.Subscription do
+defmodule Warden.Absinthe.Subscription do
   @moduledoc false
   # Wraps every subscription field's `config` function.
   #
@@ -16,7 +16,7 @@ defmodule Warden.Subscription do
   end
 
   @doc false
-  # Called by `Absinthe.Type.function/2` for `{:ref, Warden.Subscription, identifier}`.
+  # Called by `Absinthe.Type.function/2` for `{:ref, Warden.Absinthe.Subscription, identifier}`.
   def __absinthe_function__({:config, field_ident, original, spec}, :config) do
     fn args, info -> config(field_ident, original, spec, args, info) end
   end
@@ -46,7 +46,7 @@ defmodule Warden.Subscription do
       parent_type: :subscription
     }
 
-    case Warden.Middleware.run_checks(checks, base, authorizer) do
+    case Warden.Absinthe.Middleware.run_checks(checks, base, authorizer) do
       :ok ->
         :ok
 
@@ -137,7 +137,7 @@ defmodule Warden.Subscription do
   # return an error, the default error is used.
   defp subscribe_error(authorizer, denial) do
     term =
-      case Warden.Middleware.call_deny(authorizer, denial) do
+      case Warden.Absinthe.Middleware.call_deny(authorizer, denial) do
         {:error, term} ->
           term
 

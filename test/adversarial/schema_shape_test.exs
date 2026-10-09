@@ -19,7 +19,7 @@ defmodule Warden.Adversarial.SchemaShapeTest do
   defmodule Types do
     @moduledoc false
     use Absinthe.Schema.Notation
-    use Warden.Notation
+    use Warden.Absinthe.Notation
 
     object :shared_fields do
       field :salary, :string do
@@ -37,7 +37,7 @@ defmodule Warden.Adversarial.SchemaShapeTest do
   defmodule Schema do
     @moduledoc false
     use Absinthe.Schema
-    use Warden.Schema, authorizer: Warden.Test.Authz
+    use Warden.Absinthe, authorizer: Warden.Test.Authz
 
     import_types Types
 
@@ -79,7 +79,7 @@ defmodule Warden.Adversarial.SchemaShapeTest do
     @moduledoc false
     use Absinthe.Schema
     @schema_provider Absinthe.Schema.PersistentTerm
-    use Warden.Schema, authorizer: Warden.Test.Authz
+    use Warden.Absinthe, authorizer: Warden.Test.Authz
 
     object :secret do
       authorize role(:admin)

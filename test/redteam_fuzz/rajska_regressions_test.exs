@@ -239,7 +239,7 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
         quote do
           defmodule unquote(mod) do
             use Absinthe.Schema
-            use Warden.Schema, authorizer: Warden.Test.RF.Authz
+            use Warden.Absinthe, authorizer: Warden.Test.RF.Authz
 
             object :secret_box do
               authorize role(:admin)
@@ -456,7 +456,7 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
           Code.compile_string("""
           defmodule #{name} do
             use Absinthe.Schema
-            use Warden.Schema, authorizer: Warden.Test.Authz
+            use Warden.Absinthe, authorizer: Warden.Test.Authz
 
             object :vault do
               authorize role(:admin)

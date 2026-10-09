@@ -229,7 +229,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
           arts = Enum.map(sd.type_artifacts, fn
             %Absinthe.Type.Object{fields: fs} = o ->
               %{o | fields: Map.new(fs, fn {k, f} ->
-                {k, %{f | middleware: Enum.reject(f.middleware, &Warden.Middleware.warden_entry?/1)}}
+                {k, %{f | middleware: Enum.reject(f.middleware, &Warden.Absinthe.Middleware.warden_entry?/1)}}
               end)}
             t -> t
           end)
@@ -239,7 +239,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
 
       defmodule #{name} do
         use Absinthe.Schema
-        use Warden.Schema, authorizer: Warden.RedteamExec.Authz
+        use Warden.Absinthe, authorizer: Warden.RedteamExec.Authz
         @pipeline_modifier #{name}.Phase
 
         query do

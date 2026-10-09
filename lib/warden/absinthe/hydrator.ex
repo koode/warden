@@ -1,8 +1,8 @@
-defmodule Warden.Hydrator do
+defmodule Warden.Absinthe.Hydrator do
   @moduledoc false
   # Absinthe's `{:meta, keyword}` hydration replaces a node's whole meta
   # (`Absinthe.Phase.Schema.Hydrate.apply_hydration/2`), so a later `{:meta, _}` would
-  # silently drop a rule set with `Warden.Hydrate.meta/2`. `Warden.Phase.Attach` installs
+  # silently drop a rule set with `Warden.Absinthe.Hydrate.meta/2`. `Warden.Absinthe.Phase.Attach` installs
   # this hydrator, which keeps Warden's keys across later `{:meta, _}` hydrations and
   # rejects a later hydration that sets a Warden key to a different value.
   @behaviour Absinthe.Schema.Hydrator
@@ -20,7 +20,7 @@ defmodule Warden.Hydrator do
       raise CompileError,
         description:
           "hydrate/2 sets #{inspect(key)} on #{describe(node)} twice with different values " <>
-            "(#{inspect(old)} and #{inspect(new)}); combine them in one Warden.Hydrate.meta/2"
+            "(#{inspect(old)} and #{inspect(new)}); combine them in one Warden.Absinthe.Hydrate.meta/2"
     end
 
     merged = Keyword.merge(existing, keyword_list)

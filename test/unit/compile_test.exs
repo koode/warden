@@ -173,11 +173,11 @@ defmodule Warden.CompileTest do
                    end
     end
 
-    test "use Warden.Schema before use Absinthe.Schema fails" do
+    test "use Warden.Absinthe before use Absinthe.Schema fails" do
       assert_raise CompileError, ~r/must come after `use Absinthe.Schema`/, fn ->
         compile!("""
         defmodule #{unique("Warden.Test.Compiled.Order")} do
-          use Warden.Schema, authorizer: Warden.Test.Authz
+          use Warden.Absinthe, authorizer: Warden.Test.Authz
           use Absinthe.Schema
           #{@query}
         end
@@ -311,7 +311,8 @@ defmodule Warden.CompileTest do
                     {k,
                      %{
                        f
-                       | middleware: Enum.reject(f.middleware, &Warden.Middleware.warden_entry?/1)
+                       | middleware:
+                           Enum.reject(f.middleware, &Warden.Absinthe.Middleware.warden_entry?/1)
                      }}
                   end)
 
@@ -344,7 +345,7 @@ defmodule Warden.CompileTest do
     end
 
     test "verify/1 passes on the test schema" do
-      assert Warden.Verifier.verify(Warden.Test.Schema) == :ok
+      assert Warden.Absinthe.Verifier.verify(Warden.Test.Schema) == :ok
     end
   end
 

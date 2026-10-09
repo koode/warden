@@ -95,7 +95,7 @@ defmodule Warden.Integration.EnforcementTest do
     end
 
     test "object rules run with the parent check on every field" do
-      plan = Warden.Schema.plan(Warden.Test.Schema)
+      plan = Warden.Absinthe.plan(Warden.Test.Schema)
       {pre, _post} = plan.fields[{:user, :name}]
       assert [{:object, :user, _}] = pre.checks
     end

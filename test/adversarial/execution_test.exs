@@ -38,7 +38,7 @@ defmodule Warden.Adversarial.ExecutionTest do
 
     [field_mw] =
       Absinthe.Schema.lookup_type(@schema, :query).fields.closure.middleware
-      |> Enum.filter(&match?({{Warden.Middleware, :shim}, _}, &1))
+      |> Enum.filter(&match?({{Warden.Absinthe.Middleware, :shim}, _}, &1))
 
     assert field_mw
   end

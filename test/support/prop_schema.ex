@@ -81,7 +81,7 @@ end
 defmodule Warden.Test.Prop.Schema do
   @moduledoc false
   use Absinthe.Schema
-  use Warden.Schema, authorizer: Warden.Test.Prop.Authz
+  use Warden.Absinthe, authorizer: Warden.Test.Prop.Authz
 
   alias Warden.Test.Prop.Resolvers, as: R
 

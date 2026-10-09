@@ -8,10 +8,10 @@ defmodule Warden do
 
     * `Warden.Authorizer` - the behaviour for your authorizer module (catalogs,
       callbacks).
-    * `Warden.Schema` - `use` it in your schema to enable Warden.
-    * `Warden.Notation` - `authorize/1`, `authorize_args/1`, `list_policy/1`.
+    * `Warden.Absinthe` - `use` it in your schema to enable Warden.
+    * `Warden.Absinthe.Notation` - `authorize/1`, `authorize_args/1`, `list_policy/1`.
     * `Warden.Rule` - the rule builders and evaluator.
-    * `Warden.Hydrate` - rules for SDL schemas.
+    * `Warden.Absinthe.Hydrate` - rules for SDL schemas.
 
   See the README for the security model and its limits.
   """

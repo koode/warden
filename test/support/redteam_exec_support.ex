@@ -139,7 +139,7 @@ end
 defmodule Warden.RedteamExec.Schema do
   @moduledoc false
   use Absinthe.Schema
-  use Warden.Schema, authorizer: Warden.RedteamExec.Authz
+  use Warden.Absinthe, authorizer: Warden.RedteamExec.Authz
 
   import Absinthe.Resolution.Helpers, only: [async: 1, batch: 3, on_load: 2]
 

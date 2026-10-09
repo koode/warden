@@ -1,9 +1,9 @@
-defmodule Warden.Notation do
+defmodule Warden.Absinthe.Notation do
   @moduledoc """
   Schema notation for Warden rules.
 
-  `use Warden.Schema` imports this module in a schema. In a type module that you pull in
-  with `import_types`, add `use Warden.Notation` after `use Absinthe.Schema.Notation`.
+  `use Warden.Absinthe` imports this module in a schema. In a type module that you pull in
+  with `import_types`, add `use Warden.Absinthe.Notation` after `use Absinthe.Schema.Notation`.
 
   The rule builders from `Warden.Rule` are imported too.
 
@@ -36,7 +36,7 @@ defmodule Warden.Notation do
           any_of: 1
         ]
 
-      import Warden.Notation, only: [authorize: 1, authorize_args: 1, list_policy: 1]
+      import Warden.Absinthe.Notation, only: [authorize: 1, authorize_args: 1, list_policy: 1]
     end
   end
 

@@ -1,4 +1,4 @@
-defmodule Warden.Middleware do
+defmodule Warden.Absinthe.Middleware do
   @moduledoc false
   # The two middleware entries Warden attaches to fields.
   #
@@ -7,7 +7,7 @@ defmodule Warden.Middleware do
   #     not run.
   #   * `post/2` runs last: the object rules of the resolved value, per list item.
   #
-  # Both are attached by `Warden.Phase.Attach` at schema compile time.
+  # Both are attached by `Warden.Absinthe.Phase.Attach` at schema compile time.
 
   alias Absinthe.Resolution
   alias Warden.{Actor, Check, Denial, Rule}
@@ -583,7 +583,7 @@ defmodule Warden.Middleware do
   # result node (`to_result/4` in Absinthe's resolution phase). They live in the
   # document's own result tree, so documents batched by `Absinthe.Pipeline.BatchResolver`
   # (which share one accumulator) never see each other's markers. The accumulator only
-  # carries a flag that asks `Warden.Plugin` for the phase.
+  # carries a flag that asks `Warden.Absinthe.Plugin` for the phase.
   #
   # Absinthe also copies `extensions` onto every list item node and into later fields'
   # resolutions. Each marker therefore names its owner (the field's response path); the
@@ -611,7 +611,7 @@ defmodule Warden.Middleware do
   @doc false
   # Absinthe folds a null in a non-null field into its parent object, except when that
   # object sits two or more list levels deep. Record every non-null field Warden nulls
-  # inside a list; `Warden.Phase.ItemErrors` folds the ones Absinthe left alone.
+  # inside a list; `Warden.Absinthe.Phase.ItemErrors` folds the ones Absinthe left alone.
   def maybe_record_fold(%Resolution{value: nil} = res) do
     path = Resolution.path(res)
 

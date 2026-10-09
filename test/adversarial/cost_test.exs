@@ -14,7 +14,7 @@ defmodule Warden.Adversarial.CostTest do
   defmodule Schema do
     @moduledoc false
     use Absinthe.Schema
-    use Warden.Schema, authorizer: Warden.Test.Authz
+    use Warden.Absinthe, authorizer: Warden.Test.Authz
 
     object :secret do
       authorize role(:admin)

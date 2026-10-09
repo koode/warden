@@ -1,16 +1,16 @@
-defmodule Warden.Phase.ItemErrors do
+defmodule Warden.Absinthe.Phase.ItemErrors do
   @moduledoc false
-  # Runs once, after the last resolution pass (see `Warden.Plugin`), and then drains the
+  # Runs once, after the last resolution pass (see `Warden.Absinthe.Plugin`), and then drains the
   # Warden entries from the accumulator, so it can never cause another pass.
   #
   #   * Item errors: attaches recorded list-item denial errors to their (null) result
-  #     nodes. Absinthe cannot carry them itself (see `Warden.Plugin`).
+  #     nodes. Absinthe cannot carry them itself (see `Warden.Absinthe.Plugin`).
   #   * Folds: a non-null field Warden nulled inside an object that sits two or more list
   #     levels deep is not folded by Absinthe's null propagation. Warden folds it here:
   #     the object becomes null, and further up while the positions are non-null.
   #
   # The entries are markers in the result nodes' `extensions` (see
-  # `Warden.Middleware.put_marker/3`), so each document only ever applies its own, also
+  # `Warden.Absinthe.Middleware.put_marker/3`), so each document only ever applies its own, also
   # when `Absinthe.Pipeline.BatchResolver` runs several documents with one shared
   # accumulator. The phase clears the accumulator flag and strips the markers.
   #

@@ -1,4 +1,4 @@
-defmodule Warden.Plan do
+defmodule Warden.Absinthe.Plan do
   @moduledoc false
   # Computes, from the schema's types and the Warden configuration, which Warden
   # middleware every field needs. The same function runs in the schema pipeline (to
@@ -223,7 +223,7 @@ defmodule Warden.Plan do
         meta(ifield, :warden_args) || %{}
       end
 
-    # A rule can also sit on the argument itself (`Warden.Hydrate.meta(rule: ...)` on an
+    # A rule can also sit on the argument itself (`Warden.Absinthe.Hydrate.meta(rule: ...)` on an
     # argument node).
     on_args =
       for f <- [field | interface_fields(object, field, types)],

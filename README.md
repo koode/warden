@@ -89,7 +89,7 @@ Optional callbacks: `deny/1` (see [Denial handling](#denial-handling)) and
 ```elixir
 defmodule MyApp.Schema do
   use Absinthe.Schema
-  use Warden.Schema, authorizer: MyApp.Authz
+  use Warden.Absinthe, authorizer: MyApp.Authz
 
   object :user do
     authorize any_of([role(:admin), check(:self)])     # object rule
@@ -117,8 +117,8 @@ defmodule MyApp.Schema do
 end
 ```
 
-`use Warden.Schema` must come after `use Absinthe.Schema`. In type modules pulled in with
-`import_types`, add `use Warden.Notation` after `use Absinthe.Schema.Notation`.
+`use Warden.Absinthe` must come after `use Absinthe.Schema`. In type modules pulled in with
+`import_types`, add `use Warden.Absinthe.Notation` after `use Absinthe.Schema.Notation`.
 
 ### Rules
 
@@ -169,11 +169,11 @@ them from literals, module attributes or compile-time expressions.
 
 ### SDL schemas
 
-Use `Warden.Hydrate.meta/2` in `hydrate/2`:
+Use `Warden.Absinthe.Hydrate.meta/2` in `hydrate/2`:
 
 ```elixir
 def hydrate(%Absinthe.Blueprint.Schema.FieldDefinition{identifier: :email}, [%{identifier: :user} | _]) do
-  [Warden.Hydrate.meta(rule: role(:admin))]
+  [Warden.Absinthe.Hydrate.meta(rule: role(:admin))]
 end
 ```
 
@@ -182,7 +182,7 @@ On an argument node (`InputValueDefinition` of a field), `rule:` is an argument 
 Absinthe's `{:meta, ...}` hydration replaces the node's meta. Warden installs a hydrator
 that keeps its own keys across a later `{:meta, ...}` and fails compilation when two
 hydrations set a Warden key to different values. You can also pass your other meta as
-the second argument: `Warden.Hydrate.meta([rule: role(:admin)], cache: false)`.
+the second argument: `Warden.Absinthe.Hydrate.meta([rule: role(:admin)], cache: false)`.
 
 ## Schema options
 

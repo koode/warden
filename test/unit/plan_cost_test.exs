@@ -1,6 +1,6 @@
 defmodule Warden.PlanCostTest do
   @moduledoc """
-  Compile-time guard: `Warden.Plan.build/2` runs on every schema compile, so its cost must
+  Compile-time guard: `Warden.Absinthe.Plan.build/2` runs on every schema compile, so its cost must
   grow about linearly with the schema. Compares 250 against 2,000 object types (8x the
   work); linear growth gives a ratio near 8, quadratic growth near 64.
   """
@@ -12,10 +12,10 @@ defmodule Warden.PlanCostTest do
   @fields_per_object 15
 
   test "plan building grows linearly with the number of types" do
-    config = Warden.Schema.config!(Warden.Test.Schema)
+    config = Warden.Absinthe.config!(Warden.Test.Schema)
 
-    small = best_of(5, fn -> Warden.Plan.build(types(250), config) end)
-    large = best_of(5, fn -> Warden.Plan.build(types(2_000), config) end)
+    small = best_of(5, fn -> Warden.Absinthe.Plan.build(types(250), config) end)
+    large = best_of(5, fn -> Warden.Absinthe.Plan.build(types(2_000), config) end)
 
     assert large / max(small, 1) < @ratio_bound,
            "8x the types took #{Float.round(large / max(small, 1), 1)}x the time " <>
@@ -23,8 +23,8 @@ defmodule Warden.PlanCostTest do
   end
 
   test "the synthetic schema is planned (the benchmark measures real work)" do
-    config = Warden.Schema.config!(Warden.Test.Schema)
-    plan = Warden.Plan.build(types(10), config)
+    config = Warden.Absinthe.config!(Warden.Test.Schema)
+    plan = Warden.Absinthe.Plan.build(types(10), config)
 
     assert plan.errors == []
     assert map_size(plan.object_rules) == 10

@@ -23,7 +23,7 @@ defmodule Warden.SubscriptionTest do
   defmodule OptIn.Schema do
     @moduledoc false
     use Absinthe.Schema
-    use Warden.Schema, authorizer: Warden.SubscriptionTest.OptIn.Authz
+    use Warden.Absinthe, authorizer: Warden.SubscriptionTest.OptIn.Authz
 
     query do
       field :ok, :string

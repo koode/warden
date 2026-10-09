@@ -1,4 +1,4 @@
-defmodule Warden.Phase.Attach do
+defmodule Warden.Absinthe.Phase.Attach do
   @moduledoc false
   # Schema pipeline phase. Runs right after `Absinthe.Phase.Schema.InlineFunctions`,
   # which is where Absinthe applies the schema's `middleware/3` callback. Wrapping the
@@ -8,17 +8,18 @@ defmodule Warden.Phase.Attach do
 
   alias Absinthe.Blueprint
   alias Absinthe.Type
-  alias Warden.Middleware
+  alias Warden.Absinthe.Middleware
 
   @doc false
-  # Pipeline modifier entry point (`@pipeline_modifier Warden.Phase.Attach`).
+  # Pipeline modifier entry point (`@pipeline_modifier Warden.Absinthe.Phase.Attach`).
   def pipeline(pipeline) do
     pipeline
     |> Enum.map(fn
-      # Keep Warden meta across later `{:meta, _}` hydrations (see `Warden.Hydrator`).
+      # Keep Warden meta across later `{:meta, _}` hydrations (see `Warden.Absinthe.Hydrator`).
       # A schema that configures its own hydrator keeps it.
       {Absinthe.Phase.Schema.Hydrate, opts} ->
-        {Absinthe.Phase.Schema.Hydrate, Keyword.put_new(opts, :hydrator, Warden.Hydrator)}
+        {Absinthe.Phase.Schema.Hydrate,
+         Keyword.put_new(opts, :hydrator, Warden.Absinthe.Hydrator)}
 
       phase ->
         phase
@@ -28,11 +29,11 @@ defmodule Warden.Phase.Attach do
 
   @impl Absinthe.Phase
   def run(%Blueprint{schema: schema} = blueprint, _opts) do
-    config = Warden.Schema.config!(schema)
+    config = Warden.Absinthe.config!(schema)
     [schema_def] = blueprint.schema_definitions
 
     types = Map.new(schema_def.type_artifacts, &{&1.identifier, &1})
-    plan = Warden.Plan.build(types, config)
+    plan = Warden.Absinthe.Plan.build(types, config)
 
     if plan.errors != [] do
       raise CompileError,
@@ -118,6 +119,6 @@ defmodule Warden.Phase.Attach do
   @doc false
   def wrap_config(field, spec) do
     original = Map.get(field, :config)
-    %{field | config: Warden.Subscription.config_ref(field.identifier, original, spec)}
+    %{field | config: Warden.Absinthe.Subscription.config_ref(field.identifier, original, spec)}
   end
 end

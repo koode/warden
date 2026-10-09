@@ -17,7 +17,7 @@ defmodule Warden.Integration.DenialTest do
     @moduledoc false
     use Absinthe.Schema
 
-    use Warden.Schema,
+    use Warden.Absinthe,
       authorizer: Warden.Integration.DenialTest.Authz,
       introspection: authenticated(),
       default_object_rule: role(:viewer)

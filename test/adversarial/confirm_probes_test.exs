@@ -596,7 +596,7 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
         Code.compile_string("""
         defmodule #{name} do
           use Absinthe.Schema
-          use Warden.Schema, authorizer: Warden.ConfirmProbe.Authz
+          use Warden.Absinthe, authorizer: Warden.ConfirmProbe.Authz
 
           object :vault do
             authorize role(:admin)
@@ -628,7 +628,7 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
   # D13 ------------------------------------------------------------------------
   defmodule SDL do
     use Absinthe.Schema
-    use Warden.Schema, authorizer: Warden.ConfirmProbe.Authz
+    use Warden.Absinthe, authorizer: Warden.ConfirmProbe.Authz
 
     alias Absinthe.Blueprint.Schema.{FieldDefinition, InputValueDefinition}
 
@@ -641,13 +641,13 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
     def hydrate(%InputValueDefinition{identifier: :raw}, [
           %FieldDefinition{identifier: :salary} | _
         ]) do
-      [Warden.Hydrate.meta(rule: role(:admin)), {:meta, [cache: false]}]
+      [Warden.Absinthe.Hydrate.meta(rule: role(:admin)), {:meta, [cache: false]}]
     end
 
     def hydrate(%InputValueDefinition{identifier: :other}, [
           %FieldDefinition{identifier: :salary} | _
         ]) do
-      [{:meta, [cache: false]}, Warden.Hydrate.meta(rule: role(:admin)), {:meta, [x: 1]}]
+      [{:meta, [cache: false]}, Warden.Absinthe.Hydrate.meta(rule: role(:admin)), {:meta, [x: 1]}]
     end
 
     def hydrate(%FieldDefinition{identifier: :salary}, _), do: [{:resolve, &__MODULE__.salary/3}]
@@ -669,10 +669,11 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
   # D14 / D15 ---------------------------------------------------------------------
   defmodule Grid do
     use Absinthe.Schema
-    use Warden.Schema, authorizer: Warden.Test.Authz
+    use Warden.Absinthe, authorizer: Warden.Test.Authz
 
-    # Warden.Plugin deliberately first.
-    def plugins, do: [Warden.Plugin, Absinthe.Middleware.Async, Absinthe.Middleware.Batch]
+    # Warden.Absinthe.Plugin deliberately first.
+    def plugins,
+      do: [Warden.Absinthe.Plugin, Absinthe.Middleware.Async, Absinthe.Middleware.Batch]
 
     object :cell do
       field :id, :id
@@ -749,7 +750,7 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
     end
   end
 
-  test "D14: Warden.Plugin first in a user plugins/0 with async: no loop" do
+  test "D14: Warden.Absinthe.Plugin first in a user plugins/0 with async: no loop" do
     r = go(Grid, "{ asecrets { id } deep { hidden } }", viewer())
     assert r.data["asecrets"] == [[nil]]
     out = batch(Grid, ["{ asecrets { id } }", "{ deep { id hidden } }"], viewer())

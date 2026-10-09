@@ -1,12 +1,12 @@
-defmodule Warden.Plugin do
+defmodule Warden.Absinthe.Plugin do
   @moduledoc false
   # Absinthe nulls every result node that carries an error, and a field's errors null
   # the whole field. So an error for a single denied list item cannot be returned from
   # the field's middleware without nulling the list. The post middleware records those
-  # item errors in `resolution.acc`; this plugin then inserts `Warden.Phase.ItemErrors`
+  # item errors in `resolution.acc`; this plugin then inserts `Warden.Absinthe.Phase.ItemErrors`
   # after the resolution phase, which attaches each error to the (already null) item.
   #
-  # `use Warden.Schema` adds this plugin to the schema's `plugins/0`.
+  # `use Warden.Absinthe` adds this plugin to the schema's `plugins/0`.
 
   @behaviour Absinthe.Plugin
 
@@ -26,7 +26,7 @@ defmodule Warden.Plugin do
   # spin.
   @impl true
   def pipeline([], exec) do
-    if pending?(exec.acc), do: [Warden.Phase.ItemErrors], else: []
+    if pending?(exec.acc), do: [Warden.Absinthe.Phase.ItemErrors], else: []
   end
 
   def pipeline(pipeline, _exec), do: pipeline

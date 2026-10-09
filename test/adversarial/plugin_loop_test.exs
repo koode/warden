@@ -10,7 +10,7 @@ defmodule Warden.Adversarial.PluginLoopTest do
   defmodule Schema do
     @moduledoc false
     use Absinthe.Schema
-    use Warden.Schema, authorizer: Warden.Test.Authz
+    use Warden.Absinthe, authorizer: Warden.Test.Authz
 
     def plugins, do: [Absinthe.Middleware.Async | Absinthe.Plugin.defaults()]
 
@@ -96,18 +96,18 @@ defmodule Warden.Adversarial.PluginLoopTest do
     exec = %Absinthe.Blueprint.Execution{acc: %{Warden => %{pending: true}}}
 
     # Another plugin wants a pass: Warden waits.
-    assert Warden.Plugin.pipeline([Absinthe.Phase.Document.Execution.Resolution], exec) ==
+    assert Warden.Absinthe.Plugin.pipeline([Absinthe.Phase.Document.Execution.Resolution], exec) ==
              [Absinthe.Phase.Document.Execution.Resolution]
 
-    assert Warden.Plugin.pipeline([], exec) == [Warden.Phase.ItemErrors]
+    assert Warden.Absinthe.Plugin.pipeline([], exec) == [Warden.Absinthe.Phase.ItemErrors]
 
     bp = %Absinthe.Blueprint{
       execution: %{exec | result: %Absinthe.Blueprint.Result.Leaf{emitter: nil, value: nil}}
     }
 
-    {:ok, bp} = Warden.Phase.ItemErrors.run(bp, [])
+    {:ok, bp} = Warden.Absinthe.Phase.ItemErrors.run(bp, [])
 
-    assert Warden.Plugin.pipeline([], bp.execution) == []
+    assert Warden.Absinthe.Plugin.pipeline([], bp.execution) == []
   end
 
   test "two identical documents in one batch each fold and get only their own errors" do

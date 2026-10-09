@@ -50,7 +50,7 @@ defmodule Warden.Redteam.Types do
   @moduledoc false
   # Abstract types, objects and input objects shared by the red-team schemas.
   use Absinthe.Schema.Notation
-  use Warden.Notation
+  use Warden.Absinthe.Notation
 
   alias Warden.Redteam.Data
 
@@ -264,7 +264,7 @@ end
 defmodule Warden.Redteam.ShapeSchema do
   @moduledoc false
   use Absinthe.Schema
-  use Warden.Schema, authorizer: Warden.Redteam.Authz
+  use Warden.Absinthe, authorizer: Warden.Redteam.Authz
 
   alias Warden.Redteam.Data
 

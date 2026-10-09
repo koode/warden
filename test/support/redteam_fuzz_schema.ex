@@ -189,7 +189,7 @@ end
 defmodule Warden.Test.FZ.Schema do
   @moduledoc false
   use Absinthe.Schema
-  use Warden.Schema, authorizer: Warden.Test.FZ.Authz
+  use Warden.Absinthe, authorizer: Warden.Test.FZ.Authz
 
   alias Warden.Test.FZ.Resolvers, as: R
 
