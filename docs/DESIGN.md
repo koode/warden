@@ -308,13 +308,15 @@ user's original `config` (or Absinthe's default topic). The subscription id is
 `"__absinthe__:doc:#{context_id}:#{document_id}"` with a unique integer when no
 `context_id` is set (`subscribe_self.ex:145`, `subscribe_self.ex:149`); on publish only
 the first registered document per id is resolved (`subscription.ex:195`,
-`subscription.ex:206`) and the result goes to every subscriber of that id. Warden appends
-`":warden:" <> actor_key` to a user-set `context_id`.
+`subscription.ex:206`) and the result goes to every subscriber of that id. Warden removes
+a user-set `context_id` unless the authorizer opts in with `actor_key/2` (see "Red-team
+fix round" below).
 
 **(f) `hydrate/2` and meta.** Supported: `{:meta, keyword}`
 (`phase/schema/hydrate.ex:71`). It *replaces* the node's meta
-(`hydrate.ex:74`), so `Warden.Hydrate.meta/2` takes the user's other meta as a second
-argument.
+(`hydrate.ex:74`). The phase takes a `:hydrator` option (`hydrate.ex:25` in 1.12 and
+1.7.10); Warden installs `Warden.Hydrator`, which keeps Warden keys across a later
+`{:meta, _}` (see "Red-team fix round").
 
 **(g) Errors at a list item index.** An error map with `path:` is appended to the field
 path (`resolution.ex:571-576`), but any error on a field nulls the whole field
@@ -351,10 +353,12 @@ each error to the already-null item node. When the fold reaches the field itself
   every interface it implements. Otherwise a client could skip an interface's rule by
   selecting a field typed as the concrete object. Union rules still apply only through
   the union.
-- **`null` for an argument with a non-null default counts as "differs".** The design
-  says a rule applies when the value is non-nil and differs from the default. Warden
-  applies it whenever the value differs from the default, `nil` included, so a client
-  cannot send `null` to escape a default such as `status: PUBLISHED`.
+- **Argument and input-field rules apply to present values.** The design says a rule
+  applies when the value is non-nil and differs from the default. Warden applies it when
+  the key is present (`Map.has_key?`) and either there is no declared default (any
+  value, `null` included) or the value differs from a declared default. So a client can
+  neither send `null` to escape a default such as `status: PUBLISHED` nor send `null` to
+  clear a guarded value that has no default.
 - **`:filter` with an error.** Absinthe cannot attach an error to an item that is not in
   the list (see (g)), so when the denial handler returns `{:error, term}` for a filtered
   item, that item is kept as `null` with the error (as `:null_item`). The default
@@ -364,10 +368,72 @@ each error to the already-null item node. When the fold reaches the field itself
   Forbidden error is used.
 - **`{:replace, value}` outside field denials** raises `Warden.PolicyError` (a broken
   handler, fail closed).
-- **Anonymous actors** get no roles and permissions; `roles/2` and `permissions/2` are
-  not called with a `nil` subject.
+- **Anonymous actors** (`nil` or `false` subject) get no roles and permissions; `roles/2`
+  and `permissions/2` are not called. `:error` / `{:error, _}` raises
+  `Warden.PolicyError`.
+- **Object denials default to `:null`.** The design's default handler returns the
+  Forbidden error for every denial. Object denials (`kind: :object`) now default to
+  `:null`, so "denied" and "not found" look the same; field, argument, subscribe and
+  introspection denials keep the error.
+- **`introspection:` guards `__schema`/`__type` wherever they appear**, and root object
+  rules also guard the root's `__typename`, `__schema` and `__type`.
+- **Subscribe time also checks value-independent return-type object rules.**
+- **Subscription sharing is opt-in** (`actor_key/2`), instead of always appending an
+  actor fingerprint.
 - **`Warden.Denial` has an extra `list_policy` field**, so a handler can tell filtered
   items apart.
 - **Authorizer options** add `expose_denial_reasons` (the opt-in for revealing missing
   roles and permissions) and `spec_compliant_errors` (Absinthe nests every extra key under
   `extensions` in that mode, `phase/document/result.ex:149`).
+
+### Red-team fix round
+
+Three red-team agents attacked the first version (`test/redteam/`,
+`test/redteam_exec/`, `test/redteam_fuzz/`). Changes, with the code that implements them
+(paths relative to `lib/warden/`):
+
+1. **Introspection fields by GraphQL name** (`plan.ex:14`, `plan.ex:79`). Identifier
+   prefixes were used before, so a user field `:__internal` named `"internal"` skipped
+   its rules, strict mode and the verifier.
+2. **`introspection:` on every `__schema`/`__type`** (`plan.ex:141`). Absinthe adds them
+   to every object *named* `Query`/`RootQueryType` (`phase/schema/introspection.ex`), not
+   only to the root.
+3. **Root object rules guard root introspection** (`plan.ex:130`).
+4. **Interface arguments** (`plan.ex:242`, `plan.ex:283`, `plan.ex:219`). Absinthe
+   validates a selection through an interface against the interface field's arguments
+   and runs the concrete field with them. The argument plan is the union of the object
+   field's and every interface field's declarations, with every declared default and
+   every input-object walk.
+5. **Present-key argument semantics** (`middleware.ex:146-148`).
+6. **`resolve_type` outside the declared members** (`plan.ex:420`). Abstract fields carry
+   every object type's rule; the post check looks the returned concrete type up there.
+   Post middleware is therefore attached to every abstract field once any object rule
+   exists.
+7. **`:filter` error paths use the output index** (`middleware.ex:426`).
+8. **Opt-in subscription sharing** (`authorizer.ex:81`, `authorizer.ex:177`,
+   `subscription.ex:171`). Without `actor_key/2` Warden removes the user's `context_id`;
+   with it, the returned key (or `nil` to opt out) is appended. The old `actor_key/1`
+   fails compilation instead of being ignored.
+9. **Value-independent return-type rules at subscribe time** (`plan.ex:489`,
+   `subscription.ex:74`): rules without `check(...)` are evaluated with no
+   value; the subscription is refused when the return type's rule, or every possible
+   concrete type's rule, denies.
+10. **`subject/1` contract** (`actor.ex:45`, `actor.ex:49`).
+11. **Default object denials are `:null`** (`authorizer.ex:194`).
+12. **Mutations guarded only by their return type** stay a documented limit; the attach
+    phase prints a compile-time warning for each (`phase/attach.ex:54`).
+13. **Hydrate.** A `rule:` on an argument node is an argument rule (`plan.ex:219`) and is
+    validated with the others. `Warden.Hydrator` (`hydrator.ex:13`, installed by
+    `phase/attach.ex`) keeps Warden keys across a later `{:meta, _}` and rejects
+    conflicting Warden values.
+14. **No plugin loop.** `Absinthe.Pipeline.BatchResolver` re-runs plugins until they
+    return no phases (`pipeline/batch_resolver.ex`). `Warden.Plugin` now asks for its
+    phase only when no other plugin wants another pass (`plugin.ex:28`), and the phase
+    drains every entry, applied or not (`phase/item_errors.ex:24`). Entries are tagged
+    with their operation so a batched document never receives another document's item
+    error.
+15. **Folding in nested lists.** Absinthe's `propagate_null_trimming` does not reach an
+    object two or more list levels deep, so a nulled non-null field left the object with
+    a `null` in a non-null field. Warden records every non-null field it nulls inside a
+    list (`middleware.ex:587`) and `Warden.Phase.ItemErrors` folds it explicitly to the
+    nearest nullable position (`phase/item_errors.ex:95`).
