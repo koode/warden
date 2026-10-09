@@ -20,6 +20,7 @@ defmodule Warden.RedteamFuzz.FuzzTest do
   use ExUnitProperties
 
   alias Warden.Test.FZ.Data
+  alias Warden.Test.Pubsub
 
   @schema Warden.Test.FZ.Schema
   @runs String.to_integer(System.get_env("WARDEN_REDTEAM_RUNS", "3000"))
@@ -161,90 +162,70 @@ defmodule Warden.RedteamFuzz.FuzzTest do
 
   # Pre checks of a root field, in Warden's order: root type rule, field rule, args.
   defp root_pre(name, args, a) do
-    root_ok = if name in @mutations, do: any_role?(a), else: true
-
-    field_ok =
-      case name do
-        :vault -> role?(a, :a)
-        :touch -> a != nil
-        :purge -> role?(a, :b)
-        :doc_updated -> a != nil
-        # Decision 9: the :hit union's value-independent rule (authenticated) refuses
-        # the subscription up front.
-        :hit_updated -> a != nil
-        _ -> true
-      end
-
-    args_ok =
-      case name do
-        :items ->
-          (eff_arg(args, :limit) == 10 or role?(a, :b)) and
-            filter_ok?(eff_arg(args, :filter), a)
-
-        n when n in [:doc, :doc_updated] ->
-          eff_arg(args, :reveal) == false or role?(a, :c)
-
-        :status_items ->
-          eff_arg(args, :status) == {:enum, :published} or role?(a, :a)
-
-        :purge ->
-          eff_arg(args, :force) == false or role?(a, :a)
-
-        :annotate ->
-          annotate_ok?(eff_arg(args, :input), a)
-
-        _ ->
-          true
-      end
-
     cond do
-      not root_ok -> {:deny, :object}
-      not field_ok -> {:deny, :field}
-      not args_ok -> {:deny, :argument}
+      not root_type_ok?(name, a) -> {:deny, :object}
+      not root_field_ok?(name, a) -> {:deny, :field}
+      not root_args_ok?(name, args, a) -> {:deny, :argument}
       true -> :ok
     end
   end
 
-  defp root_value(name, args, published) do
-    case name do
-      n when n in [:items, :items_filtered, :items_strict, :hits, :hits_nn] ->
-        Data.all()
+  defp root_type_ok?(name, a), do: name not in @mutations or any_role?(a)
 
-      :owned ->
-        Enum.filter(Data.all(), &(&1.kind in [:doc, :file]))
+  defp root_field_ok?(:vault, a), do: role?(a, :a)
+  defp root_field_ok?(:touch, a), do: a != nil
+  defp root_field_ok?(:purge, a), do: role?(a, :b)
+  defp root_field_ok?(:doc_updated, a), do: a != nil
+  # Decision 9: the :hit union's value-independent rule (authenticated) refuses the
+  # subscription up front.
+  defp root_field_ok?(:hit_updated, a), do: a != nil
+  defp root_field_ok?(_name, _a), do: true
 
-      :node ->
-        id = eff_arg(args, :id)
-        if id in Data.ids(), do: Data.entity(id)
-
-      n when n in [:doc, :purge] ->
-        id = eff_arg(args, :id)
-        if id in Data.ids_of(:doc), do: Data.entity(id)
-
-      :annotate ->
-        id = eff_arg(args, :input).id
-        if id in Data.ids_of(:note), do: Data.entity(id)
-
-      :rotate ->
-        id = eff_arg(args, :id)
-        if id in Data.ids_of(:file), do: Data.entity(id)
-
-      :touch ->
-        Data.lookup(eff_arg(args, :id))
-
-      :vault ->
-        Data.entity("d2")
-
-      :status_items ->
-        Enum.filter(Data.all(), &(&1.kind == :note))
-
-      :matrix ->
-        Data.matrix()
-
-      n when n in [:item_updated, :doc_updated, :hit_updated] ->
-        published
-    end
+  defp root_args_ok?(:items, args, a) do
+    (eff_arg(args, :limit) == 10 or role?(a, :b)) and filter_ok?(eff_arg(args, :filter), a)
   end
+
+  defp root_args_ok?(name, args, a) when name in [:doc, :doc_updated],
+    do: eff_arg(args, :reveal) == false or role?(a, :c)
+
+  defp root_args_ok?(:status_items, args, a),
+    do: eff_arg(args, :status) == {:enum, :published} or role?(a, :a)
+
+  defp root_args_ok?(:purge, args, a), do: eff_arg(args, :force) == false or role?(a, :a)
+  defp root_args_ok?(:annotate, args, a), do: annotate_ok?(eff_arg(args, :input), a)
+  defp root_args_ok?(_name, _args, _a), do: true
+
+  defp root_value(name, _args, _published)
+       when name in [:items, :items_filtered, :items_strict, :hits, :hits_nn],
+       do: Data.all()
+
+  defp root_value(:owned, _args, _published),
+    do: Enum.filter(Data.all(), &(&1.kind in [:doc, :file]))
+
+  defp root_value(:node, args, _published), do: entity_in(eff_arg(args, :id), Data.ids())
+
+  defp root_value(name, args, _published) when name in [:doc, :purge],
+    do: entity_in(eff_arg(args, :id), Data.ids_of(:doc))
+
+  defp root_value(:annotate, args, _published),
+    do: entity_in(eff_arg(args, :input).id, Data.ids_of(:note))
+
+  defp root_value(:rotate, args, _published),
+    do: entity_in(eff_arg(args, :id), Data.ids_of(:file))
+
+  defp root_value(:touch, args, _published), do: Data.lookup(eff_arg(args, :id))
+  defp root_value(:vault, _args, _published), do: Data.entity("d2")
+
+  defp root_value(:status_items, _args, _published),
+    do: Enum.filter(Data.all(), &(&1.kind == :note))
+
+  defp root_value(:matrix, _args, _published), do: Data.matrix()
+
+  defp root_value(name, _args, published)
+       when name in [:item_updated, :doc_updated, :hit_updated],
+       do: published
+
+  defp entity_in(id, ids), do: if(id in ids, do: Data.entity(id))
 
   ## Oracle: expected data
 
@@ -331,28 +312,35 @@ defmodule Warden.RedteamFuzz.FuzzTest do
     if t in [:item, :owned, :hit], do: stat(:abstract)
 
     if abstract_ok?(t, o.actor) and concrete_ok?(e, o.actor) do
-      case render_fields(e, sel, o) do
-        {:ok, m} ->
-          {:ok, m}
-
-        {:bubble, m} when depth >= 2 ->
-          # Absinthe quirk: objects two or more list levels deep are never trimmed
-          # when one of their non-null fields is null (`propagate_null_trimming` only
-          # visits the direct values of the field's list). Spec: the object is null.
-          stat(:fold_quirk)
-          {:ok, {:quirk, m}}
-
-        {:bubble, _m} ->
-          {:ok, nil}
-      end
+      complete_visible(e, sel, o, depth)
     else
       stat(:denial)
+      complete_denied(p, o, depth)
+    end
+  end
 
-      cond do
-        depth > 0 and p == :filter and o.mode != :strict_error -> :filter
-        depth > 0 and p == :fail_list -> :fail_list
-        true -> {:ok, nil}
-      end
+  defp complete_visible(e, sel, o, depth) do
+    case render_fields(e, sel, o) do
+      {:ok, m} ->
+        {:ok, m}
+
+      {:bubble, m} when depth >= 2 ->
+        # Absinthe quirk: objects two or more list levels deep are never trimmed when
+        # one of their non-null fields is null (`propagate_null_trimming` only visits the
+        # direct values of the field's list). Spec: the object is null.
+        stat(:fold_quirk)
+        {:ok, {:quirk, m}}
+
+      {:bubble, _m} ->
+        {:ok, nil}
+    end
+  end
+
+  defp complete_denied(p, o, depth) do
+    cond do
+      depth > 0 and p == :filter and o.mode != :strict_error -> :filter
+      depth > 0 and p == :fail_list -> :fail_list
+      true -> {:ok, nil}
     end
   end
 
@@ -372,48 +360,44 @@ defmodule Warden.RedteamFuzz.FuzzTest do
   defp field_result(e, name, args, sub, o) do
     {shape, policy} = Map.get(Map.fetch!(@object_fields, e.kind), name, {:scalar, :null_item})
 
-    pre =
-      cond do
-        not field_ok?(name, e, o.actor) ->
-          {:deny, :field}
-
-        # Decision 5: an argument without a default is restricted whenever it is
-        # present, explicit null included.
-        name == :related and match?({:present, _}, eff_raw(Map.get(args, :kind, :omit))) and
-            not perm?(o.actor, "p3") ->
-          {:deny, :argument}
-
-        true ->
-          :ok
-      end
-
-    value =
-      case pre do
-        :ok ->
-          {:value, field_value(e, name)}
-
-        {:deny, :field} ->
-          stat(:denial)
-
-          if o.mode == :replace do
-            stat(:replace)
-            {:value, Data.replacement(name)}
-          else
-            :denied
-          end
-
-        {:deny, :argument} ->
-          stat(:denial)
-          :denied
-      end
-
-    case value do
-      :denied ->
-        if match?({:nn, _}, shape), do: :bubble, else: {:ok, nil}
-
-      {:value, v} ->
-        v |> complete(shape, policy, sub, o, 0) |> finish(shape)
+    case field_pre(e, name, args, o) |> field_pre_value(e, name, o) do
+      :denied -> if match?({:nn, _}, shape), do: :bubble, else: {:ok, nil}
+      {:value, v} -> v |> complete(shape, policy, sub, o, 0) |> finish(shape)
     end
+  end
+
+  defp field_pre(e, name, args, o) do
+    cond do
+      not field_ok?(name, e, o.actor) ->
+        {:deny, :field}
+
+      # Decision 5: an argument without a default is restricted whenever it is present,
+      # explicit null included.
+      name == :related and match?({:present, _}, eff_raw(Map.get(args, :kind, :omit))) and
+          not perm?(o.actor, "p3") ->
+        {:deny, :argument}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp field_pre_value(:ok, e, name, _o), do: {:value, field_value(e, name)}
+
+  defp field_pre_value({:deny, :field}, _e, name, o) do
+    stat(:denial)
+
+    if o.mode == :replace do
+      stat(:replace)
+      {:value, Data.replacement(name)}
+    else
+      :denied
+    end
+  end
+
+  defp field_pre_value({:deny, :argument}, _e, _name, _o) do
+    stat(:denial)
+    :denied
   end
 
   defp field_value(e, :id), do: e.id
@@ -1145,7 +1129,7 @@ defmodule Warden.RedteamFuzz.FuzzTest do
 
       topics =
         for {_actor, %{"subscribed" => topic}} <- subs, uniq: true do
-          :ok = Warden.Test.Pubsub.subscribe(topic)
+          :ok = Pubsub.subscribe(topic)
           topic
         end
 

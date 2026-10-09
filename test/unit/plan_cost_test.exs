@@ -7,15 +7,17 @@ defmodule Warden.PlanCostTest do
   use ExUnit.Case, async: false
 
   alias Absinthe.Type
+  alias Warden.Absinthe.Config
+  alias Warden.Absinthe.Plan
 
   @ratio_bound 24
   @fields_per_object 15
 
   test "plan building grows linearly with the number of types" do
-    config = Warden.Absinthe.Config.config!(Warden.Test.Schema)
+    config = Config.config!(Warden.Test.Schema)
 
-    small = best_of(5, fn -> Warden.Absinthe.Plan.build(types(250), config) end)
-    large = best_of(5, fn -> Warden.Absinthe.Plan.build(types(2_000), config) end)
+    small = best_of(5, fn -> Plan.build(types(250), config) end)
+    large = best_of(5, fn -> Plan.build(types(2_000), config) end)
 
     assert large / max(small, 1) < @ratio_bound,
            "8x the types took #{Float.round(large / max(small, 1), 1)}x the time " <>
@@ -23,8 +25,8 @@ defmodule Warden.PlanCostTest do
   end
 
   test "the synthetic schema is planned (the benchmark measures real work)" do
-    config = Warden.Absinthe.Config.config!(Warden.Test.Schema)
-    plan = Warden.Absinthe.Plan.build(types(10), config)
+    config = Config.config!(Warden.Test.Schema)
+    plan = Plan.build(types(10), config)
 
     assert plan.errors == []
     assert map_size(plan.object_rules) == 10
@@ -41,26 +43,7 @@ defmodule Warden.PlanCostTest do
   # `n` object types, each with an object rule, a link to the next type, and scalar fields
   # of which every third carries a field rule.
   defp types(n) do
-    objects =
-      for i <- 1..n, into: %{} do
-        ident = :"obj#{i}"
-
-        scalars =
-          for f <- 1..@fields_per_object, into: %{} do
-            rule = if rem(f, 3) == 0, do: [warden_rule: {:role, :admin}], else: []
-            {:"f#{f}", field(:"f#{f}", :string, rule)}
-          end
-
-        fields = Map.put(scalars, :next, field(:next, :"obj#{rem(i, n) + 1}", []))
-
-        {ident,
-         %Type.Object{
-           identifier: ident,
-           name: "Obj#{i}",
-           fields: fields,
-           __private__: [meta: [warden_rule: :authenticated]]
-         }}
-      end
+    objects = for i <- 1..n, into: %{}, do: object(i, n)
 
     root_fields = %{first: field(:first, :obj1, [])}
 
@@ -69,6 +52,26 @@ defmodule Warden.PlanCostTest do
       name: "RootQueryType",
       fields: root_fields
     })
+  end
+
+  defp object(i, n) do
+    ident = :"obj#{i}"
+    fields = Map.put(scalars(), :next, field(:next, :"obj#{rem(i, n) + 1}", []))
+
+    {ident,
+     %Type.Object{
+       identifier: ident,
+       name: "Obj#{i}",
+       fields: fields,
+       __private__: [meta: [warden_rule: :authenticated]]
+     }}
+  end
+
+  defp scalars do
+    for f <- 1..@fields_per_object, into: %{} do
+      rule = if rem(f, 3) == 0, do: [warden_rule: {:role, :admin}], else: []
+      {:"f#{f}", field(:"f#{f}", :string, rule)}
+    end
   end
 
   defp field(ident, type, meta) do
