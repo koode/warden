@@ -470,13 +470,16 @@ defmodule Warden.RedteamExec.Helpers do
     variables = Keyword.get(opts, :variables, %{})
     context = Map.merge(%{pubsub: Pubsub, current_user: user, test_pid: self()}, extra)
 
-    case Absinthe.run(doc, schema, context: context, variables: variables) do
-      {:ok, %{"subscribed" => topic}} ->
+    {:ok, result} = Absinthe.run(doc, schema, context: context, variables: variables)
+
+    # Absinthe's result spec has no "subscribed" key, so Dialyzer rejects matching on it.
+    case Map.fetch(result, "subscribed") do
+      {:ok, topic} ->
         :ok = Pubsub.subscribe(topic)
         {:ok, topic}
 
-      {:ok, %{errors: errors}} ->
-        {:error, errors}
+      :error ->
+        {:error, Map.fetch!(result, :errors)}
     end
   end
 

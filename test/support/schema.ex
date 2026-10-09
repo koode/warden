@@ -418,7 +418,7 @@ defmodule Warden.Test.Pubsub do
 
   @impl true
   def subscribe(topic) do
-    Registry.register(__MODULE__.Topics, topic, [])
+    {:ok, _} = Registry.register(__MODULE__.Topics, topic, [])
     :ok
   end
 

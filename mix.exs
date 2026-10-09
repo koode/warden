@@ -22,7 +22,10 @@ defmodule Warden.MixProject do
       package: package(),
       docs: docs(),
       dialyzer: [
-        flags: [:error_handling, :extra_return, :missing_return, :unmatched_returns]
+        flags: [:error_handling, :extra_return, :missing_return, :unmatched_returns],
+        plt_add_apps: [:ex_unit],
+        # Only test/support (compiled in the test env) needs an ignore entry.
+        ignore_warnings: if(Mix.env() == :test, do: ".dialyzer_ignore.test.exs")
       ]
     ]
   end
