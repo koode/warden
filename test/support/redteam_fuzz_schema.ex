@@ -11,6 +11,8 @@ defmodule Warden.Test.FZ.Authz do
     role_permissions: %{a: :all, b: ["p1"]},
     checks: [:owns]
 
+  alias Warden.Test.FZ.Data
+
   @impl true
   def subject(context), do: context[:actor]
 
@@ -45,7 +47,7 @@ defmodule Warden.Test.FZ.Authz do
 
       :replace ->
         if denial.kind == :field,
-          do: {:replace, Warden.Test.FZ.Data.replacement(denial.field)},
+          do: {:replace, Data.replacement(denial.field)},
           else: Warden.Authorizer.default_deny(denial, __warden_catalog__())
     end
   end
@@ -105,6 +107,7 @@ end
 
 defmodule Warden.Test.FZ.Resolvers do
   @moduledoc false
+  alias Absinthe.Resolution.Helpers
   alias Warden.Test.FZ.Data
 
   def kind(%{kind: kind}, _), do: kind
@@ -134,16 +137,16 @@ defmodule Warden.Test.FZ.Resolvers do
 
   # Suspended resolution: Warden's post check must see the value after `Async`.
   def related(p, a, r) do
-    Absinthe.Resolution.Helpers.async(fn -> children(:related).(p, a, r) end)
+    Helpers.async(fn -> children(:related).(p, a, r) end)
   end
 
   def siblings(p, a, r) do
-    Absinthe.Resolution.Helpers.async(fn -> children(:siblings).(p, a, r) end)
+    Helpers.async(fn -> children(:siblings).(p, a, r) end)
   end
 
   # Suspended resolution through `Batch`.
   def docs(%{id: id}, _a, _r) do
-    Absinthe.Resolution.Helpers.batch({__MODULE__, :load_docs}, id, fn results ->
+    Helpers.batch({__MODULE__, :load_docs}, id, fn results ->
       {:ok, Map.fetch!(results, id)}
     end)
   end

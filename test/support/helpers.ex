@@ -37,6 +37,14 @@ defmodule Warden.Test.Helpers do
     end
   end
 
+  @doc """
+  Returns `term` unchanged, but typed as `dynamic()` for the compiler's type checker.
+  Tests that pass deliberately wrong values (to check that Warden rejects them) use it
+  so the checker does not warn about the call they are testing.
+  """
+  @spec untyped(term) :: term
+  def untyped(term), do: :erlang.binary_to_term(:erlang.term_to_binary(term))
+
   @doc "Deep-searches a response for a string value."
   def contains?(data, needle) when is_binary(data), do: data == needle
 

@@ -10,9 +10,11 @@ defmodule Warden.Test.RF.WriteMiddleware do
   # Stands in for middleware that performs a write (audit log, counter, cache fill).
   @behaviour Absinthe.Middleware
 
+  alias Warden.Test.RF.Probe
+
   @impl true
   def call(res, tag) do
-    Warden.Test.RF.Probe.hit(res, {:write, tag})
+    Probe.hit(res, {:write, tag})
     res
   end
 end
@@ -148,7 +150,7 @@ defmodule Warden.Test.RF.Schema do
   use Absinthe.Schema
   use Warden.Absinthe, authorizer: Warden.Test.RF.Authz
 
-  alias Warden.Test.RF.{Probe, Resolvers}
+  alias Warden.Test.RF.{Data, Probe, Resolvers}
 
   interface :node do
     field :id, non_null(:id)
@@ -305,7 +307,7 @@ defmodule Warden.Test.RF.Schema do
 
     field :update_account, :account do
       arg :input, non_null(:account_input)
-      resolve Resolvers.tagged(:update_account, hd(Warden.Test.RF.Data.accounts()))
+      resolve Resolvers.tagged(:update_account, hd(Data.accounts()))
     end
 
     field :archive_account, :boolean do
@@ -364,7 +366,7 @@ defmodule Warden.Test.RF.Schema do
 
   def post_only(_, %{id: id}, res) do
     Probe.hit(res, :post_only_mutation)
-    {:ok, Warden.Test.RF.Data.account(id)}
+    {:ok, Data.account(id)}
   end
 
   def middleware(middleware, %{identifier: :mw3_write}, %{identifier: :query}),
@@ -391,6 +393,8 @@ defmodule Warden.Test.RF.PersistentSchema do
   @schema_provider Absinthe.Schema.PersistentTerm
   use Warden.Absinthe, authorizer: Warden.Test.RF.Authz
 
+  alias Warden.Test.RF.{Data, Probe}
+
   object :secret_doc do
     authorize role(:admin)
     field :id, non_null(:id)
@@ -399,14 +403,14 @@ defmodule Warden.Test.RF.PersistentSchema do
 
   query do
     field :doc, :secret_doc do
-      resolve fn _, _, _ -> {:ok, Warden.Test.RF.Data.doc("s1")} end
+      resolve fn _, _, _ -> {:ok, Data.doc("s1")} end
     end
 
     field :guarded_write, :string do
       authorize role(:admin)
 
       resolve fn _, _, res ->
-        Warden.Test.RF.Probe.hit(res, :guarded_write)
+        Probe.hit(res, :guarded_write)
         {:ok, "ran"}
       end
     end
@@ -415,7 +419,7 @@ defmodule Warden.Test.RF.PersistentSchema do
   def middleware(middleware, %{identifier: :guarded_write}, %{identifier: :query}) do
     [
       fn res, _ ->
-        Warden.Test.RF.Probe.hit(res, {:write, :persistent_closure})
+        Probe.hit(res, {:write, :persistent_closure})
         res
       end
       | middleware

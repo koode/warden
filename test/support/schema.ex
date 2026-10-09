@@ -1,5 +1,6 @@
 defmodule Warden.Test.Resolvers do
   @moduledoc false
+  alias Absinthe.Resolution.Helpers
   alias Warden.Test.{Data, Probe}
 
   def me(_, _, %{context: ctx} = res) do
@@ -80,11 +81,11 @@ defmodule Warden.Test.Resolvers do
   end
 
   def async_secret(_, _, _) do
-    Absinthe.Resolution.Helpers.async(fn -> {:ok, hd(Data.secrets())} end)
+    Helpers.async(fn -> {:ok, hd(Data.secrets())} end)
   end
 
   def batch_secrets(_, _, _) do
-    Absinthe.Resolution.Helpers.batch({__MODULE__, :load_secrets}, :all, fn batch ->
+    Helpers.batch({__MODULE__, :load_secrets}, :all, fn batch ->
       {:ok, Map.fetch!(batch, :all)}
     end)
   end
@@ -94,7 +95,7 @@ defmodule Warden.Test.Resolvers do
   def loader_secret(_, %{id: id}, %{context: %{loader: loader}}) do
     loader
     |> Dataloader.load(:kv, :secret, id)
-    |> Absinthe.Resolution.Helpers.on_load(fn loader ->
+    |> Helpers.on_load(fn loader ->
       {:ok, Dataloader.get(loader, :kv, :secret, id)}
     end)
   end
@@ -132,6 +133,7 @@ defmodule Warden.Test.Schema do
   use Absinthe.Schema
   use Warden.Absinthe, authorizer: Warden.Test.Authz
 
+  alias Warden.Test.Data
   alias Warden.Test.Resolvers, as: R
 
   def context(ctx) do
@@ -274,7 +276,7 @@ defmodule Warden.Test.Schema do
     field :search, list_of(:search_result), resolve: &R.search/3
 
     field :restricted, list_of(:restricted_result) do
-      resolve fn _, _, _ -> {:ok, Warden.Test.Data.users() ++ Warden.Test.Data.posts()} end
+      resolve fn _, _, _ -> {:ok, Data.users() ++ Data.posts()} end
     end
 
     field :secrets, list_of(:secret), resolve: &R.secrets/3
@@ -304,11 +306,11 @@ defmodule Warden.Test.Schema do
     end
 
     field :secret, :secret do
-      resolve fn _, _, _ -> {:ok, hd(Warden.Test.Data.secrets())} end
+      resolve fn _, _, _ -> {:ok, hd(Data.secrets())} end
     end
 
     field :required_secret, non_null(:secret) do
-      resolve fn _, _, _ -> {:ok, hd(Warden.Test.Data.secrets())} end
+      resolve fn _, _, _ -> {:ok, hd(Data.secrets())} end
     end
 
     field :async_secret, :secret, resolve: &R.async_secret/3

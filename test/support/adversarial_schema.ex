@@ -3,7 +3,10 @@ defmodule Warden.Test.Adversarial.Swap do
   # User middleware placed after Absinthe.Resolution that swaps the resolved value for a
   # restricted object.
   @behaviour Absinthe.Middleware
-  def call(res, _), do: %{res | value: hd(Warden.Test.Data.secrets())}
+
+  alias Warden.Test.Data
+
+  def call(res, _), do: %{res | value: hd(Data.secrets())}
 end
 
 defmodule Warden.Test.Adversarial.Appender do
@@ -18,8 +21,11 @@ defmodule Warden.Test.Adversarial.Escalate do
   @moduledoc false
   # User middleware that rewrites the context mid-execution to an admin.
   @behaviour Absinthe.Middleware
+
+  alias Warden.Test.Data
+
   def call(res, _) do
-    %{res | context: Map.put(res.context, :current_user, Warden.Test.Data.as(:admin, "u1"))}
+    %{res | context: Map.put(res.context, :current_user, Data.as(:admin, "u1"))}
   end
 end
 
