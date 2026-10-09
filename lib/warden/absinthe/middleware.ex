@@ -12,26 +12,23 @@ if Code.ensure_loaded?(Absinthe) do
     # Both are attached by `Warden.Absinthe.Phase.Attach` at schema compile time.
 
     alias Absinthe.Resolution
+    alias Absinthe.Type.{Interface, Union}
     alias Warden.{Actor, Check, Denial, Rule}
+    alias Warden.Authorizer.Callbacks
 
     @acc_key Warden
 
     ## Specs
 
-    @doc false
     def pre_spec(spec), do: {{__MODULE__, :pre}, spec}
-    @doc false
     def post_spec(spec), do: {{__MODULE__, :post}, spec}
-    @doc false
     def shim_spec(shim_args, post), do: {{__MODULE__, :shim}, {shim_args, post}}
 
-    @doc false
     def warden_entry?({{__MODULE__, _}, _}), do: true
     def warden_entry?(_), do: false
 
     ## Actor
 
-    @doc false
     # The actor is built once per document execution and cached in `resolution.acc`.
     def actor(%Resolution{acc: acc, context: context} = res, authorizer) do
       case acc do
@@ -47,7 +44,6 @@ if Code.ensure_loaded?(Absinthe) do
 
     ## Pre
 
-    @doc false
     def pre(%Resolution{} = res, %{authorizer: authorizer, checks: checks}) do
       {actor, res} = actor(res, authorizer)
 
@@ -86,7 +82,6 @@ if Code.ensure_loaded?(Absinthe) do
       end
     end
 
-    @doc false
     # Shared with subscribe-time checks. Returns :ok or
     # {:deny, kind, rule, failure, extra_denial_fields}.
     def run_checks(checks, %Check{} = base, authorizer) do
@@ -120,28 +115,23 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     defp run_check({:args, %{args: args, inputs: inputs}}, base, authorizer) do
-      Enum.reduce_while(args, :ok, fn {ident, rule, defaults, specs}, :ok ->
-        present? = Map.has_key?(base.args, ident)
-        value = Map.get(base.args, ident)
+      walk = %{inputs: inputs, base: base, authorizer: authorizer}
 
-        case check_input_value(
-               present?,
-               value,
-               rule,
-               defaults,
-               specs,
-               [ident],
-               inputs,
-               base,
-               authorizer
-             ) do
+      first_denial(args, fn {ident, rule, defaults, specs} ->
+        check_entry(base.args, ident, {rule, defaults, specs}, [ident], walk)
+      end)
+    end
+
+    # Runs `fun` on each item until one returns something other than `:ok`.
+    defp first_denial(items, fun) do
+      Enum.reduce_while(items, :ok, fn item, :ok ->
+        case fun.(item) do
           :ok -> {:cont, :ok}
           denial -> {:halt, denial}
         end
       end)
     end
 
-    @doc false
     # An argument or input field is restricted when the client's value is present and:
     # there is no declared default (so any value, `null` included, is a choice the client
     # made), or it differs from any declared default.
@@ -149,78 +139,57 @@ if Code.ensure_loaded?(Absinthe) do
     def restricted?(true, _value, []), do: true
     def restricted?(true, value, defaults), do: Enum.any?(defaults, &(value !== &1))
 
-    defp check_input_value(present?, value, rule, defaults, specs, path, inputs, base, authorizer) do
-      rule_result =
-        if rule != nil and restricted?(present?, value, defaults) do
-          case Rule.evaluate(rule, %{base | argument: path}, authorizer) do
-            :ok -> :ok
-            {:deny, failure} -> {:deny, :argument, rule, failure, [argument: path]}
-          end
-        else
-          :ok
-        end
+    # Checks the argument or input field `key` of `map`, declared as
+    # {rule, defaults, input_specs}.
+    defp check_entry(map, key, declaration, path, walk) do
+      check_input_value(Map.has_key?(map, key), Map.get(map, key), declaration, path, walk)
+    end
 
-      case rule_result do
-        :ok ->
-          Enum.reduce_while(specs, :ok, fn spec, :ok ->
-            case walk_input(value, spec, path, inputs, base, authorizer) do
-              :ok -> {:cont, :ok}
-              denial -> {:halt, denial}
-            end
-          end)
-
-        denial ->
-          denial
+    defp check_input_value(present?, value, {rule, defaults, specs}, path, walk) do
+      with :ok <- check_input_rule(present?, value, rule, defaults, path, walk) do
+        first_denial(specs, &walk_input(value, &1, path, walk))
       end
     end
 
-    defp walk_input(nil, _spec, _path, _inputs, _base, _authorizer), do: :ok
-    defp walk_input(_value, nil, _path, _inputs, _base, _authorizer), do: :ok
+    defp check_input_rule(present?, value, rule, defaults, path, walk) do
+      if rule != nil and restricted?(present?, value, defaults),
+        do: evaluate_input_rule(rule, path, walk),
+        else: :ok
+    end
 
-    defp walk_input(value, {:non_null, spec}, path, inputs, base, authorizer),
-      do: walk_input(value, spec, path, inputs, base, authorizer)
+    defp evaluate_input_rule(rule, path, %{base: base, authorizer: authorizer}) do
+      case Rule.evaluate(rule, %{base | argument: path}, authorizer) do
+        :ok -> :ok
+        {:deny, failure} -> {:deny, :argument, rule, failure, [argument: path]}
+      end
+    end
 
-    defp walk_input(values, {:list, spec}, path, inputs, base, authorizer) when is_list(values) do
+    defp walk_input(nil, _spec, _path, _walk), do: :ok
+    defp walk_input(_value, nil, _path, _walk), do: :ok
+
+    defp walk_input(value, {:non_null, spec}, path, walk),
+      do: walk_input(value, spec, path, walk)
+
+    defp walk_input(values, {:list, spec}, path, walk) when is_list(values) do
       values
       |> Enum.with_index()
-      |> Enum.reduce_while(:ok, fn {value, index}, :ok ->
-        case walk_input(value, spec, path ++ [index], inputs, base, authorizer) do
-          :ok -> {:cont, :ok}
-          denial -> {:halt, denial}
-        end
-      end)
+      |> first_denial(fn {value, index} -> walk_input(value, spec, path ++ [index], walk) end)
     end
 
     # A single value given for a list input is coerced to a list by Absinthe; walk it as
     # an item in case a custom pipeline did not.
-    defp walk_input(value, {:list, spec}, path, inputs, base, authorizer),
-      do: walk_input(value, spec, path ++ [0], inputs, base, authorizer)
+    defp walk_input(value, {:list, spec}, path, walk),
+      do: walk_input(value, spec, path ++ [0], walk)
 
-    defp walk_input(value, {:input, ident}, path, inputs, base, authorizer) when is_map(value) do
-      inputs
+    defp walk_input(value, {:input, ident}, path, walk) when is_map(value) do
+      walk.inputs
       |> Map.fetch!(ident)
-      |> Enum.reduce_while(:ok, fn {field, rule, defaults, specs}, :ok ->
-        present? = Map.has_key?(value, field)
-        field_value = Map.get(value, field)
-
-        case check_input_value(
-               present?,
-               field_value,
-               rule,
-               defaults,
-               specs,
-               path ++ [field],
-               inputs,
-               base,
-               authorizer
-             ) do
-          :ok -> {:cont, :ok}
-          denial -> {:halt, denial}
-        end
+      |> first_denial(fn {field, rule, defaults, specs} ->
+        check_entry(value, field, {rule, defaults, specs}, path ++ [field], walk)
       end)
     end
 
-    defp walk_input(_value, {:input, _}, _path, _inputs, _base, _authorizer), do: :ok
+    defp walk_input(_value, {:input, _}, _path, _walk), do: :ok
 
     defp apply_pre_denial(res, %Denial{kind: kind} = denial, authorizer) do
       case call_deny(authorizer, denial) do
@@ -253,9 +222,8 @@ if Code.ensure_loaded?(Absinthe) do
       end)
     end
 
-    @doc false
     def call_deny(authorizer, %Denial{} = denial) do
-      case Warden.Authorizer.Callbacks.deny(authorizer, denial) do
+      case Callbacks.deny(authorizer, denial) do
         {:error, _} = result ->
           result
 
@@ -272,7 +240,6 @@ if Code.ensure_loaded?(Absinthe) do
 
     ## Shim
 
-    @doc false
     # Absinthe could not escape this field's middleware at compile time, so its shim
     # expands it at runtime and replaces the rest of the chain. Run it, then put Warden's
     # post middleware back at the end.
@@ -283,7 +250,6 @@ if Code.ensure_loaded?(Absinthe) do
 
     ## Post
 
-    @doc false
     # Middleware appended to the chain at runtime (after this entry was placed) would run
     # after the check and could change the value. Move the check behind it.
     def post(%Resolution{middleware: [_ | _] = rest} = res, spec) do
@@ -304,46 +270,48 @@ if Code.ensure_loaded?(Absinthe) do
 
       ctx = %{spec: spec, base: base, res: res, actor: actor}
 
-      case walk(value, spec.shape, ctx, []) do
-        {:ok, value, []} ->
-          %{res | value: value}
-
-        {:ok, value, attached} ->
-          if innermost_non_null?(spec.shape) do
-            # Absinthe's null propagation nulls the whole list field when a null appears
-            # at any depth of a list whose innermost item type is non-null
-            # (`null_allowed_in_list?/1` only looks at the innermost type). Report the
-            # errors on the field so they are not lost.
-            res
-            |> null_field(Enum.map(attached, fn {_at, ii, term} -> {ii, term} end))
-            |> maybe_record_fold()
-          else
-            res = %{res | value: value}
-            record_item_errors(res, attached)
-          end
-
-        {tag, pending} when tag in [:null, :bubble] ->
-          res |> null_field(pending) |> maybe_record_fold()
-
-        :filter ->
-          # Only produced inside lists; unreachable at the top level.
-          %{res | value: nil}
-
-        {:fail_list, denial} ->
-          case call_deny(spec.authorizer, denial) do
-            {:error, term} ->
-              maybe_record_fold(%{res | value: nil, errors: [normalize_error!(term, spec)]})
-
-            :null ->
-              maybe_record_fold(%{res | value: nil})
-
-            other ->
-              object_replace_error!(spec, other)
-          end
-      end
+      value
+      |> walk(spec.shape, ctx, [])
+      |> finish_post(res, spec)
     end
 
     def post(res, _spec), do: res
+
+    defp finish_post({:ok, value, []}, res, _spec), do: %{res | value: value}
+
+    defp finish_post({:ok, value, attached}, res, spec) do
+      if innermost_non_null?(spec.shape) do
+        # Absinthe's null propagation nulls the whole list field when a null appears at
+        # any depth of a list whose innermost item type is non-null
+        # (`null_allowed_in_list?/1` only looks at the innermost type). Report the errors
+        # on the field so they are not lost.
+        res
+        |> null_field(Enum.map(attached, fn {_at, ii, term} -> {ii, term} end))
+        |> maybe_record_fold()
+      else
+        record_item_errors(%{res | value: value}, attached)
+      end
+    end
+
+    defp finish_post({tag, pending}, res, _spec) when tag in [:null, :bubble] do
+      res |> null_field(pending) |> maybe_record_fold()
+    end
+
+    # Only produced inside lists; unreachable at the top level.
+    defp finish_post(:filter, res, _spec), do: %{res | value: nil}
+
+    defp finish_post({:fail_list, denial}, res, spec) do
+      case call_deny(spec.authorizer, denial) do
+        {:error, term} ->
+          maybe_record_fold(%{res | value: nil, errors: [normalize_error!(term, spec)]})
+
+        :null ->
+          maybe_record_fold(%{res | value: nil})
+
+        other ->
+          object_replace_error!(spec, other)
+      end
+    end
 
     defp null_field(res, pending) do
       errors =
@@ -396,33 +364,31 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp walk(value, :named, ctx, idx) do
       case check_object(value, ctx) do
-        :ok ->
-          {:ok, value, []}
-
-        {:deny, denial} ->
-          in_list? = idx != []
-          policy = if in_list?, do: ctx.spec.list_policy, else: nil
-
-          denial = %{
-            denial
-            | value_index: if(in_list?, do: Enum.reverse(idx), else: nil),
-              list_policy: policy
-          }
-
-          cond do
-            policy == :fail_list ->
-              {:fail_list, denial}
-
-            true ->
-              case call_deny(ctx.spec.authorizer, denial) do
-                :null when policy == :filter -> :filter
-                :null -> {:null, []}
-                {:error, term} -> {:null, [{idx, term}]}
-                other -> object_replace_error!(ctx.spec, other)
-              end
-          end
+        :ok -> {:ok, value, []}
+        {:deny, denial} -> object_denied(denial, ctx, idx)
       end
     end
+
+    # A denied object: in a list, the list policy decides; otherwise the handler does.
+    defp object_denied(denial, ctx, idx) do
+      in_list? = idx != []
+      policy = if in_list?, do: ctx.spec.list_policy, else: nil
+
+      denial = %{
+        denial
+        | value_index: if(in_list?, do: Enum.reverse(idx), else: nil),
+          list_policy: policy
+      }
+
+      if policy == :fail_list,
+        do: {:fail_list, denial},
+        else: denied_item(call_deny(ctx.spec.authorizer, denial), policy, idx, ctx)
+    end
+
+    defp denied_item(:null, :filter, _idx, _ctx), do: :filter
+    defp denied_item(:null, _policy, _idx, _ctx), do: {:null, []}
+    defp denied_item({:error, term}, _policy, idx, _ctx), do: {:null, [{idx, term}]}
+    defp denied_item(other, _policy, _idx, ctx), do: object_replace_error!(ctx.spec, other)
 
     # `acc` and `attached` are built in reverse (prepending) so the walk stays linear in
     # the number of items.
@@ -483,32 +449,28 @@ if Code.ensure_loaded?(Absinthe) do
     defp innermost_non_null?({_, inner}), do: innermost_non_null?(inner)
     defp innermost_non_null?(:named), do: false
 
+    defp check_object(value, %{spec: %{abstract: nil} = spec} = ctx) do
+      check_rule(Map.get(spec.rules, spec.named), spec.named, value, ctx)
+    end
+
     defp check_object(value, %{spec: spec} = ctx) do
-      case spec.abstract do
+      with :ok <- check_rule(spec.abstract_rule, spec.named, value, ctx) do
+        check_concrete(value, ctx)
+      end
+    end
+
+    defp check_concrete(_value, %{spec: %{rules: rules}}) when map_size(rules) == 0, do: :ok
+
+    defp check_concrete(value, %{spec: spec} = ctx) do
+      case resolve_concrete(spec.abstract, spec.named, value, ctx.res) do
         nil ->
-          check_rule(Map.get(spec.rules, spec.named), spec.named, value, ctx)
+          # Fail closed: a value whose concrete type cannot be determined cannot be
+          # checked against the concrete type's rule.
+          failure = %{failed_rule: :deny, missing_roles: [], missing_permissions: []}
+          deny_object(:deny, failure, spec.named, ctx)
 
-        kind ->
-          with :ok <- check_rule(spec.abstract_rule, spec.named, value, ctx) do
-            if map_size(spec.rules) == 0 do
-              :ok
-            else
-              case resolve_concrete(kind, spec.named, value, ctx.res) do
-                nil ->
-                  # Fail closed: a value whose concrete type cannot be determined cannot
-                  # be checked against the concrete type's rule.
-                  deny_object(
-                    :deny,
-                    %{failed_rule: :deny, missing_roles: [], missing_permissions: []},
-                    spec.named,
-                    ctx
-                  )
-
-                concrete ->
-                  check_rule(Map.get(spec.rules, concrete), concrete, value, ctx)
-              end
-            end
-          end
+        concrete ->
+          check_rule(Map.get(spec.rules, concrete), concrete, value, ctx)
       end
     end
 
@@ -537,15 +499,14 @@ if Code.ensure_loaded?(Absinthe) do
        }}
     end
 
-    @doc false
     # The same resolve-type functions Absinthe's executor uses for abstract types.
     def resolve_concrete(kind, abstract, value, res) do
       type = Absinthe.Schema.lookup_type(res.schema, abstract)
 
       concrete =
         case kind do
-          :union -> Absinthe.Type.Union.resolve_type(type, value, res)
-          :interface -> Absinthe.Type.Interface.resolve_type(type, value, res)
+          :union -> Union.resolve_type(type, value, res)
+          :interface -> Interface.resolve_type(type, value, res)
         end
 
       case concrete do
@@ -614,7 +575,6 @@ if Code.ensure_loaded?(Absinthe) do
       }
     end
 
-    @doc false
     # Absinthe folds a null in a non-null field into its parent object, except when that
     # object sits two or more list levels deep. Record every non-null field Warden nulls
     # inside a list; `Warden.Absinthe.Phase.ItemErrors` folds the ones Absinthe left alone.
