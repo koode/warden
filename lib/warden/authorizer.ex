@@ -189,6 +189,10 @@ defmodule Warden.Authorizer do
   @spec default_deny(Denial.t(), map) :: denial_result
   def default_deny(%Denial{list_policy: :filter, value_index: [_ | _]}, _catalog), do: :null
 
+  # A denied object reads as "not found": no error, so a client cannot tell an object it
+  # may not see from one that does not exist.
+  def default_deny(%Denial{kind: :object}, _catalog), do: :null
+
   def default_deny(%Denial{} = denial, catalog) do
     ext = %{code: "FORBIDDEN"}
 

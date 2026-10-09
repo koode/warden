@@ -40,6 +40,15 @@ defmodule Warden.Test.Authz do
   def check(:configured, %Warden.Check{context: context}) do
     Map.get(context, :check_result, false)
   end
+
+  # The default handler nulls denied objects without an error. This suite reports them
+  # with Forbidden, so the tests can assert where every denial lands.
+  @impl true
+  def deny(%Warden.Denial{kind: :object, list_policy: policy}) when policy != :filter do
+    {:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}
+  end
+
+  def deny(denial), do: Warden.Authorizer.default_deny(denial, __warden_catalog__())
 end
 
 defmodule Warden.Test.Data do
