@@ -147,18 +147,29 @@ For controllers, contexts, jobs: any Elixir code.
 ```elixir
 import Warden.Rule
 
-actor = Warden.actor(%{current_user: user})                          # configured default
-actor = Warden.actor(%{current_user: user}, authorizer: MyApp.Authz) # explicit
+ctx = %{current_user: user}
 
-:ok = Warden.authorize(actor, check(:owner), value: post)
-{:error, %Warden.Denial{kind: :call}} = Warden.authorize(actor, role(:admin))
+# Each call with the configured default, then with an explicit authorizer.
+actor = Warden.actor(ctx)
+actor = Warden.actor(ctx, authorizer: MyApp.Authz)
 
-Warden.allowed?(actor, role(:admin))                                 # true / false
-Warden.authorize!(actor, check(:owner), value: post)                 # :ok or raises Warden.ForbiddenError
-Warden.filter(actor, check(:owner), posts)                           # the posts the actor may see
+:ok = Warden.authorize(ctx, check(:owner), value: post)
+:ok = Warden.authorize(ctx, check(:owner), value: post, authorizer: MyApp.Authz)
+# a denial: {:error, %Warden.Denial{kind: :call}}
 
-# A context map works wherever an actor does (the actor is built for the call):
-Warden.allowed?(%{current_user: user}, role(:admin), authorizer: MyApp.Authz)
+Warden.allowed?(ctx, role(:admin))                                   # true / false
+Warden.allowed?(ctx, role(:admin), authorizer: MyApp.Authz)
+
+Warden.authorize!(ctx, check(:owner), value: post)                   # :ok or raises Warden.ForbiddenError
+Warden.authorize!(ctx, check(:owner), value: post, authorizer: MyApp.Authz)
+
+Warden.filter(ctx, check(:owner), posts)                             # the posts the actor may see
+Warden.filter(ctx, check(:owner), posts, authorizer: MyApp.Authz)
+
+# An actor built once per request works wherever a context map does, and keeps the
+# authorizer it was built with; an explicit `authorizer:` must name that same module:
+Warden.allowed?(actor, role(:admin))
+Warden.allowed?(actor, role(:admin), authorizer: MyApp.Authz)
 ```
 
 - Options: `authorizer:` (resolution order above), `value:` (the resource, given to
@@ -184,15 +195,22 @@ import Warden.Rule
 plug Warden.Plug, rule: role(:admin)                            # configured default
 plug Warden.Plug, rule: role(:admin), authorizer: MyApp.Authz   # explicit
 plug Warden.Plug, rule: authenticated(), on_deny: {MyAppWeb.Auth, :deny}
+plug Warden.Plug, rule: authenticated(), on_deny: {MyAppWeb.Auth, :deny}, authorizer: MyApp.Authz
 ```
 
 - `init/1` resolves the authorizer and validates the rule against its catalog. Phoenix
   and `Plug.Builder` run `init/1` at compile time, so a typo in a role, permission or
   check fails compilation.
-- The actor is built once per conn from the authorizer's `conn_context/1` (default
+- The actor is built from the authorizer's `conn_context/1` (default
   `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads
   `context[:current_user]` serves GraphQL and REST alike) and cached in
-  `conn.private[:warden_actor]`, keyed by authorizer.
+  `conn.private[:warden_actor]`, keyed by authorizer, with the subject it was built from.
+  Each check calls `subject/1` again and rebuilds the actor when the subject changed
+  (logout, impersonation, a user record with other roles).
+- `Warden.Plug.actor(conn)` / `Warden.Plug.actor(conn, authorizer: MyApp.Authz)` returns
+  `{conn, actor}` to pass on to the core API.
+- `on_deny: {module, function}` must name an existing `function/2` (checked by
+  `init/1`, except for a module still being compiled, such as the controller itself).
 - On denial: `on_deny: {module, function}`, else the authorizer's `deny_conn/2`, else the
   default, which sends `401 Unauthorized` to an anonymous actor and `403 Forbidden`
   otherwise. The plug always halts a denied conn, whatever the handler returns, and sends
@@ -206,15 +224,21 @@ defmodule MyAppWeb.PostController do
 
   import Warden.Rule
 
-  # Route-level rules, checked before any action runs.
+  # Route-level rules, checked before any action runs: configured default, then explicit.
   plug Warden.Plug, [rule: authenticated()] when action in [:index, :show]
   plug Warden.Plug, [rule: role(:editor), authorizer: MyApp.Authz] when action in [:new, :create]
 
   def show(conn, %{"id" => id}) do
     post = Posts.get!(id)
 
-    # Resource-level check with the configured default authorizer.
-    case Warden.Plug.authorize(conn, any_of([permission("posts:read"), check(:owner)]), value: post) do
+    rule = any_of([permission("posts:read"), check(:owner)])
+
+    # Resource-level check with the configured default authorizer...
+    result = Warden.Plug.authorize(conn, rule, value: post)
+    # ...or with an explicit one:
+    # result = Warden.Plug.authorize(conn, rule, value: post, authorizer: MyApp.Authz)
+
+    case result do
       {:ok, conn} -> render(conn, :show, post: post)
       {:error, _denial} -> conn |> put_status(:not_found) |> put_view(MyAppWeb.ErrorHTML) |> render(:"404")
     end
@@ -223,7 +247,9 @@ defmodule MyAppWeb.PostController do
   def update(conn, %{"id" => id, "post" => params}) do
     post = Posts.get!(id)
 
-    # Raises Warden.ForbiddenError (rendered as 403) when denied; explicit authorizer.
+    # Raises Warden.ForbiddenError (rendered as 403) when denied. Explicit authorizer;
+    # without `authorizer:` the configured default is used:
+    #   conn = Warden.Plug.authorize!(conn, check(:owner), value: post)
     conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyApp.Authz)
     {:ok, post} = Posts.update(post, params)
     redirect(conn, to: ~p"/posts/#{post}")

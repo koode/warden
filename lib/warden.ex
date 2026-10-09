@@ -36,14 +36,22 @@ defmodule Warden do
 
       import Warden.Rule
 
-      actor = Warden.actor(context)                                   # default authorizer
-      actor = Warden.actor(context, authorizer: MyApp.Authz)          # explicit
+      # Each call with the configured default, then with an explicit authorizer.
+      actor = Warden.actor(context)
+      actor = Warden.actor(context, authorizer: MyApp.Authz)
 
-      :ok = Warden.authorize(actor, check(:owner), value: post)
-      {:error, %Warden.Denial{kind: :call}} = Warden.authorize(context, role(:admin))
-      Warden.allowed?(actor, role(:admin))                            # boolean
-      Warden.authorize!(context, role(:admin), authorizer: MyApp.Authz) # or raises ForbiddenError
-      Warden.filter(actor, check(:owner), posts)                      # permitted posts only
+      :ok = Warden.authorize(context, check(:owner), value: post)
+      :ok = Warden.authorize(context, check(:owner), value: post, authorizer: MyApp.Authz)
+      # a denial: {:error, %Warden.Denial{kind: :call}}
+
+      Warden.allowed?(context, role(:admin))                          # boolean
+      Warden.allowed?(context, role(:admin), authorizer: MyApp.Authz)
+
+      Warden.authorize!(context, role(:admin))                        # :ok or raises ForbiddenError
+      Warden.authorize!(context, role(:admin), authorizer: MyApp.Authz)
+
+      Warden.filter(context, check(:owner), posts)                    # permitted posts only
+      Warden.filter(context, check(:owner), posts, authorizer: MyApp.Authz)
 
   `actor_or_context` is a `%Warden.Actor{}` (built once per request with `actor/2`) or a
   context map, from which the actor is built with the authorizer's callbacks (the same
@@ -172,8 +180,8 @@ defmodule Warden do
   Authorizes `actor_or_context` for `rule`. Returns `:ok` or
   `{:error, %Warden.Denial{kind: :call}}`.
 
-      Warden.authorize(actor, check(:owner), value: post)
-      Warden.authorize(context, role(:admin), authorizer: MyApp.Authz)
+      Warden.authorize(context, check(:owner), value: post)                          # configured default
+      Warden.authorize(context, check(:owner), value: post, authorizer: MyApp.Authz) # explicit
 
   Options: `:authorizer` (explicit option, then the actor's own authorizer, then the
   configured default), `:value`, `:context` (see `t:opts/0`).
@@ -192,8 +200,8 @@ defmodule Warden do
   `authorize/3` (`:authorizer` resolves as explicit option, actor's authorizer, configured
   default).
 
-      Warden.allowed?(actor, role(:admin))
-      Warden.allowed?(context, role(:admin), authorizer: MyApp.Authz)
+      Warden.allowed?(context, role(:admin))                          # configured default
+      Warden.allowed?(context, role(:admin), authorizer: MyApp.Authz) # explicit
   """
   @spec allowed?(actor_or_context, Rule.t(), opts) :: boolean
   def allowed?(actor_or_context, rule, opts \\ []),
@@ -203,8 +211,8 @@ defmodule Warden do
   Like `authorize/3`, but returns `:ok` or raises `Warden.ForbiddenError` (which Phoenix
   renders as 403). Same options as `authorize/3`.
 
-      Warden.authorize!(actor, check(:owner), value: post)
-      Warden.authorize!(context, role(:admin), authorizer: MyApp.Authz)
+      Warden.authorize!(context, check(:owner), value: post)                          # configured default
+      Warden.authorize!(context, check(:owner), value: post, authorizer: MyApp.Authz) # explicit
   """
   @spec authorize!(actor_or_context, Rule.t(), opts) :: :ok
   def authorize!(actor_or_context, rule, opts \\ []) when is_list(opts) do
@@ -225,8 +233,8 @@ defmodule Warden do
   Each value is given to checks as `Warden.Check.value`. The actor is built and the rule
   validated once.
 
-      Warden.filter(actor, check(:owner), posts)
-      Warden.filter(context, check(:owner), posts, authorizer: MyApp.Authz)
+      Warden.filter(context, check(:owner), posts)                          # configured default
+      Warden.filter(context, check(:owner), posts, authorizer: MyApp.Authz) # explicit
 
   Options: `:authorizer` (explicit option, then the actor's own authorizer, then the
   configured default) and `:context`.

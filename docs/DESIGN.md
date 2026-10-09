@@ -33,7 +33,7 @@ Non-goals for v1: hiding fields from introspection output, permission wildcards
 ## Rules are data
 
 A rule is a plain, escapable Elixir term, so it can live in schema `meta`. Builder
-functions in `Warden.Rule` (imported by `Warden.Notation`) produce them:
+functions in `Warden.Rule` (imported by `Warden.Absinthe.Notation`) produce them:
 
 | Builder | Term | Passes when |
 |---|---|---|
@@ -103,7 +103,9 @@ end
 ```elixir
 defmodule MyApp.Schema do
   use Absinthe.Schema
-  use Warden.Schema, authorizer: MyApp.Authz, strict_mode: false
+  use Warden.Absinthe, authorizer: MyApp.Authz, strict_mode: false   # explicit
+  # use Warden.Absinthe, strict_mode: false   # or the configured default:
+  #                                           # config :warden, authorizer: MyApp.Authz
 
   object :user do
     authorize any_of([role(:admin), check(:self)])   # object rule
@@ -173,7 +175,7 @@ verifier checks the computed plan against the compiled schema in both directions
 Attach through a mechanism the user's `middleware/3` cannot bypass. Preferred: a schema
 pipeline phase (`@pipeline_modifier`) that runs after Absinthe applies `middleware/3`
 and wraps every field. If Absinthe's internals do not allow that on every supported
-version, fall back to `Warden.Schema` overriding `middleware/3` via `@before_compile`
+version, fall back to `Warden.Absinthe` overriding `middleware/3` via `@before_compile`
 and wrapping the user's result. Either way the verifier runs at compile time.
 
 Introspection fields (`__schema`, `__type`, `__typename`) get no field rules, but the
@@ -253,7 +255,7 @@ and then `Phase.Schema.Compile` (`pipeline.ex:200-201`). `InlineFunctions` is wh
 user's `middleware/3` is applied (`phase/schema/inline_functions.ex:59` calling
 `middleware.ex:303`). Pipeline modifiers run in `__after_compile__`
 (`schema.ex:397`, `schema.ex:365`, `schema.ex:323`). Warden registers
-`@pipeline_modifier Warden.Phase.Attach`, which inserts its phase directly after
+`@pipeline_modifier Warden.Absinthe.Phase.Attach`, which inserts its phase directly after
 `InlineFunctions`: every field's middleware is wrapped after `middleware/3` has run, so
 `middleware/3` cannot remove it. Same structure in 1.7.10 (`pipeline.ex:197-198`).
 No `@before_compile` fallback is needed.
@@ -307,7 +309,7 @@ possible type has a rule.
 **(e) Subscription `config` and `context_id`.** `SubscribeSelf` reads `config` through
 `Absinthe.Type.function/2` (`phase/subscription/subscribe_self.ex:57-58`), which resolves
 `{:ref, module, identifier}` by calling `module.__absinthe_function__(identifier, :config)`
-(`type.ex:45`). Warden sets `config` to `{:ref, Warden.Subscription, {...}}` (escapable,
+(`type.ex:45`). Warden sets `config` to `{:ref, Warden.Absinthe.Subscription, {...}}` (escapable,
 so it survives `Compile`), whose function runs the subscribe-time checks and then the
 user's original `config` (or Absinthe's default topic). The subscription id is
 `"__absinthe__:doc:#{context_id}:#{document_id}"` with a unique integer when no
@@ -320,7 +322,7 @@ fix round" below).
 **(f) `hydrate/2` and meta.** Supported: `{:meta, keyword}`
 (`phase/schema/hydrate.ex:71`). It *replaces* the node's meta
 (`hydrate.ex:74`). The phase takes a `:hydrator` option (`hydrate.ex:25` in 1.12 and
-1.7.10); Warden installs `Warden.Hydrator`, which keeps Warden keys across a later
+1.7.10); Warden installs `Warden.Absinthe.Hydrator`, which keeps Warden keys across a later
 `{:meta, _}` (see "Red-team fix round").
 
 **(g) Errors at a list item index.** An error map with `path:` is appended to the field
@@ -328,8 +330,8 @@ path (`resolution.ex:571-576`), but any error on a field nulls the whole field
 (`resolution.ex:420`), and the result phase nulls every node that carries an error
 (`phase/document/result.ex:57`). So a field's middleware cannot report an error for one
 nullable item without nulling the list. Adaptation: the post middleware records item
-errors in `acc`; `Warden.Plugin` (added to the schema's `plugins/0` by
-`use Warden.Schema`) inserts `Warden.Phase.ItemErrors` after resolution, which attaches
+errors in `acc`; `Warden.Absinthe.Plugin` (added to the schema's `plugins/0` by
+`use Warden.Absinthe`) inserts `Warden.Absinthe.Phase.ItemErrors` after resolution, which attaches
 each error to the already-null item node. When the fold reaches the field itself
 (non-null items), the errors go on the field with `path: [index]` suffixes.
 
@@ -438,7 +440,7 @@ Three red-team agents attacked the first version (`test/redteam/`,
     phase prints a compile-time warning for each (`phase/attach.ex:54`). An explicit
     `authorize public()` on the mutation acknowledges it and silences the warning.
 13. **Hydrate.** A `rule:` on an argument node is an argument rule (`plan.ex:219`) and is
-    validated with the others. `Warden.Hydrator` (`hydrator.ex:13`, installed by
+    validated with the others. `Warden.Absinthe.Hydrator` (`hydrator.ex:13`, installed by
     `phase/attach.ex`) keeps Warden keys across a later `{:meta, _}` and rejects
     conflicting Warden values.
 14. **No plugin loop, per-document entries.** `Absinthe.Pipeline.BatchResolver` re-runs
@@ -446,7 +448,7 @@ Three red-team agents attacked the first version (`test/redteam/`,
     accumulator between documents. Item errors and folds are therefore recorded as
     markers in `resolution.extensions`, which Absinthe copies onto the field's result
     node, so they live in each document's own result tree (`middleware.ex`,
-    `put_marker/3`). The accumulator only carries a `pending` flag. `Warden.Plugin` asks
+    `put_marker/3`). The accumulator only carries a `pending` flag. `Warden.Absinthe.Plugin` asks
     for its phase only when no other plugin wants another pass and the flag is set
     (`plugin.ex:28`); the phase collects and strips the markers of its own document and
     clears the flag (`phase/item_errors.ex:23`). Identical documents in one batch each
@@ -460,7 +462,7 @@ Three red-team agents attacked the first version (`test/redteam/`,
 15. **Folding in nested lists.** Absinthe's `propagate_null_trimming` does not reach an
     object two or more list levels deep, so a nulled non-null field left the object with
     a `null` in a non-null field. Warden records every non-null field it nulls inside a
-    list (`middleware.ex`, `maybe_record_fold/1`) and `Warden.Phase.ItemErrors` folds it explicitly to the
+    list (`middleware.ex`, `maybe_record_fold/1`) and `Warden.Absinthe.Phase.ItemErrors` folds it explicitly to the
     nearest nullable position (`phase/item_errors.ex:95`).
 
 ## Outside Absinthe: core API and Plug (added 2026-10-09)
@@ -483,16 +485,21 @@ warnings-as-errors, in a project that has neither dependency.
 ### Core API (`Warden`)
 
 ```elixir
-actor = Warden.actor(context)                          # build once per request (default)
-actor = Warden.actor(context, authorizer: MyApp.Authz) # explicit authorizer
-:ok = Warden.authorize(actor_or_context, rule, value: post)
-:ok = Warden.authorize(context, rule, value: post, authorizer: MyApp.Authz)
-# -> :ok | {:error, %Warden.Denial{kind: :call}}
-Warden.allowed?(actor_or_context, rule, value: post)   # -> boolean
-Warden.authorize!(actor_or_context, rule, value: post) # raises Warden.ForbiddenError
-Warden.filter(actor_or_context, rule, posts)           # keeps the permitted values
+# Each call twice: with the configured default, then with an explicit authorizer.
+actor = Warden.actor(context)                                    # build once per request
+actor = Warden.actor(context, authorizer: MyApp.Authz)
 
-# Every function takes `authorizer: MyApp.OtherAuthz` to override the default.
+:ok = Warden.authorize(actor_or_context, rule, value: post)      # -> :ok | {:error, %Warden.Denial{kind: :call}}
+:ok = Warden.authorize(actor_or_context, rule, value: post, authorizer: MyApp.Authz)
+
+Warden.allowed?(actor_or_context, rule, value: post)             # -> boolean
+Warden.allowed?(actor_or_context, rule, value: post, authorizer: MyApp.Authz)
+
+Warden.authorize!(actor_or_context, rule, value: post)           # raises Warden.ForbiddenError
+Warden.authorize!(actor_or_context, rule, value: post, authorizer: MyApp.Authz)
+
+Warden.filter(actor_or_context, rule, posts)                     # keeps the permitted values
+Warden.filter(actor_or_context, rule, posts, authorizer: MyApp.Authz)
 ```
 
 - `actor_or_context` is a `%Warden.Actor{}` or a context map. A map builds the actor
@@ -510,22 +517,29 @@ Warden.filter(actor_or_context, rule, posts)           # keeps the permitted val
 
 ```elixir
 import Warden.Rule
-plug Warden.Plug, rule: role(:admin)              # default authorizer
-plug Warden.Plug, rule: role(:admin), authorizer: MyApp.AdminAuthz
+plug Warden.Plug, rule: role(:admin)                            # default authorizer
+plug Warden.Plug, rule: role(:admin), authorizer: MyApp.Authz   # explicit
 
-# in a controller action, for a loaded resource:
+# in a controller action, for a loaded resource (default, then explicit):
 with {:ok, conn} <- Warden.Plug.authorize(conn, any_of([role(:admin), check(:owner)]), value: post) do
   ...
 end
 
+with {:ok, conn} <- Warden.Plug.authorize(conn, check(:owner), value: post, authorizer: MyApp.Authz) do
+  ...
+end
+
+conn = Warden.Plug.authorize!(conn, check(:owner), value: post)
 conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyApp.Authz)
 ```
 
 - `init/1` validates the rule against the authorizer catalog. Phoenix runs `init/1` at
   compile time, so a typo fails compilation.
-- The actor is built once per conn and cached in `conn.private[:warden_actor]`, keyed by
-  authorizer. Clients cannot write `conn.private`. Nothing is cached across requests or in
-  the process dictionary.
+- The actor is cached in `conn.private[:warden_actor]`, keyed by authorizer, together
+  with the subject it was built from; it is rebuilt whenever `subject/1` returns a
+  different value for the current conn (logout, impersonation, changed roles). Clients
+  cannot write `conn.private`. Nothing is cached across requests or in the process
+  dictionary.
 - Context from a conn: optional authorizer callback `conn_context(conn)`, default
   `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads `context[:current_user]`
   works for both GraphQL and REST.
@@ -575,6 +589,13 @@ config :warden, authorizer: MyApp.Authz
   throwaway projects without the optional deps, with only `plug`, with only `absinthe`,
   and with only the configured default, compiles them with warnings as errors (and
   asserts Warden's own dependency compile prints no warning) and runs Warden in them.
+- **Plug actor cache** (confirmer fix). The cache entry is `{subject, actor}`; each check
+  calls `subject/1` on the current conn context and rebuilds the actor when the subject
+  differs, so a logout, an impersonation or a changed user record is never served a
+  stale actor. `on_deny: {mod, fun}` is checked in `init/1` (`mod.fun/2` must exist,
+  except for a module still being compiled). `Warden.ForbiddenError` derives `Inspect`
+  with only `message` and `plug_status`, so the user record in the denial stays out of
+  logs.
 - **Plug halting.** After the handler runs, the plug takes its return value only if it is
   a conn, sends the default response when nothing was set, sends a set-but-unsent
   response, and halts in every case.
