@@ -11,9 +11,7 @@ defmodule Warden.Plugin do
   @behaviour Absinthe.Plugin
 
   @doc false
-  def add_to(plugins) do
-    if __MODULE__ in plugins, do: plugins, else: plugins ++ [__MODULE__]
-  end
+  def add_to(plugins), do: List.delete(plugins, __MODULE__) ++ [__MODULE__]
 
   @impl true
   def before_resolution(exec), do: exec
@@ -21,11 +19,21 @@ defmodule Warden.Plugin do
   @impl true
   def after_resolution(exec), do: exec
 
+  # Warden is the last plugin (`add_to/1` appends it). An empty `pipeline` means no other
+  # plugin wants another resolution pass, so this is the final pass: run the phase
+  # once. The phase drains the entries, so this never asks for a phase twice and cannot
+  # make `Absinthe.Pipeline.BatchResolver` (which loops while plugins return phases)
+  # spin.
   @impl true
-  def pipeline(pipeline, exec) do
-    case exec.acc do
-      %{Warden => %{item_errors: [_ | _]}} -> pipeline ++ [Warden.Phase.ItemErrors]
-      _ -> pipeline
-    end
+  def pipeline([], exec) do
+    if pending?(exec.acc), do: [Warden.Phase.ItemErrors], else: []
   end
+
+  def pipeline(pipeline, _exec), do: pipeline
+
+  defp pending?(%{Warden => state}) do
+    Map.get(state, :item_errors, []) != [] or Map.get(state, :folds, []) != []
+  end
+
+  defp pending?(_), do: false
 end

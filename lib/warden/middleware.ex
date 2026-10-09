@@ -226,9 +226,10 @@ defmodule Warden.Middleware do
         res
         |> Resolution.put_result({:error, term})
         |> Map.put(:middleware, [])
+        |> maybe_record_fold()
 
       :null ->
-        %{res | state: :resolved, value: nil, middleware: []}
+        maybe_record_fold(%{res | state: :resolved, value: nil, middleware: []})
 
       {:replace, value} when kind == :field ->
         # Object rules still apply to the replacement value.
@@ -311,14 +312,16 @@ defmodule Warden.Middleware do
           # at any depth of a list whose innermost item type is non-null
           # (`null_allowed_in_list?/1` only looks at the innermost type). Report the
           # errors on the field so they are not lost.
-          null_field(res, Enum.map(attached, fn {_at, ii, term} -> {ii, term} end))
+          res
+          |> null_field(Enum.map(attached, fn {_at, ii, term} -> {ii, term} end))
+          |> maybe_record_fold()
         else
           res = %{res | value: value}
           record_item_errors(res, attached)
         end
 
       {tag, pending} when tag in [:null, :bubble] ->
-        null_field(res, pending)
+        res |> null_field(pending) |> maybe_record_fold()
 
       :filter ->
         # Only produced inside lists; unreachable at the top level.
@@ -326,9 +329,14 @@ defmodule Warden.Middleware do
 
       {:fail_list, denial} ->
         case call_deny(spec.authorizer, denial) do
-          {:error, term} -> %{res | value: nil, errors: [normalize_error!(term, spec)]}
-          :null -> %{res | value: nil}
-          other -> object_replace_error!(spec, other)
+          {:error, term} ->
+            maybe_record_fold(%{res | value: nil, errors: [normalize_error!(term, spec)]})
+
+          :null ->
+            maybe_record_fold(%{res | value: nil})
+
+          other ->
+            object_replace_error!(spec, other)
         end
     end
   end
@@ -561,13 +569,35 @@ defmodule Warden.Middleware do
           extra: extra
         }
 
-        {field_path ++ Enum.reverse(attach_idx), error}
+        {operation(res), field_path ++ Enum.reverse(attach_idx), error}
       end)
 
     state = Map.get(res.acc, @acc_key, %{})
     state = Map.update(state, :item_errors, entries, &(&1 ++ entries))
     %{res | acc: Map.put(res.acc, @acc_key, state)}
   end
+
+  # The operation node is the root of `resolution.path`.
+  defp operation(%Resolution{path: path}), do: List.last(path)
+
+  @doc false
+  # Absinthe folds a null in a non-null field into its parent object, except when that
+  # object sits two or more list levels deep. Record every non-null field Warden nulls
+  # inside a list; `Warden.Phase.ItemErrors` folds the ones Absinthe left alone.
+  def maybe_record_fold(%Resolution{value: nil} = res) do
+    path = Resolution.path(res)
+
+    if match?(%Absinthe.Type.NonNull{}, res.definition.schema_node.type) and
+         Enum.any?(path, &is_integer/1) do
+      state = Map.get(res.acc, @acc_key, %{})
+      state = Map.update(state, :folds, [{operation(res), path}], &[{operation(res), path} | &1])
+      %{res | acc: Map.put(res.acc, @acc_key, state)}
+    else
+      res
+    end
+  end
+
+  def maybe_record_fold(res), do: res
 
   defp split_error!(term, _res) when is_binary(term), do: {term, %{}}
 
