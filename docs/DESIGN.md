@@ -237,6 +237,9 @@ Per-field `list_policy` (meta) with a schema-wide default `:null_item`:
 
 ## Implementation notes
 
+(File references to `lib/warden/*.ex` for the GraphQL layer predate its move under
+`lib/warden/absinthe/` and the module rename to `Warden.Absinthe.*`.)
+
 Evidence is from the Absinthe 1.12.0 source (`deps/absinthe`), with 1.7.10 checked for
 the same code paths. File references are relative to `deps/absinthe/lib/absinthe/`.
 The full suite passed unchanged on both versions; no version-specific code was needed.
@@ -470,7 +473,7 @@ REST. Absinthe and Plug are optional dependencies.
 | Layer | Modules | Needs |
 |---|---|---|
 | Core | `Warden`, `Warden.Rule`, `Warden.Authorizer`, `Warden.Actor`, `Warden.Check`, `Warden.Denial`, `Warden.PolicyError`, `Warden.ForbiddenError` | nothing |
-| Absinthe | `Warden.Absinthe` (was `Warden.Schema`; `use Warden.Absinthe, authorizer: ...`), `Warden.Absinthe.Notation`, `Warden.Absinthe.Hydrate`, internals under `Warden.Absinthe.*` | `absinthe` |
+| Absinthe | `Warden.Absinthe` (was `Warden.Schema`; `use Warden.Absinthe` with the configured default, or `use Warden.Absinthe, authorizer: MyApp.Authz`), `Warden.Absinthe.Notation`, `Warden.Absinthe.Hydrate`, internals under `Warden.Absinthe.*` | `absinthe` |
 | Plug | `Warden.Plug` | `plug` |
 
 Optional layers compile only when their dependency is loaded
@@ -480,8 +483,10 @@ warnings-as-errors, in a project that has neither dependency.
 ### Core API (`Warden`)
 
 ```elixir
-actor = Warden.actor(context)                          # build once per request
+actor = Warden.actor(context)                          # build once per request (default)
+actor = Warden.actor(context, authorizer: MyApp.Authz) # explicit authorizer
 :ok = Warden.authorize(actor_or_context, rule, value: post)
+:ok = Warden.authorize(context, rule, value: post, authorizer: MyApp.Authz)
 # -> :ok | {:error, %Warden.Denial{kind: :call}}
 Warden.allowed?(actor_or_context, rule, value: post)   # -> boolean
 Warden.authorize!(actor_or_context, rule, value: post) # raises Warden.ForbiddenError
@@ -512,6 +517,8 @@ plug Warden.Plug, rule: role(:admin), authorizer: MyApp.AdminAuthz
 with {:ok, conn} <- Warden.Plug.authorize(conn, any_of([role(:admin), check(:owner)]), value: post) do
   ...
 end
+
+conn = Warden.Plug.authorize!(conn, check(:owner), value: post, authorizer: MyApp.Authz)
 ```
 
 - `init/1` validates the rule against the authorizer catalog. Phoenix runs `init/1` at
@@ -551,3 +558,42 @@ config :warden, authorizer: MyApp.Authz
   schema this happens at compile time.
 - The configured module must `use Warden.Authorizer`; anything else raises at first
   resolution (compile time for the Plug and the schema).
+
+### Implementation notes: core API and Plug
+
+- **Authorizer resolution** is one function, `Warden.resolve_authorizer!/2`
+  (`lib/warden.ex`), used by the core API, `Warden.Plug` (in `init/1` and at call time)
+  and `use Warden.Absinthe` (at compile time). The default comes from
+  `Application.compile_env(:warden, :authorizer)`. `%Warden.Actor{}` gained an
+  `authorizer` field, set by `Warden.Actor.build/2`, so the core can check the actor
+  against the authorizer it resolves.
+- **Optional layers.** `lib/warden/absinthe.ex`, `lib/warden/absinthe/**` and
+  `lib/warden/plug.ex` are wrapped in `if Code.ensure_loaded?(Absinthe)` /
+  `if Code.ensure_loaded?(Plug)`. `Warden.Check.resolution` is typed `struct() | nil` and
+  the Plug callbacks use `struct()`, so the core names no optional module.
+  `test/standalone/no_optional_deps_test.exs` (tag `:no_optional_deps`) builds
+  throwaway projects without the optional deps, with only `plug`, with only `absinthe`,
+  and with only the configured default, compiles them with warnings as errors (and
+  asserts Warden's own dependency compile prints no warning) and runs Warden in them.
+- **Plug halting.** After the handler runs, the plug takes its return value only if it is
+  a conn, sends the default response when nothing was set, sends a set-but-unsent
+  response, and halts in every case.
+
+### Deviations: core API and Plug
+
+- **`Warden.filter/4`** is `filter(actor_or_context, rule, values, opts \\ [])`: the rule
+  and the values are both positional, as in the design's example.
+- **A `context:` option** on the core API gives checks a context when the first argument
+  is an actor (`Warden.Plug` passes the conn context this way).
+- **`Warden.Plug.actor/2`** (not in the design) returns `{conn, actor}`, with the actor
+  cached; useful to pass the actor on to the core API.
+- **Hand-built actors are refused.** An `%Warden.Actor{}` whose `authorizer` is `nil` (not
+  built by `Warden.actor/2`, `Warden.Plug.actor/2` or GraphQL) raises
+  `Warden.PolicyError` in the core API, since it cannot be checked against an
+  authorizer.
+- **`Warden.Plug.init/1` raises `ArgumentError`** for an unknown role, permission or
+  check (it is a configuration error found at compile time); the core API raises
+  `Warden.PolicyError` for the same at call time, as designed.
+- **A non-module or non-authorizer authorizer raises `ArgumentError`** (the design says
+  "raises" without naming the exception), the same exception as a missing authorizer.
+
