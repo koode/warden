@@ -8,8 +8,8 @@ if Code.ensure_loaded?(Absinthe) do
     # two can be compared exactly.
 
     alias Absinthe.Type
-    alias Warden.Rule
     alias Warden.Absinthe.Rules
+    alias Warden.Rule
 
     @root_types [:query, :mutation, :subscription]
     # GraphQL names of the fields Absinthe's introspection adds. Matched by name, never by
@@ -21,7 +21,6 @@ if Code.ensure_loaded?(Absinthe) do
 
     @type t :: %__MODULE__{}
 
-    @doc false
     def root_types, do: @root_types
 
     @doc """
@@ -96,115 +95,103 @@ if Code.ensure_loaded?(Absinthe) do
     # objects without one) AND the object rule of every interface the object implements.
     # Interfaces and unions: their own rule.
     defp object_rules(types, config) do
-      for {ident, type} <- types, reduce: %{} do
-        acc ->
-          rule =
-            case type do
-              %Type.Object{} = object ->
-                own = meta(object, :warden_rule)
+      Enum.reduce(types, %{}, fn {ident, type}, acc ->
+        case object_rule(ident, type, types, config) do
+          nil -> acc
+          rule -> Map.put(acc, ident, rule)
+        end
+      end)
+    end
 
-                own =
-                  if own == nil and not introspection_type?(object) and
-                       ident not in @root_types,
-                     do: config.default_object_rule,
-                     else: own
+    defp object_rule(ident, %Type.Object{} = object, types, config) do
+      Rules.conjoin([
+        own_object_rule(ident, object, config) | interface_object_rules(object, types)
+      ])
+    end
 
-                interface_rules =
-                  object.interfaces
-                  |> List.wrap()
-                  |> Enum.map(
-                    &(types
-                      |> Map.get(&1)
-                      |> then(fn i -> i && meta(i, :warden_rule) end))
-                  )
+    defp object_rule(_ident, %Type.Interface{} = interface, _types, _config),
+      do: Rules.conjoin([meta(interface, :warden_rule)])
 
-                Rules.conjoin([own | interface_rules])
+    defp object_rule(_ident, %Type.Union{} = union, _types, _config),
+      do: Rules.conjoin([meta(union, :warden_rule)])
 
-              %Type.Interface{} = interface ->
-                Rules.conjoin([meta(interface, :warden_rule)])
+    defp object_rule(_ident, _type, _types, _config), do: nil
 
-              %Type.Union{} = union ->
-                Rules.conjoin([meta(union, :warden_rule)])
+    # The object's own rule, or `default_object_rule` for a non-root, non-introspection
+    # object without one.
+    defp own_object_rule(ident, object, config) do
+      own = meta(object, :warden_rule)
 
-              _ ->
-                nil
-            end
+      if own == nil and not introspection_type?(object) and ident not in @root_types,
+        do: config.default_object_rule,
+        else: own
+    end
 
-          if rule, do: Map.put(acc, ident, rule), else: acc
-      end
+    defp interface_object_rules(object, types) do
+      object.interfaces
+      |> List.wrap()
+      |> Enum.map(fn iface ->
+        case Map.get(types, iface) do
+          nil -> nil
+          interface -> meta(interface, :warden_rule)
+        end
+      end)
     end
 
     ## Pre
 
     defp pre_spec(object, field, types, object_rules, inputs, config) do
       root? = object.identifier in @root_types
+      ctx = %{types: types, object_rules: object_rules, inputs: inputs, config: config}
 
-      root_rule =
-        case root? && Map.get(object_rules, object.identifier) do
-          rule when rule not in [nil, false] -> [{:object, object.identifier, rule}]
-          _ -> []
-        end
-
-      checks =
-        cond do
-          # Absinthe adds `__schema` and `__type` to every object named like a query root,
-          # so the introspection rule guards them wherever they appear. A root object rule
-          # applies too.
-          field.name in @introspection_schema_fields ->
-            parent =
-              case Map.get(object_rules, object.identifier) do
-                nil -> []
-                rule -> [{:object, object.identifier, rule}]
-              end
-
-            introspection =
-              case config.introspection do
-                :public -> []
-                rule -> [{:introspection, rule}]
-              end
-
-            parent ++ introspection
-
-          # `__typename` of a root type is guarded by the root's object rule.
-          introspection_field?(field) ->
-            root_rule
-
-          true ->
-            parent =
-              case Map.get(object_rules, object.identifier) do
-                nil -> []
-                rule -> [{:object, object.identifier, rule}]
-              end
-
-            field_rule =
-              case effective_field_rule(object, field, types) do
-                nil -> []
-                rule -> [{:field, rule}]
-              end
-
-            args =
-              case arg_plan(object, field, types, inputs) do
-                nil -> []
-                plan -> [{:args, plan}]
-              end
-
-            parent ++ field_rule ++ args
-        end
-
-      case checks do
-        [] ->
-          nil
-
-        checks ->
-          %{
-            authorizer: config.authorizer,
-            root: root?,
-            checks: checks
-          }
+      case pre_checks(object, field, root?, ctx) do
+        [] -> nil
+        checks -> %{authorizer: config.authorizer, root: root?, checks: checks}
       end
     end
 
-    @doc false
+    defp pre_checks(object, field, root?, ctx) do
+      cond do
+        # Absinthe adds `__schema` and `__type` to every object named like a query root,
+        # so the introspection rule guards them wherever they appear. A root object rule
+        # applies too.
+        field.name in @introspection_schema_fields ->
+          parent_check(object, ctx) ++ introspection_check(ctx.config)
+
+        # `__typename` of a root type is guarded by the root's object rule.
+        introspection_field?(field) ->
+          if root?, do: parent_check(object, ctx), else: []
+
+        true ->
+          parent_check(object, ctx) ++
+            field_check(object, field, ctx) ++ args_check(object, field, ctx)
+      end
+    end
+
+    defp parent_check(object, ctx) do
+      case Map.get(ctx.object_rules, object.identifier) do
+        nil -> []
+        rule -> [{:object, object.identifier, rule}]
+      end
+    end
+
+    defp introspection_check(%{introspection: :public}), do: []
+    defp introspection_check(%{introspection: rule}), do: [{:introspection, rule}]
+
+    defp field_check(object, field, ctx) do
+      case effective_field_rule(object, field, ctx.types) do
+        nil -> []
+        rule -> [{:field, rule}]
+      end
+    end
+
+    defp args_check(object, field, ctx) do
+      case arg_plan(object, field, ctx.types, ctx.inputs) do
+        nil -> []
+        plan -> [{:args, plan}]
+      end
+    end
+
     def effective_field_rule(object, field, types) do
       interface_rules =
         for iface_ident <- List.wrap(object.interfaces),
@@ -371,23 +358,20 @@ if Code.ensure_loaded?(Absinthe) do
           |> Map.fetch!(ident)
           |> Map.fetch!(:fields)
           |> Enum.sort_by(fn {fident, _} -> fident end)
-          |> Enum.flat_map(fn {fident, f} ->
-            rule =
-              case meta(f, :warden_rule) do
-                :public -> nil
-                r -> r
-              end
-
-            specs = List.wrap(input_ref_spec(f.type, with_rules))
-            defaults = if f.default_value == nil, do: [], else: [f.default_value]
-
-            if rule == nil and specs == [],
-              do: [],
-              else: [{fident, rule, defaults, specs}]
-          end)
+          |> Enum.flat_map(&input_field_plan(&1, with_rules))
 
         {ident, fields}
       end)
+    end
+
+    defp input_field_plan({fident, field}, with_rules) do
+      rule = if meta(field, :warden_rule) == :public, do: nil, else: meta(field, :warden_rule)
+      specs = List.wrap(input_ref_spec(field.type, with_rules))
+      defaults = if field.default_value == nil, do: [], else: [field.default_value]
+
+      if rule == nil and specs == [],
+        do: [],
+        else: [{fident, rule, defaults, specs}]
     end
 
     defp fixpoint(set, input_objects) do
@@ -481,7 +465,6 @@ if Code.ensure_loaded?(Absinthe) do
     defp shape(%Type.List{of_type: t}), do: {:list, shape(t)}
     defp shape(ident) when is_atom(ident), do: :named
 
-    @doc false
     def implementors(types, interface) do
       for {ident, %Type.Object{interfaces: ifaces}} <- types,
           interface in List.wrap(ifaces),
@@ -496,27 +479,34 @@ if Code.ensure_loaded?(Absinthe) do
     # and it denies: the subscriber could never see an event.
     defp subscribe_spec(pre, field, types, object_rules, config) do
       named = Type.unwrap(field.type)
+      {abstract_rule, members} = return_types(named, types, object_rules)
 
-      {abstract_rule, members} =
-        case Map.get(types, named) do
-          %Type.Object{} -> {nil, [named]}
-          %Type.Interface{} -> {Map.get(object_rules, named), implementors(types, named)}
-          %Type.Union{types: members} -> {Map.get(object_rules, named), members}
-          _ -> {nil, []}
-        end
+      %{
+        authorizer: config.authorizer,
+        pre: pre,
+        return: return_spec(named, abstract_rule, members, object_rules)
+      }
+    end
 
+    # The rule of the return type itself (abstract types only) and its possible types.
+    defp return_types(named, types, object_rules) do
+      case Map.get(types, named) do
+        %Type.Object{} -> {nil, [named]}
+        %Type.Interface{} -> {Map.get(object_rules, named), implementors(types, named)}
+        %Type.Union{types: members} -> {Map.get(object_rules, named), members}
+        _ -> {nil, []}
+      end
+    end
+
+    defp return_spec(named, abstract_rule, members, object_rules) do
       member_rules = Enum.map(Enum.sort(members), &Map.get(object_rules, &1))
-
-      rule = if value_independent?(abstract_rule), do: abstract_rule
+      rule = if value_independent?(abstract_rule), do: abstract_rule, else: nil
       members_ok? = members != [] and Enum.all?(member_rules, &value_independent?/1)
-      members = if members_ok?, do: Enum.zip(Enum.sort(members), member_rules)
+      members = if members_ok?, do: Enum.zip(Enum.sort(members), member_rules), else: nil
 
-      return =
-        if rule == nil and members == nil,
-          do: nil,
-          else: %{type: named, rule: rule, members: members}
-
-      %{authorizer: config.authorizer, pre: pre, return: return}
+      if rule == nil and members == nil,
+        do: nil,
+        else: %{type: named, rule: rule, members: members}
     end
 
     defp value_independent?(nil), do: false
@@ -573,54 +563,46 @@ if Code.ensure_loaded?(Absinthe) do
     defp validate_field(%type_mod{} = type, field, _types, catalog) do
       where = "#{type.name}.#{field.name}"
 
-      rule_errors =
-        case meta(field, :warden_rule) do
-          nil -> []
-          rule -> rule_errors(rule, catalog, where)
-        end
+      optional_rule_errors(meta(field, :warden_rule), catalog, where) ++
+        field_args_errors(type_mod, meta(field, :warden_args), field, where, catalog) ++
+        list_policy_errors(type_mod, meta(field, :warden_list_policy), where) ++
+        arg_rule_errors(field, where, catalog)
+    end
 
-      args_errors =
-        case meta(field, :warden_args) do
-          nil ->
-            []
+    defp optional_rule_errors(nil, _catalog, _where), do: []
+    defp optional_rule_errors(rule, catalog, where), do: rule_errors(rule, catalog, where)
 
-          rules when type_mod == Type.InputObject ->
-            _ = rules
-            ["#{where}: `authorize_args` is not supported on input object fields"]
+    defp field_args_errors(_type_mod, nil, _field, _where, _catalog), do: []
 
-          rules when is_map(rules) ->
-            Enum.flat_map(rules, fn {arg, rule} ->
-              if Map.has_key?(field.args, arg) do
-                rule_errors(rule, catalog, "#{where}(#{arg})")
-              else
-                ["#{where}: `authorize_args` names #{inspect(arg)}, which is not an argument"]
-              end
-            end)
+    defp field_args_errors(Type.InputObject, _rules, _field, where, _catalog),
+      do: ["#{where}: `authorize_args` is not supported on input object fields"]
 
-          other ->
-            ["#{where}: invalid :warden_args meta #{inspect(other)}"]
-        end
+    defp field_args_errors(_type_mod, rules, field, where, catalog) when is_map(rules) do
+      Enum.flat_map(rules, fn {arg, rule} ->
+        if Map.has_key?(field.args, arg),
+          do: rule_errors(rule, catalog, "#{where}(#{arg})"),
+          else: ["#{where}: `authorize_args` names #{inspect(arg)}, which is not an argument"]
+      end)
+    end
 
-      policy_errors =
-        case meta(field, :warden_list_policy) do
-          nil ->
-            []
+    defp field_args_errors(_type_mod, other, _field, where, _catalog),
+      do: ["#{where}: invalid :warden_args meta #{inspect(other)}"]
 
-          _ when type_mod == Type.InputObject ->
-            ["#{where}: `list_policy` is not supported on input object fields"]
+    defp list_policy_errors(_type_mod, nil, _where), do: []
 
-          policy ->
-            if policy in Rules.list_policies(),
-              do: [],
-              else: ["#{where}: invalid list policy #{inspect(policy)}"]
-        end
+    defp list_policy_errors(Type.InputObject, _policy, where),
+      do: ["#{where}: `list_policy` is not supported on input object fields"]
 
-      arg_rule_errors =
-        for {ident, arg} <- Enum.sort_by(Map.get(field, :args) || %{}, &elem(&1, 0)),
-            error <- validate_arg(arg, "#{where}(#{ident})", catalog),
-            do: error
+    defp list_policy_errors(_type_mod, policy, where) do
+      if policy in Rules.list_policies(),
+        do: [],
+        else: ["#{where}: invalid list policy #{inspect(policy)}"]
+    end
 
-      rule_errors ++ args_errors ++ policy_errors ++ arg_rule_errors
+    defp arg_rule_errors(field, where, catalog) do
+      for {ident, arg} <- Enum.sort_by(Map.get(field, :args) || %{}, &elem(&1, 0)),
+          error <- validate_arg(arg, "#{where}(#{ident})", catalog),
+          do: error
     end
 
     defp validate_arg(arg, where, catalog) do
@@ -662,18 +644,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp effective_field_rule_declared?(object, field, types) do
       meta(field, :warden_rule) != nil or
-        Enum.any?(List.wrap(object.interfaces), fn iface ->
-          case Map.get(types, iface) do
-            %{fields: %{} = ifields} ->
-              case Map.get(ifields, field.identifier) do
-                nil -> false
-                ifield -> meta(ifield, :warden_rule) != nil
-              end
-
-            _ ->
-              false
-          end
-        end)
+        Enum.any?(interface_fields(object, field, types), &(meta(&1, :warden_rule) != nil))
     end
   end
 end
