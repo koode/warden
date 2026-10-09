@@ -17,12 +17,8 @@ request still resolves. Queries, mutations and subscriptions are enforced the sa
 - The default error says only `"Forbidden"` with `extensions.code = "FORBIDDEN"`.
 - Rules that name an unknown role, permission or check fail compilation.
 
-Supports Absinthe `>= 1.7.0`; developed against 1.12. See
+Requires Absinthe `~> 1.12`. See
 [`docs/DESIGN.md`](docs/DESIGN.md) for the design and the implementation notes.
-
-Absinthe 1.7.10 has two published high-severity advisories (EEF-CVE-2026-43967, a
-quadratic fragment-name check, and EEF-CVE-2026-42793, atom table exhaustion). Both are
-in Absinthe, not Warden, and Warden cannot mitigate them. Upgrade Absinthe if you can.
 
 absinthe_warden is a community library. It is not affiliated with the absinthe-graphql
 project.
@@ -347,12 +343,4 @@ mise exec -- mix compile --warnings-as-errors --force
 mise exec -- mix format --check-formatted
 mise exec -- mix dialyzer
 MIX_ENV=test mise exec -- mix dialyzer   # also covers test/support, like ElixirLS
-```
-
-To run the suite against Absinthe 1.7.10 (separate lockfile, deps and build dirs):
-
-```sh
-ABSINTHE_VERSION=1.7.10 MIX_LOCKFILE=mix.lock.absinthe17 \
-  MIX_DEPS_PATH=deps_absinthe17 MIX_BUILD_ROOT=_build_absinthe17 \
-  mise exec -- mix test
 ```

@@ -5,7 +5,7 @@ types, interfaces, unions, arguments and input fields. Denied data becomes `null
 the nearest nullable parent), never a failed request. Works the same for queries,
 mutations and subscriptions.
 
-Package `absinthe_warden`, top module `Warden`. Absinthe `>= 1.7.0`; primary target 1.12.
+Package `absinthe_warden`, top module `Warden`. Absinthe `~> 1.12`.
 
 ## Security goals (the contract)
 
@@ -239,7 +239,9 @@ Per-field `list_policy` (meta) with a schema-wide default `:null_item`:
 
 Evidence is from the Absinthe 1.12.0 source (`deps/absinthe`), with 1.7.10 checked for
 the same code paths. File references are relative to `deps/absinthe/lib/absinthe/`.
-The full suite passes unchanged on both versions; no version-specific code was needed.
+The full suite passed unchanged on both versions; no version-specific code was needed.
+Support for Absinthe 1.7 was dropped on 2026-10-09 (requirement now `~> 1.12`); the 1.7.10
+references below are kept as history.
 
 ### Verified points
 
