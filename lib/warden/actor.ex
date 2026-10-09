@@ -32,16 +32,24 @@ defmodule Warden.Actor do
   @doc """
   Builds the actor for `context` through `authorizer`.
 
-  An anonymous subject (`nil`) gets no roles and no permissions; the `roles/2` and
-  `permissions/2` callbacks are not called for it.
+  An anonymous subject (`nil` or `false`) gets no roles and no permissions; the
+  `roles/2` and `permissions/2` callbacks are not called for it. A subject of `:error`
+  or `{:error, _}` raises `Warden.PolicyError`.
   """
   @spec build(module, map) :: t
   def build(authorizer, context) do
     catalog = authorizer.__warden_catalog__()
 
     case authorizer.subject(context) do
-      nil ->
+      # `false` is a common "no user" value; it is anonymous, never a subject.
+      anonymous when anonymous in [nil, false] ->
         %__MODULE__{}
+
+      # A failed lookup is a bug in subject/1 (or an unhandled error), not a user.
+      failed when failed == :error or (is_tuple(failed) and elem(failed, 0) == :error) ->
+        raise Warden.PolicyError,
+              "#{inspect(authorizer)}.subject/1 returned #{inspect(failed)}; return the " <>
+                "subject, or nil (or false) for an anonymous actor"
 
       subject ->
         roles =
