@@ -40,10 +40,33 @@ defmodule Warden.Phase.Attach do
             Enum.map_join(plan.errors, "\n", &("  * " <> &1))
     end
 
+    warn_unguarded_mutations(schema, types, plan)
+
     artifacts = Enum.map(schema_def.type_artifacts, &apply_plan(&1, plan))
     schema_def = %{schema_def | type_artifacts: artifacts}
 
     {:ok, %{blueprint | schema_definitions: [schema_def]}}
+  end
+
+  # An object rule on a mutation's return type only nulls the result: the resolver has
+  # already run. Warn about mutations that have nothing else (no root, field or
+  # argument rule) to stop them.
+  defp warn_unguarded_mutations(schema, types, plan) do
+    mutation = Map.get(types, :mutation)
+
+    for {{:mutation, fident}, {nil, post}} <- Enum.sort(plan.fields), post != nil do
+      name = mutation && Map.get(mutation.fields, fident)
+      name = if name, do: name.name, else: Atom.to_string(fident)
+
+      IO.warn(
+        "Warden: mutation #{inspect(name)} in #{inspect(schema)} is protected only by the " <>
+          "object rule of its return type, which runs after the resolver. The mutation runs " <>
+          "for any caller; add a field rule (authorize) to stop it before it runs.",
+        []
+      )
+    end
+
+    :ok
   end
 
   defp apply_plan(%Type.Object{identifier: ident, fields: fields} = object, plan) do

@@ -425,12 +425,49 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
     end
 
     @tag :documented_limit
-    test "a mutation protected only by its return type's object rule does not execute" do
-      # README "Security model and limits": object rules on a mutation's return type do
-      # not stop the mutation. This asserts the secure behaviour anyway.
+    test "a mutation protected only by its return type's object rule warns at compile time" do
+      # Decision 12: this stays a documented limit (README "Security model and limits"):
+      # the object rule nulls the result after the resolver ran. Warden warns at compile
+      # time about such mutations. Converted from "does not execute" by agreement.
+      name = Warden.Test.CompileHelpers.unique("Warden.RedteamFuzz.PostOnly")
+
+      warning =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          Code.compile_string("""
+          defmodule #{name} do
+            use Absinthe.Schema
+            use Warden.Schema, authorizer: Warden.Test.Authz
+
+            object :vault do
+              authorize role(:admin)
+              field :id, :id
+            end
+
+            query do
+              field :ok, :string
+            end
+
+            mutation do
+              field :post_only_mutation, :vault do
+                resolve fn _, _ -> {:ok, %{id: "v"}} end
+              end
+
+              field :guarded_mutation, :vault do
+                authorize role(:admin)
+                resolve fn _, _ -> {:ok, %{id: "v"}} end
+              end
+            end
+          end
+          """)
+        end)
+
+      assert warning =~ ~s(mutation "post_only_mutation")
+      assert warning =~ "protected only by the object rule of its return type"
+      refute warning =~ "guarded_mutation"
+
+      # The result itself is still hidden.
       result = run(~s|mutation { postOnlyMutation(id: "a2") { id email } }|, member())
       assert result.data == %{"postOnlyMutation" => nil}
-      assert hits() == [], "the resolver of a mutation the actor may not see the result of ran"
     end
   end
 
