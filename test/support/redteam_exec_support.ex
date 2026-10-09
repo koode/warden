@@ -409,7 +409,12 @@ defmodule Warden.RedteamExec.Schema do
 
     field :rx_admin_feed_raise, :rx_post do
       authorize role(:admin)
-      config fn _, _ -> raise "config exploded" end
+
+      # Raises if it ever runs: Warden must refuse the subscription first. The branch on
+      # the args only stops Dialyzer reporting a function that can never return.
+      config fn args, _ ->
+        if args == :unreachable, do: {:ok, topic: "never"}, else: raise("config exploded")
+      end
     end
 
     field :rx_filtered_feed, :rx_post do
