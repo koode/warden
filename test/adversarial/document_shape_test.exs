@@ -6,6 +6,8 @@ defmodule Warden.Adversarial.DocumentShapeTest do
 
   import Warden.Test.Helpers
 
+  alias Warden.Test.Data
+
   test "named fragment selecting a denied field" do
     doc = """
     { search { ...S } }
@@ -42,7 +44,7 @@ defmodule Warden.Adversarial.DocumentShapeTest do
   test "same field selected directly and through a fragment" do
     doc = "{ me { email ... on User { email } ...E } } fragment E on User { email }"
     assert run(doc, viewer()).data == %{"me" => %{"email" => "bob@example.com"}}
-    assert run(doc, Warden.Test.Data.as(:viewer, "u9")).data == %{"me" => nil}
+    assert run(doc, Data.as(:viewer, "u9")).data == %{"me" => nil}
   end
 
   test "interface field selection to reach a concrete field rule" do

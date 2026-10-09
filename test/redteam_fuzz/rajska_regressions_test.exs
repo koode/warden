@@ -9,8 +9,10 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
 
   import ExUnit.CaptureLog
 
-  alias Warden.Test.RF.Data
+  alias Warden.Test.CompileHelpers
   alias Warden.Test.Pubsub
+  alias Warden.Test.RF.Data
+  alias Warden.Test.RF.Resolvers
 
   @schema Warden.Test.RF.Schema
 
@@ -249,14 +251,14 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
             object :holder do
               field unquote(ident), :string, unquote(name_attrs) do
                 authorize deny()
-                resolve Warden.Test.RF.Resolvers.string({:nested, unquote(ident)})
+                resolve Resolvers.string({:nested, unquote(ident)})
               end
             end
 
             query do
               field unquote(ident), :string, unquote(name_attrs) do
                 authorize deny()
-                resolve Warden.Test.RF.Resolvers.string({:root, unquote(ident)})
+                resolve Resolvers.string({:root, unquote(ident)})
               end
 
               field unquote(peek_ident), :secret_box, unquote(peek_attrs) do
@@ -449,7 +451,7 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
       # Decision 12: this stays a documented limit (README "Security model and limits"):
       # the object rule nulls the result after the resolver ran. Warden warns at compile
       # time about such mutations. Converted from "does not execute" by agreement.
-      name = Warden.Test.CompileHelpers.unique("Warden.RedteamFuzz.PostOnly")
+      name = CompileHelpers.unique("Warden.RedteamFuzz.PostOnly")
 
       warning =
         ExUnit.CaptureIO.capture_io(:stderr, fn ->

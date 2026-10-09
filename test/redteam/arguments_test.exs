@@ -34,7 +34,7 @@ defmodule Warden.Redteam.ArgumentsTest do
 
   test "enum argument default given explicitly is allowed (control)" do
     r = q(~s|{ posts(status: PUBLISHED) { id } }|, viewer())
-    assert length(r.data["posts"]) == 2
+    assert [_, _] = r.data["posts"]
   end
 
   test "nested input object two levels deep, literal" do
@@ -112,7 +112,7 @@ defmodule Warden.Redteam.ArgumentsTest do
   test "allowed and denied calls of one field side by side through aliases" do
     r = q(~s|{ ok: posts { id } bad: posts(includeDrafts: true) { id } }|, viewer())
     assert r.data["bad"] == nil
-    assert length(r.data["ok"]) == 2
+    assert [_, _] = r.data["ok"]
     assert resolved() == [:posts]
   end
 

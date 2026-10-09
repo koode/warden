@@ -6,7 +6,7 @@ defmodule Warden.CoreApiTest do
   use ExUnit.Case, async: true
 
   import Warden.Rule
-  import Warden.Test.Helpers, only: [run: 2]
+  import Warden.Test.Helpers, only: [run: 2, untyped: 1]
 
   alias Warden.{Actor, Denial, ForbiddenError, PolicyError}
   alias Warden.Test.{Authz, Data}
@@ -84,7 +84,7 @@ defmodule Warden.CoreApiTest do
     end
 
     test "the first argument must be an actor or a map" do
-      assert_raise ArgumentError, fn -> apply(Warden, :authorize, ["admin", role(:admin)]) end
+      assert_raise ArgumentError, fn -> Warden.authorize(untyped("admin"), role(:admin)) end
     end
   end
 

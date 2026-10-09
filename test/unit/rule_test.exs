@@ -2,6 +2,7 @@ defmodule Warden.RuleTest do
   use ExUnit.Case, async: true
 
   import Warden.Rule
+  import Warden.Test.Helpers, only: [untyped: 1]
   alias Warden.{Actor, Check, Rule}
   alias Warden.Test.Authz
 
@@ -152,7 +153,7 @@ defmodule Warden.RuleTest do
     end
 
     test "an invalid rule term raises" do
-      assert_raise Warden.PolicyError, fn -> apply(&eval/2, [{:not, :public}, actor([])]) end
+      assert_raise Warden.PolicyError, fn -> eval(untyped({:not, :public}), actor([])) end
     end
   end
 

@@ -61,7 +61,7 @@ defmodule Warden.Adversarial.CostTest do
   test "item errors on every denied list item grow about linearly" do
     result = run("{ big(n: 3) { id } }", viewer(), schema: Schema)
     assert result.data == %{"big" => [nil, nil, nil]}
-    assert length(result.errors) == 3
+    assert [_, _, _] = result.errors
 
     assert ratio("{ big(n: N) { id } }") < @ratio_bound
   end

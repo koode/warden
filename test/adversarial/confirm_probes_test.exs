@@ -52,6 +52,8 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
   import Warden.Test.Helpers
   import Warden.Test.CompileHelpers
 
+  alias Absinthe.Pipeline
+  alias Absinthe.Pipeline.BatchResolver
   alias Warden.Test.Pubsub
 
   @pa "authorizer: Warden.ConfirmProbe.Authz"
@@ -427,7 +429,7 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
     {:ok, a} = sub(s, "subscription { feed { id body } }", admin_u())
     {:ok, v} = sub(s, "subscription { feed { id body } }", viewer_u())
     {:ok, v2} = sub(s, "subscription { feed { id body } }", viewer_u())
-    assert length(Enum.uniq([a, v, v2])) == 3
+    assert [_, _, _] = Enum.uniq([a, v, v2])
     refute a =~ "global"
     {:ok, am} = sub(s, "subscription { feedMap { id body } }", admin_u())
     {:ok, vm} = sub(s, "subscription { feedMap { id body } }", viewer_u())
@@ -631,6 +633,7 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
     use Warden.Absinthe, authorizer: Warden.ConfirmProbe.Authz
 
     alias Absinthe.Blueprint.Schema.{FieldDefinition, InputValueDefinition}
+    alias Warden.Absinthe.Hydrate
 
     import_sdl """
     type Query {
@@ -641,13 +644,13 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
     def hydrate(%InputValueDefinition{identifier: :raw}, [
           %FieldDefinition{identifier: :salary} | _
         ]) do
-      [Warden.Absinthe.Hydrate.meta(rule: role(:admin)), {:meta, [cache: false]}]
+      [Hydrate.meta(rule: role(:admin)), {:meta, [cache: false]}]
     end
 
     def hydrate(%InputValueDefinition{identifier: :other}, [
           %FieldDefinition{identifier: :salary} | _
         ]) do
-      [{:meta, [cache: false]}, Warden.Absinthe.Hydrate.meta(rule: role(:admin)), {:meta, [x: 1]}]
+      [{:meta, [cache: false]}, Hydrate.meta(rule: role(:admin)), {:meta, [x: 1]}]
     end
 
     def hydrate(%FieldDefinition{identifier: :salary}, _), do: [{:resolve, &__MODULE__.salary/3}]
@@ -670,6 +673,8 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
   defmodule Grid do
     use Absinthe.Schema
     use Warden.Absinthe, authorizer: Warden.Test.Authz
+
+    alias Absinthe.Resolution.Helpers
 
     # Warden.Absinthe.Plugin deliberately first.
     def plugins,
@@ -703,7 +708,7 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
 
       field :asecrets, list_of(list_of(:zsecret)) do
         resolve fn _, _, _ ->
-          Absinthe.Resolution.Helpers.async(fn -> {:ok, [[%{id: "s1"}]]} end)
+          Helpers.async(fn -> {:ok, [[%{id: "s1"}]]} end)
         end
       end
 
@@ -727,21 +732,21 @@ defmodule Warden.Adversarial.ConfirmProbesTest do
 
     pipeline =
       schema
-      |> Absinthe.Pipeline.for_document(context: ctx)
-      |> Absinthe.Pipeline.before(Absinthe.Phase.Document.Execution.Resolution)
+      |> Pipeline.for_document(context: ctx)
+      |> Pipeline.before(Absinthe.Phase.Document.Execution.Resolution)
 
     bps =
       for doc <- docs do
-        {:ok, bp, _} = Absinthe.Pipeline.run(doc, pipeline)
+        {:ok, bp, _} = Pipeline.run(doc, pipeline)
         bp
       end
 
-    task = Task.async(fn -> Absinthe.Pipeline.BatchResolver.run(bps, schema: schema) end)
+    task = Task.async(fn -> BatchResolver.run(bps, schema: schema) end)
 
     case Task.yield(task, 3_000) || Task.shutdown(task, :brutal_kill) do
       {:ok, results} ->
         for bp <- results do
-          {:ok, bp, _} = Absinthe.Pipeline.run(bp, [Absinthe.Phase.Document.Result])
+          {:ok, bp, _} = Pipeline.run(bp, [Absinthe.Phase.Document.Result])
           bp.result
         end
 

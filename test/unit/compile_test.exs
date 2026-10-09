@@ -3,6 +3,8 @@ defmodule Warden.CompileTest do
 
   import Warden.Test.CompileHelpers
 
+  alias Warden.Absinthe.Verifier
+
   @query """
     query do
       field :ok, :string
@@ -314,6 +316,8 @@ defmodule Warden.CompileTest do
         @moduledoc false
         use Absinthe.Phase
 
+        alias Warden.Absinthe.Middleware
+
         def run(bp, _) do
           [sd] = bp.schema_definitions
 
@@ -325,8 +329,7 @@ defmodule Warden.CompileTest do
                     {k,
                      %{
                        f
-                       | middleware:
-                           Enum.reject(f.middleware, &Warden.Absinthe.Middleware.warden_entry?/1)
+                       | middleware: Enum.reject(f.middleware, &Middleware.warden_entry?/1)
                      }}
                   end)
 
@@ -359,7 +362,7 @@ defmodule Warden.CompileTest do
     end
 
     test "verify/1 passes on the test schema" do
-      assert Warden.Absinthe.Verifier.verify(Warden.Test.Schema) == :ok
+      assert Verifier.verify(Warden.Test.Schema) == :ok
     end
   end
 

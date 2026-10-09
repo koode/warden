@@ -13,12 +13,12 @@ defmodule Warden.Redteam.VariablesTest do
 
   test "declared but unprovided variable falls back to the argument default (control)" do
     r = q(~s|query($s: PostStatus) { posts(status: $s) { id } }|, viewer())
-    assert length(r.data["posts"]) == 2
+    assert [_, _] = r.data["posts"]
   end
 
   test "unprovided variable for a nested enum input field falls back to its default (control)" do
     r = q(~s|query($s: PostStatus) { posts(filter: {nested: {status: $s}}) { id } }|, viewer())
-    assert length(r.data["posts"]) == 2
+    assert [_, _] = r.data["posts"]
   end
 
   test "extra variables that are not used cannot change a restricted argument" do
@@ -27,7 +27,7 @@ defmodule Warden.Redteam.VariablesTest do
         variables: %{"s" => "PUBLISHED", "status" => "DRAFT", "includeDrafts" => true}
       )
 
-    assert length(r.data["posts"]) == 2
+    assert [_, _] = r.data["posts"]
   end
 
   test "list variable of input objects with one restricted entry" do

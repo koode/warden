@@ -7,10 +7,16 @@ defmodule Warden.Adversarial.PluginLoopTest do
 
   import Warden.Test.Helpers
 
+  alias Absinthe.Pipeline
+  alias Absinthe.Pipeline.BatchResolver
+  alias Warden.Absinthe.Phase.ItemErrors
+
   defmodule Schema do
     @moduledoc false
     use Absinthe.Schema
     use Warden.Absinthe, authorizer: Warden.Test.Authz
+
+    alias Absinthe.Resolution.Helpers
 
     def plugins, do: [Absinthe.Middleware.Async | Absinthe.Plugin.defaults()]
 
@@ -26,7 +32,7 @@ defmodule Warden.Adversarial.PluginLoopTest do
 
       field :async_secrets, list_of(:secret) do
         resolve fn box, _, _ ->
-          Absinthe.Resolution.Helpers.async(fn -> {:ok, box.secrets} end)
+          Helpers.async(fn -> {:ok, box.secrets} end)
         end
       end
 
@@ -65,16 +71,16 @@ defmodule Warden.Adversarial.PluginLoopTest do
 
     pipeline =
       Schema
-      |> Absinthe.Pipeline.for_document(context: ctx)
-      |> Absinthe.Pipeline.before(Absinthe.Phase.Document.Execution.Resolution)
+      |> Pipeline.for_document(context: ctx)
+      |> Pipeline.before(Absinthe.Phase.Document.Execution.Resolution)
 
     bps =
       for doc <- docs do
-        {:ok, bp, _} = Absinthe.Pipeline.run(doc, pipeline)
+        {:ok, bp, _} = Pipeline.run(doc, pipeline)
         bp
       end
 
-    task = Task.async(fn -> Absinthe.Pipeline.BatchResolver.run(bps, schema: Schema) end)
+    task = Task.async(fn -> BatchResolver.run(bps, schema: Schema) end)
     Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
   end
 
@@ -105,7 +111,7 @@ defmodule Warden.Adversarial.PluginLoopTest do
       execution: %{exec | result: %Absinthe.Blueprint.Result.Leaf{emitter: nil, value: nil}}
     }
 
-    {:ok, bp} = Warden.Absinthe.Phase.ItemErrors.run(bp, [])
+    {:ok, bp} = ItemErrors.run(bp, [])
 
     assert Warden.Absinthe.Plugin.pipeline([], bp.execution) == []
   end
@@ -115,10 +121,10 @@ defmodule Warden.Adversarial.PluginLoopTest do
     assert {:ok, results} = batch([doc, doc], viewer())
 
     for bp <- results do
-      {:ok, bp, _} = Absinthe.Pipeline.run(bp, [Absinthe.Phase.Document.Result])
+      {:ok, bp, _} = Pipeline.run(bp, [Absinthe.Phase.Document.Result])
       assert bp.result.data == %{"grid" => %{"rows" => [[nil], [nil]]}}
       # Each document reports its own two denials, no more.
-      assert length(bp.result.errors) == 2
+      assert [_, _] = bp.result.errors
     end
   end
 

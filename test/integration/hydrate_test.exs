@@ -3,10 +3,15 @@ defmodule Warden.Integration.HydrateTest do
 
   import Warden.Test.Helpers
 
+  alias Warden.Absinthe.Hydrate
+  alias Warden.Test.CompileHelpers
+
   defmodule SDLSchema do
     @moduledoc false
     use Absinthe.Schema
     use Warden.Absinthe, authorizer: Warden.Test.Authz
+
+    alias Warden.Absinthe.Hydrate
 
     import_sdl """
     type Query {
@@ -23,7 +28,7 @@ defmodule Warden.Integration.HydrateTest do
     alias Absinthe.Blueprint.Schema.{FieldDefinition, ObjectTypeDefinition}
 
     def hydrate(%ObjectTypeDefinition{identifier: :secret}, _) do
-      [Warden.Absinthe.Hydrate.meta([rule: role(:admin)], cache: false)]
+      [Hydrate.meta([rule: role(:admin)], cache: false)]
     end
 
     def hydrate(%FieldDefinition{identifier: :secret}, [
@@ -37,7 +42,7 @@ defmodule Warden.Integration.HydrateTest do
         ]) do
       [
         {:resolve, &__MODULE__.salary/2},
-        Warden.Absinthe.Hydrate.meta(rule: authenticated(), args: [raw: role(:admin)])
+        Hydrate.meta(rule: authenticated(), args: [raw: role(:admin)])
       ]
     end
 
@@ -74,20 +79,22 @@ defmodule Warden.Integration.HydrateTest do
 
   test "Warden.Absinthe.Hydrate.meta validates its input" do
     assert_raise ArgumentError, ~r/invalid rule rule/, fn ->
-      Warden.Absinthe.Hydrate.meta(rule: :admin)
+      Hydrate.meta(rule: :admin)
     end
 
     assert_raise ArgumentError, ~r/invalid list policy/, fn ->
-      Warden.Absinthe.Hydrate.meta(list_policy: :x)
+      Hydrate.meta(list_policy: :x)
     end
 
-    assert_raise ArgumentError, ~r/unknown/, fn -> Warden.Absinthe.Hydrate.meta(nope: 1) end
+    assert_raise ArgumentError, ~r/unknown/, fn -> Hydrate.meta(nope: 1) end
   end
 
   defmodule ArgSchema do
     @moduledoc false
     use Absinthe.Schema
     use Warden.Absinthe, authorizer: Warden.Test.Authz
+
+    alias Warden.Absinthe.Hydrate
 
     import_sdl """
     type Query {
@@ -101,7 +108,7 @@ defmodule Warden.Integration.HydrateTest do
     def hydrate(%InputValueDefinition{identifier: :raw}, [
           %FieldDefinition{identifier: :salary} | _
         ]) do
-      [Warden.Absinthe.Hydrate.meta(rule: role(:admin))]
+      [Hydrate.meta(rule: role(:admin))]
     end
 
     def hydrate(%FieldDefinition{identifier: :salary}, _), do: [{:resolve, &__MODULE__.salary/2}]
@@ -109,7 +116,7 @@ defmodule Warden.Integration.HydrateTest do
     # A later plain {:meta, _} must not drop the Warden rule.
     def hydrate(%FieldDefinition{identifier: :bonus}, _) do
       [
-        Warden.Absinthe.Hydrate.meta(rule: role(:admin)),
+        Hydrate.meta(rule: role(:admin)),
         {:meta, [cache: false]},
         {:resolve, &__MODULE__.salary/2}
       ]
@@ -133,8 +140,8 @@ defmodule Warden.Integration.HydrateTest do
 
   test "two hydrations that set a Warden key to different values fail compilation" do
     assert_raise CompileError, ~r/sets :warden_rule on .* twice with different values/, fn ->
-      Warden.Test.CompileHelpers.compile!("""
-      defmodule #{Warden.Test.CompileHelpers.unique("Warden.Test.Compiled.SDL")} do
+      CompileHelpers.compile!("""
+      defmodule #{CompileHelpers.unique("Warden.Test.Compiled.SDL")} do
         use Absinthe.Schema
         use Warden.Absinthe, authorizer: Warden.Test.Authz
 
@@ -151,8 +158,8 @@ defmodule Warden.Integration.HydrateTest do
 
   test "hydrated rules are checked against the catalog at compile time" do
     assert_raise CompileError, ~r/role :ghost is not in the authorizer's role catalog/, fn ->
-      Warden.Test.CompileHelpers.compile!("""
-      defmodule #{Warden.Test.CompileHelpers.unique("Warden.Test.Compiled.SDL")} do
+      CompileHelpers.compile!("""
+      defmodule #{CompileHelpers.unique("Warden.Test.Compiled.SDL")} do
         use Absinthe.Schema
         use Warden.Absinthe, authorizer: Warden.Test.Authz
 

@@ -12,12 +12,10 @@ defmodule Warden.Redteam.SchemaConstructionTest do
   @authz "authorizer: Warden.Redteam.Authz"
 
   defp strict_error(body, mode) do
-    try do
-      compile_schema(body, @authz <> ", strict_mode: #{inspect(mode)}")
-      :compiled
-    rescue
-      e in CompileError -> {:error, Exception.message(e)}
-    end
+    compile_schema(body, @authz <> ", strict_mode: #{inspect(mode)}")
+    :compiled
+  rescue
+    e in CompileError -> {:error, Exception.message(e)}
   end
 
   describe "introspection guard" do

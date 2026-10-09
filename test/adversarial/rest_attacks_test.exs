@@ -7,6 +7,7 @@ defmodule Warden.Adversarial.RestAttacksTest do
   import Plug.Conn
   import Plug.Test
   import Warden.Rule
+  import Warden.Test.Helpers, only: [untyped: 1]
 
   alias Warden.{Actor, ForbiddenError, PolicyError}
 
@@ -134,7 +135,7 @@ defmodule Warden.Adversarial.RestAttacksTest do
     forged = %Actor{subject: %{id: "x"}, roles: MapSet.new([:admin])}
 
     assert_raise PolicyError, ~r/has no authorizer/, fn ->
-      apply(Warden, :authorize, [forged, role(:admin)])
+      Warden.authorize(untyped(forged), role(:admin))
     end
   end
 
@@ -305,7 +306,7 @@ defmodule Warden.Adversarial.RestAttacksTest do
 
   test "a context that is neither a map nor an actor" do
     for bad <- [nil, "u1", [current_user: %{roles: [:admin]}], {:admin}] do
-      assert_raise ArgumentError, fn -> apply(Warden, :authorize, [bad, role(:admin)]) end
+      assert_raise ArgumentError, fn -> Warden.authorize(untyped(bad), role(:admin)) end
     end
   end
 end

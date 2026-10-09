@@ -5,6 +5,8 @@ defmodule Warden.RedteamExec.ExecutionTest do
   import Warden.RedteamExec.Helpers
   import Warden.Test.CompileHelpers
 
+  alias Absinthe.Pipeline.BatchResolver
+  alias Warden.RedteamExec.Authz
   alias Warden.RedteamExec.Data
 
   @schema Warden.RedteamExec.Schema
@@ -71,7 +73,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
     test "a replacement value of a denied object type is still nulled" do
       Process.put(:rx_deny, fn
         %{kind: :field} -> {:replace, Data.secret()}
-        d -> Warden.Authorizer.default_deny(d, Warden.RedteamExec.Authz.__warden_catalog__())
+        d -> Warden.Authorizer.default_deny(d, Authz.__warden_catalog__())
       end)
 
       result = run("{ replaced { code } }", viewer())
@@ -82,7 +84,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
     test "a replacement value carrying denied nested field data does not leak it" do
       Process.put(:rx_deny, fn
         %{kind: :field, field: :replaced_post} -> {:replace, Data.post()}
-        d -> Warden.Authorizer.default_deny(d, Warden.RedteamExec.Authz.__warden_catalog__())
+        d -> Warden.Authorizer.default_deny(d, Authz.__warden_catalog__())
       end)
 
       result = run("{ replacedPost { title notes } }", viewer())
@@ -93,7 +95,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
     test "a replacement list with denied items under :filter drops them" do
       Process.put(:rx_deny, fn
         %{kind: :field} -> {:replace, [Data.secret(), Data.secret2()]}
-        d -> Warden.Authorizer.default_deny(d, Warden.RedteamExec.Authz.__warden_catalog__())
+        d -> Warden.Authorizer.default_deny(d, Authz.__warden_catalog__())
       end)
 
       result = run("{ replacedList { code } }", viewer())
@@ -335,7 +337,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
       {:ok, bp, _} = Absinthe.Pipeline.run(doc, pipeline)
 
       task =
-        Task.async(fn -> Absinthe.Pipeline.BatchResolver.run([bp], schema: @schema) end)
+        Task.async(fn -> BatchResolver.run([bp], schema: @schema) end)
 
       outcome = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
       assert {:ok, [_]} = outcome
@@ -352,7 +354,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
       {:ok, bp, _} = Absinthe.Pipeline.run("{ box { secrets { id } } }", pipeline)
 
       task =
-        Task.async(fn -> Absinthe.Pipeline.BatchResolver.run([bp], schema: @schema) end)
+        Task.async(fn -> BatchResolver.run([bp], schema: @schema) end)
 
       assert {:ok, [_]} = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
     end
@@ -376,7 +378,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
       {:ok, bp2, _} = Absinthe.Pipeline.run("{ box { secrets: label } }", pipeline)
 
       task =
-        Task.async(fn -> Absinthe.Pipeline.BatchResolver.run([bp1, bp2], schema: @schema) end)
+        Task.async(fn -> BatchResolver.run([bp1, bp2], schema: @schema) end)
 
       assert {:ok, [_, out2]} = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
 
@@ -395,7 +397,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
           {:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}
 
         denial ->
-          Warden.Authorizer.default_deny(denial, Warden.RedteamExec.Authz.__warden_catalog__())
+          Warden.Authorizer.default_deny(denial, Authz.__warden_catalog__())
       end)
 
       schema =
@@ -419,7 +421,7 @@ defmodule Warden.RedteamExec.ExecutionTest do
 
       result = run("{ list { code } }", viewer(), schema: schema)
       assert result.data == %{"list" => [nil, nil]}
-      assert length(result.errors) == 2
+      assert [_, _] = result.errors
     end
   end
 end

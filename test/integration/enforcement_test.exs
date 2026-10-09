@@ -3,6 +3,8 @@ defmodule Warden.Integration.EnforcementTest do
 
   import Warden.Test.Helpers
 
+  alias Warden.Test.Data
+
   describe "field rules" do
     test "a denied field is null with a Forbidden error and its resolver does not run" do
       result = run("{ adminStats }", viewer())
@@ -129,7 +131,7 @@ defmodule Warden.Integration.EnforcementTest do
       result = run("{ restricted { __typename } }", viewer())
       assert result.data == %{"restricted" => List.duplicate(nil, 6)}
 
-      both = Warden.Test.Data.as([:auditor, :viewer], "u7")
+      both = Data.as([:auditor, :viewer], "u7")
       result = run("{ restricted { __typename } }", both)
       assert Enum.all?(result.data["restricted"], & &1)
     end

@@ -6,6 +6,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
   import Warden.RedteamExec.Helpers
   import Warden.Test.CompileHelpers
 
+  alias Warden.RedteamExec.Authz
   alias Warden.RedteamExec.Data
 
   setup do
@@ -157,7 +158,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
           {:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}
 
         denial ->
-          Warden.Authorizer.default_deny(denial, Warden.RedteamExec.Authz.__warden_catalog__())
+          Warden.Authorizer.default_deny(denial, Authz.__warden_catalog__())
       end)
 
       result =
@@ -171,7 +172,7 @@ defmodule Warden.RedteamExec.AuthorizerContractTest do
         assert error.extensions == %{code: "FORBIDDEN"}
       end
 
-      assert length(result.errors) == 3
+      assert [_, _, _] = result.errors
     end
 
     test "expose_denial_reasons lists only missing roles/permissions, never checks or held roles" do
