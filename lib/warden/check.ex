@@ -9,9 +9,11 @@ defmodule Warden.Check do
       root type rule it is the root value. At subscribe time it is `nil`.
     * `args` holds the field arguments (after variables and defaults).
     * `argument` is the argument or input field path for argument rules, else `nil`.
-    * `context` is the Absinthe context.
+    * `context` is the Absinthe context, the conn context (`Warden.Plug`) or the context
+      given to the core API.
     * `field`, `parent_type` and `type` are identifiers, when known.
-    * `resolution` is the `Absinthe.Resolution` struct, or `nil` at subscribe time.
+    * `resolution` is the `Absinthe.Resolution` struct, or `nil` at subscribe time and
+      outside GraphQL.
   """
 
   @type t :: %__MODULE__{
@@ -25,7 +27,7 @@ defmodule Warden.Check do
           field: atom | nil,
           parent_type: atom | nil,
           type: atom | nil,
-          resolution: Absinthe.Resolution.t() | nil
+          resolution: struct() | nil
         }
 
   defstruct [

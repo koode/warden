@@ -2,7 +2,8 @@ defmodule Warden.Denial do
   @moduledoc """
   Describes a denied authorization, passed to `c:Warden.Authorizer.deny/1`.
 
-    * `kind`: `:field | :object | :argument | :subscribe | :introspection`.
+    * `kind`: `:field | :object | :argument | :subscribe | :introspection` (GraphQL),
+      `:call` (the core API and `Warden.Plug`).
     * `rule`: the rule that was evaluated. `failed_rule`: the sub-rule that failed.
     * `missing_roles` / `missing_permissions`: what the actor lacked, as far as it can be
       computed (empty for `check` and `authenticated` failures).
@@ -16,7 +17,7 @@ defmodule Warden.Denial do
       `:fail_list`), else `nil`.
   """
 
-  @type kind :: :field | :object | :argument | :subscribe | :introspection
+  @type kind :: :field | :object | :argument | :subscribe | :introspection | :call
 
   @type t :: %__MODULE__{
           kind: kind,

@@ -7,7 +7,11 @@ defmodule Warden.Actor do
   A role mapped to `:all` in `role_permissions` adds the `:all` marker to `permissions`,
   which grants every permission (never a role).
 
-  The actor is built once per document execution and cached in `resolution.acc`.
+  `authorizer` is the authorizer module that built the actor. The core API refuses an
+  actor built by a different authorizer than the one it is asked to use.
+
+  In GraphQL the actor is built once per document execution and cached in
+  `resolution.acc`; in Plug once per conn, cached in `conn.private`.
   """
 
   require Logger
@@ -15,10 +19,11 @@ defmodule Warden.Actor do
   @type t :: %__MODULE__{
           subject: term,
           roles: MapSet.t(atom),
-          permissions: MapSet.t(term)
+          permissions: MapSet.t(term),
+          authorizer: module | nil
         }
 
-  defstruct subject: nil, roles: MapSet.new(), permissions: MapSet.new()
+  defstruct subject: nil, roles: MapSet.new(), permissions: MapSet.new(), authorizer: nil
 
   @doc "Returns true when the actor has no subject."
   @spec anonymous?(t) :: boolean
@@ -43,7 +48,7 @@ defmodule Warden.Actor do
     case authorizer.subject(context) do
       # `false` is a common "no user" value; it is anonymous, never a subject.
       anonymous when anonymous in [nil, false] ->
-        %__MODULE__{}
+        %__MODULE__{authorizer: authorizer}
 
       # A failed lookup is a bug in subject/1 (or an unhandled error), not a user.
       failed when failed == :error or (is_tuple(failed) and elem(failed, 0) == :error) ->
@@ -67,7 +72,7 @@ defmodule Warden.Actor do
 
         perms = MapSet.union(MapSet.new(perms), role_permissions(roles, catalog))
 
-        %__MODULE__{subject: subject, roles: roles, permissions: perms}
+        %__MODULE__{subject: subject, roles: roles, permissions: perms, authorizer: authorizer}
     end
   end
 

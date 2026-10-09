@@ -4,16 +4,27 @@ defmodule Warden.Absinthe do
 
       defmodule MyApp.Schema do
         use Absinthe.Schema
-        use Warden.Absinthe, authorizer: MyApp.Authz
+        use Warden.Absinthe, authorizer: MyApp.Authz   # explicit authorizer
 
         # ...
       end
 
-  `use Warden.Absinthe` must come after `use Absinthe.Schema`.
+      defmodule MyApp.Schema do
+        use Absinthe.Schema
+        use Warden.Absinthe                            # config :warden, authorizer: MyApp.Authz
+
+        # ...
+      end
+
+  `use Warden.Absinthe` must come after `use Absinthe.Schema`. Needs the `absinthe`
+  dependency.
 
   ## Options
 
-    * `:authorizer` (required) - a module that uses `Warden.Authorizer`.
+    * `:authorizer` - a module that uses `Warden.Authorizer`. Resolution order: this
+      option, then the configured default (`config :warden, authorizer: MyApp.Authz`),
+      resolved at compile time. With neither, compilation fails with an `ArgumentError`
+      that names the fix.
     * `:strict_mode` - `false` (default), `:root` or `:all`. See the README.
     * `:default_object_rule` - rule for object types without their own rule (root and
       introspection types excluded). Default `nil` (none). Setting it to `public()` is a
@@ -51,6 +62,17 @@ defmodule Warden.Absinthe do
         [],
         env
       )
+
+    # The authorizer comes from the option or the configured default, resolved by the
+    # same core function as every other entry point (raises ArgumentError without one).
+    opts =
+      case Keyword.get(opts, :authorizer) do
+        explicit when is_atom(explicit) ->
+          Keyword.put(opts, :authorizer, Warden.resolve_authorizer!(explicit))
+
+        _ ->
+          opts
+      end
 
     config =
       case validate_options(opts) do
@@ -104,7 +126,7 @@ defmodule Warden.Absinthe do
     errors =
       if is_atom(authorizer) and authorizer != nil,
         do: errors,
-        else: ["`:authorizer` is required and must be a module" | errors]
+        else: ["`:authorizer` must be a module" | errors]
 
     strict = Keyword.get(opts, :strict_mode, false)
 

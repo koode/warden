@@ -498,7 +498,7 @@ defmodule Warden.Property.OracleTest do
       value = %{owner: owner}
       context = %{actor: actor}
       expected = oracle_eval(rule, actor, value)
-      result = Warden.authorize(Warden.Test.Prop.Authz, rule, context, value)
+      result = Warden.authorize(context, rule, authorizer: Warden.Test.Prop.Authz, value: value)
       assert result == :ok == expected, "rule: #{inspect(rule)}, actor: #{inspect(actor)}"
     end
   end

@@ -156,15 +156,18 @@ defmodule Warden.RuleTest do
     end
   end
 
-  describe "Warden.authorize/4" do
+  describe "Warden.authorize/3" do
     test "evaluates outside of an execution" do
       ctx = %{current_user: %{id: "u1", roles: [:admin]}}
-      assert Warden.authorize(Authz, permission("secrets:read"), ctx) == :ok
-      assert {:deny, _} = Warden.authorize(Authz, role(:admin), %{current_user: nil})
+      assert Warden.authorize(ctx, permission("secrets:read"), authorizer: Authz) == :ok
 
-      assert Warden.authorize(Authz, check(:self), %{current_user: %{id: "u1", roles: []}}, %{
-               id: "u1"
-             }) == :ok
+      assert {:error, %Warden.Denial{kind: :call}} =
+               Warden.authorize(%{current_user: nil}, role(:admin), authorizer: Authz)
+
+      assert Warden.authorize(%{current_user: %{id: "u1", roles: []}}, check(:self),
+               authorizer: Authz,
+               value: %{id: "u1"}
+             ) == :ok
     end
   end
 end

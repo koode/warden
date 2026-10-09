@@ -80,7 +80,25 @@ defmodule Warden.Authorizer do
   """
   @callback actor_key(Actor.t(), context :: map) :: String.t() | nil
 
-  @optional_callbacks permissions: 2, check: 2, deny: 1, actor_key: 2
+  @doc """
+  `Warden.Plug` only. Returns the context to build the actor from for a conn. Default:
+  `Map.put(conn.assigns, :conn, conn)`, so a `subject/1` that reads
+  `context[:current_user]` serves GraphQL and REST alike.
+  """
+  @callback conn_context(conn :: struct()) :: map
+
+  @doc """
+  `Warden.Plug` only. Handles a denied request: send a response. Whatever it returns,
+  the plug halts the conn, and sends the default response when the handler sent none.
+  """
+  @callback deny_conn(conn :: struct(), Denial.t()) :: struct()
+
+  @optional_callbacks permissions: 2,
+                      check: 2,
+                      deny: 1,
+                      actor_key: 2,
+                      conn_context: 1,
+                      deny_conn: 2
 
   @option_keys [
     :roles,

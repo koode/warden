@@ -185,13 +185,27 @@ defmodule Warden.CompileTest do
       end
     end
 
+    test "without `authorizer:` the schema uses the configured default" do
+      schema = compile_schema(@query, "strict_mode: false")
+      assert schema.__warden__(:options).authorizer == Warden.Test.Authz
+    end
+
+    test "an explicit `authorizer:` wins over the configured default" do
+      schema = compile_schema(@query, "authorizer: Warden.Test.Prop.Authz")
+      assert schema.__warden__(:options).authorizer == Warden.Test.Prop.Authz
+    end
+
     test "invalid schema options fail" do
       assert_raise CompileError, ~r/`:strict_mode` must be false, :root or :all/, fn ->
         compile_schema(@query, "authorizer: Warden.Test.Authz, strict_mode: true")
       end
 
-      assert_raise CompileError, ~r/`:authorizer` is required/, fn ->
-        compile_schema(@query, "strict_mode: false")
+      assert_raise ArgumentError, ~r/is not a Warden authorizer/, fn ->
+        compile_schema(@query, "authorizer: Enum")
+      end
+
+      assert_raise CompileError, ~r/`:authorizer` must be a module/, fn ->
+        compile_schema(@query, ~s|authorizer: "MyApp.Authz"|)
       end
 
       assert_raise CompileError, ~r/`:default_object_rule`: role :nobody/, fn ->
