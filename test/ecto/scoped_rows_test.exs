@@ -60,7 +60,7 @@ defmodule Warden.Ecto.ScopedRowsTest do
       assert count > 0
     end
 
-    test "marks a partial select of the root, never a select_merge" do
+    test "marks a partial select of the root, never a select_merge into a persisted field" do
       actor = actor(@both_tenants)
       partial = from(issue in Issue, select: [:id, :workspace_id])
       rows = WardenEcto.all(Repo, partial, actor, :read)
@@ -73,6 +73,49 @@ defmodule Warden.Ecto.ScopedRowsTest do
       merged = from(issue in Issue, select_merge: %{title: "changed"})
       rows = WardenEcto.all(Repo, merged, actor, :read)
       assert Enum.all?(rows, &(&1.__meta__.context == nil))
+    end
+
+    test "marks a select_merge that fills only virtual fields of the whole root" do
+      actor = actor(@both_tenants)
+      literal = from(issue in Issue, select_merge: %{team_name: "a team"})
+
+      # The joined team's name lands in a virtual field, which no policy reads: it is
+      # data, not authority, so the issue is still the row the scope admitted.
+      joined =
+        from(issue in Issue,
+          join: team in assoc(issue, :team),
+          select_merge: %{team_name: team.name}
+        )
+
+      for query <- [literal, joined] do
+        rows = WardenEcto.all(Repo, query, actor, :read)
+        assert [_first, _second, _third, _fourth] = rows
+        assert Enum.all?(rows, &match?(%Warden.Ecto.Mark{}, &1.__meta__.context))
+
+        {filtered, count} = count_queries(fn -> WardenEcto.filter(actor, :read, rows) end)
+        assert filtered == rows
+        assert count == 0
+      end
+    end
+
+    test "never marks a select_merge into a persisted field, a partial root or a non-struct" do
+      actor = actor(@both_tenants)
+      merged = %{team_name: "a team", author_id: "kim"}
+
+      queries = [
+        from(issue in Issue, select_merge: %{team_name: "a team", workspace_id: "t2"}),
+        from(issue in Issue, select_merge: %{team_name: "a team"}, select_merge: %{title: "x"}),
+        from(issue in Issue, select: [:id, :workspace_id], select_merge: %{team_name: "a team"}),
+        from(issue in Issue, select_merge: ^merged),
+        from(issue in Issue, select: {issue, issue.id}),
+        from(issue in Issue, select: map(issue, [:id, :workspace_id]))
+      ]
+
+      for query <- queries do
+        rows = WardenEcto.all(Repo, query, actor, :read)
+        assert [_first, _second, _third, _fourth] = rows
+        refute Enum.any?(rows, &match?(%{__meta__: %{context: %Warden.Ecto.Mark{}}}, &1))
+      end
     end
 
     test "keeps rows that are not structs of the schema as they are" do

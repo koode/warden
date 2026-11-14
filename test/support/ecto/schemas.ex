@@ -32,6 +32,7 @@ defmodule Warden.Test.Ecto.Issue do
     field :priority, :decimal
     field :author_id, :string
     field :trashed_at, :utc_datetime
+    field :team_name, :string, virtual: true
     belongs_to(:team, Warden.Test.Ecto.Team)
     has_many(:comments, Warden.Test.Ecto.Comment)
   end

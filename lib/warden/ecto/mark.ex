@@ -55,14 +55,15 @@ if Code.ensure_loaded?(Ecto) do
     @type t :: %__MODULE__{call: Call.t(), values: tuple}
 
     # Marks the structs of the policy's schema in `rows`, when `query` returned its root
-    # binding as is and the actor has an instance. `context` is the one the scope ran
-    # with. A struct from a join, a `select_merge` or a source other than the schema's own
-    # is never marked, and neither is a struct from another prefix than the call's (the
+    # binding as is (or whole, with only virtual fields merged in) and the actor has an
+    # instance. `context` is the one the scope ran with. A struct from a join, a
+    # `select_merge` into a persisted field or a source other than the schema's own is
+    # never marked, and neither is a struct from another prefix than the call's (the
     # prefix of the first struct of the schema).
     @spec mark_all(list, map, atom, Actor.t(), map, Ecto.Query.t()) :: list
     def mark_all(rows, info, action, %Actor{instance: instance} = actor, context, query)
         when is_reference(instance) do
-      with true <- root_select?(query.select),
+      with true <- root_select?(query.select, info.schema),
            %{__meta__: %Ecto.Schema.Metadata{prefix: prefix}} <- first_of(rows, info.schema) do
         call = %Call{
           policy: info.policy,
@@ -83,9 +84,39 @@ if Code.ensure_loaded?(Ecto) do
 
     def mark_all(rows, _info, _action, _actor, _context, _query), do: rows
 
-    defp root_select?(nil), do: true
-    defp root_select?(%Ecto.Query.SelectExpr{expr: {:&, _meta, [0]}}), do: true
-    defp root_select?(_select), do: false
+    defp root_select?(nil, _schema), do: true
+    defp root_select?(%Ecto.Query.SelectExpr{expr: {:&, _meta, [0]}}, _schema), do: true
+
+    # A `select_merge` keeps the marks when it only fills virtual fields of the root
+    # schema into the whole root struct: a virtual field is never read by a policy, so
+    # what it holds (even a value from a joined binding) carries no authority. A merge
+    # into a persisted field, of anything but a literal map, or over a partial select of
+    # the root is not marked.
+    defp root_select?(
+           %Ecto.Query.SelectExpr{expr: {:merge, _meta, _args} = expr} = select,
+           schema
+         ),
+         do: not Map.has_key?(select.take, 0) and virtual_merge?(expr, schema)
+
+    defp root_select?(_select, _schema), do: false
+
+    defp virtual_merge?({:merge, _meta, [{:&, _root_meta, [0]}, merged]}, schema),
+      do: virtual_map?(merged, schema)
+
+    defp virtual_merge?({:merge, _meta, [{:merge, _inner_meta, _args} = inner, merged]}, schema),
+      do: virtual_merge?(inner, schema) and virtual_map?(merged, schema)
+
+    defp virtual_merge?(_expr, _schema), do: false
+
+    defp virtual_map?({:%{}, _meta, pairs}, schema) when is_list(pairs) do
+      virtual = schema.__schema__(:virtual_fields)
+      Enum.all?(pairs, &virtual_pair?(&1, virtual))
+    end
+
+    defp virtual_map?(_merged, _schema), do: false
+
+    defp virtual_pair?({key, _value}, virtual) when is_atom(key), do: key in virtual
+    defp virtual_pair?(_pair, _virtual), do: false
 
     defp first_of(rows, schema), do: Enum.find(rows, &match?(%{__struct__: ^schema}, &1))
 

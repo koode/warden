@@ -14,7 +14,9 @@
   policy's decisions read (primary key, tenant and the fields its clauses read; every
   persisted field for a hand-written `scope/4`, `allowed?/4` or `when:` function), and
   the marks of one call share one term for the rest, so a change to a field no clause
-  reads keeps the mark.
+  reads keeps the mark. A `select_merge` that fills only virtual fields of the whole
+  root struct (from a join too) keeps the marks; a merge into a persisted field does
+  not.
 - `Warden.Absinthe.actor/1`: the actor of the document execution, for resolvers (for
   example to load rows with `Warden.Ecto.all/5` that the object rules then trust).
   `use Warden.Absinthe, warm_actor: &MyApp.Authz.warm/2` (or `{module, function}`)

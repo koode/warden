@@ -218,9 +218,13 @@ if Code.ensure_loaded?(Ecto) do
 
     Only structs of the policy's schema that the query returns as its root binding are
     marked, never preloaded children (`scope/4` refuses preloads anyway), structs selected
-    from a join, a `select_merge`, or a struct whose `__meta__.context` is already set
-    (Postgres and MySQL leave it `nil`; other adapters may use it). Other rows come back
-    as they are.
+    from a join, or a struct whose `__meta__.context` is already set (Postgres and MySQL
+    leave it `nil`; other adapters may use it). A `select_merge` keeps the marks only when
+    every key it merges is a virtual field of the schema and the root is otherwise
+    selected whole: a virtual field is not authority, so it may hold anything, a value
+    from a joined binding included. A merge into a persisted field, of a value other than
+    a map, or over a partial `select:` of the root is not marked. Other rows come back as
+    they are.
 
     Options: those of `scope/4` (`:authorizer`, `:context`, `:tenant`, `:prefix`); every
     other option, and `:prefix`, goes to `repo.all/2`. Emits the telemetry of `scope/4`.

@@ -1256,7 +1256,12 @@ Paths are relative to `lib/warden/`.
   schema it returns. Ecto passes that field only to adapter callbacks, and the Postgres
   and MySQL adapters do not read it; a struct whose context is already set is not
   marked. A query whose select is not the root binding as is (a join's binding, a
-  `select_merge`) and a struct from a source other than the schema's are not marked.
+  `select_merge` into a persisted field) and a struct from a source other than the
+  schema's are not marked. A `select_merge` of a literal map (Ecto also turns a pinned
+  map into one) whose keys are all virtual fields of the root schema, over the whole
+  root, is marked: no clause, gate or mark comparison reads a virtual field, so its value
+  carries no authority, even when it comes from a joined binding. A merge over a partial
+  `select:` of the root, of any other expression, or with a persisted key is not.
   The mark names the policy, the action, the actor's `instance` (and, for a delegated
   actor, the instance of the delegator it carries), the context the scope ran with (the
   `context:` option, else the actor's own; a decision under a context that is not `===`

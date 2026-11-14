@@ -533,8 +533,18 @@ credential's tenant (`:tenant_binding`) and the system kinds. A mark counts only
 
 Only the root structs of the policy's schema are marked (a partial `select: [...]` of
 the root included): never preloaded children, structs selected from a join or changed by
-a `select_merge`, and never a struct whose `__meta__.context` an adapter already uses
-(Postgres and MySQL do not).
+a `select_merge` in a persisted field, and never a struct whose `__meta__.context` an
+adapter already uses (Postgres and MySQL do not). A `select_merge` that fills only
+virtual fields of the whole root struct keeps the marks, even with a value from a join:
+no policy reads a virtual field, so it carries no authority.
+
+```elixir
+query =
+  from(issue in MyApp.Issues.Issue,
+    join: team in assoc(issue, :team),
+    select_merge: %{team_name: team.name}   # team_name is virtual: still marked
+  )
+```
 `update_all/4` and `delete_all/3` keep their own guards.
 
 Without `all/5`, preload the `through:` parent in the resolver's query
