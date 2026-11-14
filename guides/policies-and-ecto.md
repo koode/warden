@@ -236,7 +236,9 @@ allow :read, member_of: {MyApp.Teams.Membership, :team_id, :user_id}
 ### `grant:`
 
 An explicit share, with an optional expiry. A share whose `expires_at` is in the past
-denies; `NULL` never expires.
+denies; `NULL` never expires. With `expires_at:` the share must be a schema, not a table
+name: Warden sends the current time in the column's own type, so a `timestamptz` column
+is compared without the session's time zone getting in the way.
 
 ```elixir
 allow :read,

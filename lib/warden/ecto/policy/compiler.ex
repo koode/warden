@@ -612,7 +612,13 @@ if Code.ensure_loaded?(Ecto) do
       do: ["`#{key}:` expects an Ecto schema or a table name, got: #{inspect(schema)}"]
 
     defp expires_errors(_schema, nil), do: []
-    defp expires_errors(schema, _expires) when is_binary(schema), do: []
+    # The current time must be sent in the column's own type (a naive timestamp compared
+    # with a `timestamptz` shifts by the session's time zone), so it needs a schema.
+    defp expires_errors(schema, _expires) when is_binary(schema) do
+      [
+        "`grant:` with `expires_at:` needs a schema, not the table name #{inspect(schema)}, so the column's type is known"
+      ]
+    end
 
     defp expires_errors(schema, expires) do
       type = if ecto_schema?(schema), do: schema.__schema__(:type, expires)

@@ -545,9 +545,9 @@ if Code.ensure_loaded?(Ecto) do
       )
     end
 
-    # The current time in the type of the `expires_at` field. A table name without a
-    # schema compares with a naive UTC timestamp (Ecto's default for timestamps).
-    defp now(link, expires) when is_atom(link) do
+    # The current time in the type of the `expires_at` field (the compiler requires a
+    # schema for `grant:` with `expires_at:`).
+    defp now(link, expires) do
       case link.__schema__(:type, expires) do
         :utc_datetime -> DateTime.truncate(DateTime.utc_now(), :second)
         :utc_datetime_usec -> DateTime.utc_now()
@@ -555,8 +555,6 @@ if Code.ensure_loaded?(Ecto) do
         _usec -> NaiveDateTime.utc_now()
       end
     end
-
-    defp now(_table, _expires), do: NaiveDateTime.utc_now()
 
     # Adds a verdict to a query as a `where`.
     @spec restrict(Ecto.Query.t(), verdict) :: Ecto.Query.t()

@@ -68,9 +68,21 @@ defmodule Warden.RedteamV2Ecto.Comments do
   allow(:read, actor_in: [:author_id])
 end
 
+defmodule Warden.RedteamV2Ecto.TeamGrant do
+  @moduledoc false
+  use Ecto.Schema
+
+  schema "rt_team_grants" do
+    field :team_id, :id
+    field :grantee_id, :string
+    field :expires_at, :utc_datetime
+  end
+end
+
 defmodule Warden.RedteamV2Ecto.Teams do
   @moduledoc false
-  # The grant table is named, not a schema, and its `expires_at` is a `timestamptz`.
+  # The grant table's `expires_at` is a `timestamptz`. A `grant:` with `expires_at:` needs
+  # a schema (a table name fails compilation), so the column's type is known.
   use Warden.Ecto.Policy,
     authorizer: Warden.RedteamV2Ecto.Authz,
     schema: Warden.Test.Ecto.Team,
@@ -79,7 +91,9 @@ defmodule Warden.RedteamV2Ecto.Teams do
     repo: Warden.Test.Repo,
     actions: [:read]
 
-  allow(:read, grant: {"rt_team_grants", :team_id, :grantee_id, expires_at: :expires_at})
+  allow(:read,
+    grant: {Warden.RedteamV2Ecto.TeamGrant, :team_id, :grantee_id, expires_at: :expires_at}
+  )
 end
 
 defmodule Warden.RedteamV2Ecto.Notes do

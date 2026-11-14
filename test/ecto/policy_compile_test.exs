@@ -130,6 +130,8 @@ defmodule Warden.Ecto.PolicyCompileTest do
              ~r/`expires_at:` :user_id must be a datetime field/},
             {"allow :read, grant: {Warden.Test.Ecto.TeamMembership, :team_id, :user_id, until: :x}",
              ~r/unknown \[:until\]/},
+            {"allow :read, grant: {\"team_memberships\", :team_id, :user_id, expires_at: :expires_at}",
+             ~r/`grant:` with `expires_at:` needs a schema, not the table name/},
             {"allow :read, through_type: {:name, :parent_id, %{}}", ~r/`through_type:` must be/},
             {"allow :read, through_type: {:name, :parent_id, %{1 => X}}",
              ~r/1 is not a valid :string for :name/},
