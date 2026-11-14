@@ -492,7 +492,10 @@ defmodule Warden.Evaluator do
 
       {:ok, path} ->
         schema = Dispatch.info!(policy).for
-        check.args |> get_path(path) |> List.wrap() |> Enum.map(&{schema, &1})
+        ids = check.args |> get_path(path) |> List.wrap()
+
+        # A nil id is never asked about; it denies the whole rule.
+        if nil in ids, do: [], else: Enum.map(ids, &{schema, &1})
     end
   end
 
