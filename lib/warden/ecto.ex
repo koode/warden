@@ -214,7 +214,7 @@ if Code.ensure_loaded?(Ecto) do
       {actor, context, authorizer} = Decision.setup(actor_or_context, opts)
       query = Ecto.Queryable.to_query(queryable)
 
-      case dataloader_policy(query, authorizer) do
+      case dataloader_policy(query.from.source, authorizer) do
         nil ->
           queryable
 
@@ -235,20 +235,47 @@ if Code.ensure_loaded?(Ecto) do
       """
     end
 
-    defp dataloader_policy(query, authorizer) do
-      with {_source, schema} when is_atom(schema) and schema != nil <- query.from.source,
-           policy when policy != nil <- Warden.Policy.policy_for(authorizer, schema) do
-        if not Info.ecto_policy?(policy) do
-          raise Warden.PolicyError, """
-          #{inspect(policy)} is not a Warden.Ecto.Policy, so it cannot scope Dataloader \
-          loads of #{inspect(schema)}\
-          """
-        end
+    # The policy of the load's root: a schema with a policy is scoped, a schema or a table
+    # without one passes through, and a root that cannot be classified (a subquery, a
+    # fragment) or a bare table that a policy covers raises.
+    defp dataloader_policy({table, nil}, authorizer) when is_binary(table) do
+      covered? =
+        Enum.any?(authorizer.__warden_catalog__().policies, fn policy ->
+          Info.ecto_policy?(policy) and Info.fetch!(policy).schema.__schema__(:source) == table
+        end)
 
-        policy
-      else
-        _no_policy -> nil
+      if covered? do
+        raise Warden.PolicyError, """
+        Warden.Ecto.dataloader_query/2 got the table #{inspect(table)} without its schema; \
+        load the schema so its policy scopes the load\
+        """
       end
+
+      nil
+    end
+
+    defp dataloader_policy({_table, schema}, authorizer) when is_atom(schema) do
+      case Warden.Policy.policy_for(authorizer, schema) do
+        nil ->
+          nil
+
+        policy ->
+          if not Info.ecto_policy?(policy) do
+            raise Warden.PolicyError, """
+            #{inspect(policy)} is not a Warden.Ecto.Policy, so it cannot scope Dataloader \
+            loads of #{inspect(schema)}\
+            """
+          end
+
+          policy
+      end
+    end
+
+    defp dataloader_policy(_source, _authorizer) do
+      raise Warden.PolicyError, """
+      Warden.Ecto.dataloader_query/2 cannot tell which schema the load reads (a subquery \
+      or fragment root), so it refuses to pass it through unscoped\
+      """
     end
 
     if Code.ensure_loaded?(Ecto.Adapters.SQL) do

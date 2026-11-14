@@ -441,7 +441,8 @@ Dataloader.Ecto.new(Repo,
 
 Every load of a schema with a `Warden.Ecto.Policy` is scoped (`:read` by default, or
 `warden_action:`), and schemas without a policy pass through. Without `warden_actor`
-the query function raises, so a load is never unscoped by accident.
+the query function raises, so a load is never unscoped by accident, and so does a root
+it cannot classify (a subquery or a fragment) or a bare table name that a policy covers.
 
 ## Exports
 
