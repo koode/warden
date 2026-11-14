@@ -878,7 +878,8 @@ clause compiler also derives an in-memory predicate where it can (preloaded pare
 and falls back to a query when it cannot.
 
 Functions (all take an actor or a context map, plus `authorizer:` like the core API):
-`Warden.Ecto.scope/3,4`, `allowed?/3,4`, `authorize/3,4`, `filter/3,4` (one query,
+`Warden.Ecto.scope/3,4`, `all/4,5` (the scoped rows, which later `can/2` decisions by the
+same actor instance and action trust), `allowed?/3,4`, `authorize/3,4`, `filter/3,4` (one query,
 order kept), `allowed?` on `{schema, id}`, `to_sql/4`, `dataloader_query/2`,
 `update_all/4` and `delete_all/3` (refuse a query that was not scoped for a write
 action), `allowed_actors/3`, `explain/3`. Several tenants: `scope/3` without `tenant:` uses
@@ -1192,6 +1193,32 @@ Paths are relative to `lib/warden/`.
 - **`repo:`.** The policy option names the repo for the queries Warden runs itself; the
   design's option list did not have one, but a `can/2` decision inside GraphQL has no
   other way to reach a repo.
+- **Scoped rows** (`ecto/mark.ex`). `Warden.Ecto.all/5` is `scope/4`, `repo.all/2` and a
+  `%Warden.Ecto.Mark{}` in `__meta__.context` of every root struct of the policy's
+  schema it returns. Ecto passes that field only to adapter callbacks, and the Postgres
+  and MySQL adapters do not read it; a struct whose context is already set is not
+  marked. A query whose select is not the root binding as is (a join's binding, a
+  `select_merge`) and a struct from a source other than the schema's are not marked.
+  The mark names the policy, the action, the actor's `instance` (and, for a delegated
+  actor, the instance of the delegator it carries), the prefix and the values of every
+  persisted field, the tenant included. `Decide` (the one place that decides a loaded
+  struct for every entry point: `can/2` in GraphQL and the core API, `allowed?/4`,
+  `filter/4`) runs the scope gates first and then answers `true` for a struct whose mark
+  matches all of these, before a hand-written `allowed?/4` and before the in-memory
+  clauses; `Dispatch` and the evaluator's binding screen run before it, so a mark never
+  turns `:tenant_binding`, `:system_kind` or `:not_a_tenant` into an allow. A struct
+  that matches nothing is decided as before. `Explain` answers a matching struct with
+  one step `{:admitted_by_scope, action}` after the gates. Telemetry has no field for
+  why a value passed, so an admitted row is an allowed value of the usual event.
+- **Actor instances.** `%Warden.Actor{}` has a private `instance`, a reference made by
+  `Actor.build/2`, `Actor.system/2` and `Actor.delegate/3`; struct updates of the same
+  actor (its cache, the delegator a decision hands back) keep it, and a reference
+  survives the `term_to_binary/1` round trip of cross-parent batching. Delegation gives
+  the delegated actor and the delegator it carries new instances, so a delegated actor
+  never reuses the marks of the agent or the delegator alone, and a mark made for it is
+  trusted for both of its sides. A hand-built actor has none and marks nothing.
+  `default_actor_key/1` and `inspect/1` leave it out. `Warden.Test.assert_policy_consistent/4`
+  removes marks before it asks the policy.
 
 ### Implementation notes: policy matrix
 

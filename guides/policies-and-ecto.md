@@ -484,11 +484,39 @@ In GraphQL, `can(MyApp.Authz.Issues, :read)` as an object rule asks the same pol
 once per list and tenant. `can(MyApp.Authz.Issues, :write, arg: [:id])` decides before
 the resolver runs.
 
-Rows a resolver loaded through `scope/4` are decided again by a `can/2` object rule:
-Warden does not know that a query was scoped, so the rule runs as for any other value,
-with one query per list (and tenant) for the clauses it cannot decide in memory. Preload
-the `through:` parent in the resolver's query (`preload: [:team]`) and Warden decides
-those rows in memory, without that query.
+Rows a resolver loaded with `scope/4` and `Repo.all/2` are decided again by a `can/2`
+object rule: Warden does not know that the query was scoped, so the rule runs as for any
+other value, with one query per list (and tenant) for the clauses it cannot decide in
+memory. Load them with `Warden.Ecto.all/5` instead, and the rule trusts them:
+
+```elixir
+issues = Warden.Ecto.all(Repo, query, actor, :read, tenant: workspace.id)
+```
+
+`all/5` runs the scoped query and marks every row it returns as admitted by that scope,
+in the row's `__meta__.context`. A later decision about a marked row allows it without a
+query, after the gates that come before every policy: the actor's tenants, a bound
+credential's tenant (`:tenant_binding`) and the system kinds. A mark counts only:
+
+* for the actor instance that loaded the rows. An actor built again from the same
+  context, in another request, or by `Warden.on_behalf_of/3` decides the rows through
+  the policy, so a struct cached across requests never carries authority with it. Pass
+  the actor that the decisions use: a context map builds a new actor on every call. In
+  GraphQL the object rules use the actor of the document execution;
+* for the policy and action it was loaded for: rows loaded for `:read` are decided as
+  usual for `:write`;
+* for the row as loaded: a struct whose persisted fields or prefix changed is decided as
+  it is.
+
+Only the root structs of the policy's schema are marked (a partial `select: [...]` of
+the root included): never preloaded children, structs selected from a join or changed by
+a `select_merge`, and never a struct whose `__meta__.context` an adapter already uses
+(Postgres and MySQL do not).
+`update_all/4` and `delete_all/3` keep their own guards.
+
+Without `all/5`, preload the `through:` parent in the resolver's query
+(`preload: [:team]`) and Warden decides those rows in memory, without that query.
+`dataloader_query/2` does not mark the rows it scopes.
 
 ## Audiences
 
@@ -584,7 +612,10 @@ the write only: the scope decides which rows may change, not what they hold afte
 
 Every clause and every key in it, evaluated for that row against the database: which
 `allow` admits the row, which `requires` blocks it, or which gate denied it before the
-policy was asked. For development tools, tests and audit logs, not for every request.
+policy was asked. For development tools, tests and audit logs, not for every request. A
+row that `all/5` loaded for the same actor and action is explained as one step,
+`{:admitted_by_scope, action}`, after the gates, as `can/2` decides it; explain the row
+by id (`{MyApp.Issues.Issue, id}`) to see its clauses.
 
 ## Indexes
 

@@ -10,6 +10,21 @@
 - `Warden.Ecto.to_sql/4` takes `bind:` (`%{host_placeholder => value}`): a value the
   scope needs that the host statement already binds uses the host's placeholder instead
   of a new parameter.
+- `Warden.Ecto.all/4,5`: runs a query scoped by `scope/4` and marks the rows it returns,
+  so a later `can/2` decision (a GraphQL object rule, `Warden.Ecto.allowed?/4`,
+  `Warden.Ecto.filter/4`, `Warden.filter/4`) by the same actor instance for the same
+  policy and action allows them without a query, after the tenant, binding and
+  system-kind gates. `Warden.Ecto.explain/4` explains such a row as
+  `{:admitted_by_scope, action}`.
+
+### Changed
+
+- `%Warden.Actor{}` has a private `instance` reference, new for every actor that
+  `Warden.actor/2`, `Warden.system_actor/2` and `Warden.on_behalf_of/3` build, so two
+  actors built from the same context are no longer `==`. `inspect/1` and
+  `default_actor_key/1` leave it out.
+- `Warden.Test.assert_policy_consistent/4` removes the marks of `Warden.Ecto.all/5`
+  from the rows before asking the policy.
 
 ## 0.2.0 (2026-11-14)
 
