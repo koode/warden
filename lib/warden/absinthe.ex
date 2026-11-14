@@ -34,6 +34,11 @@ if Code.ensure_loaded?(Absinthe) do
       * `:introspection` - rule that guards `__schema` and `__type`. Default `public()`.
       * `:list_policy` - default list policy: `:null_item` (default), `:filter` or
         `:fail_list`.
+      * `:require_can_for` - schemas (or struct modules) whose object types must use
+        `can/2` with that schema's policy in their object rule. Needs `strict_mode: :all`.
+        An object type is linked to a schema by `warden_schema Schema` or by a `can/2`
+        rule whose policy is for it; a listed schema no object type is linked to fails
+        compilation too.
 
     At compile time Warden validates every rule against the authorizer's catalogs,
     attaches its middleware to every field that needs it, and then verifies the compiled

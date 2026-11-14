@@ -14,7 +14,8 @@ if Code.ensure_loaded?(Absinthe) do
       :default_object_rule,
       :introspection,
       :list_policy,
-      :batch_across_parents
+      :batch_across_parents,
+      :require_can_for
     ]
 
     @spec validate_options(keyword) :: {:ok, map} | {:error, [String.t()]}
@@ -25,6 +26,7 @@ if Code.ensure_loaded?(Absinthe) do
       introspection = Keyword.get(opts, :introspection, :public)
       policy = Keyword.get(opts, :list_policy, :null_item)
       across_parents = Keyword.get(opts, :batch_across_parents, false)
+      require_can_for = Keyword.get(opts, :require_can_for, [])
 
       errors =
         unknown_option_errors(opts) ++
@@ -33,7 +35,8 @@ if Code.ensure_loaded?(Absinthe) do
           rule_option_errors(:default_object_rule, default_rule) ++
           rule_option_errors(:introspection, introspection) ++
           list_policy_errors(policy) ++
-          batch_across_parents_errors(across_parents)
+          batch_across_parents_errors(across_parents) ++
+          require_can_for_errors(require_can_for, strict)
 
       case errors do
         [] ->
@@ -44,7 +47,8 @@ if Code.ensure_loaded?(Absinthe) do
              default_object_rule: default_rule,
              introspection: introspection,
              list_policy: policy,
-             batch_across_parents: across_parents
+             batch_across_parents: across_parents,
+             require_can_for: require_can_for
            }}
 
         errors ->
@@ -75,6 +79,26 @@ if Code.ensure_loaded?(Absinthe) do
         {:error, errors} -> Enum.map(errors, &"`#{inspect(key)}`: #{&1}")
       end
     end
+
+    # Every object type linked to one of these schemas must use `can/2` for its policy,
+    # which only means something when every field must declare a rule.
+    defp require_can_for_errors([], _strict), do: []
+
+    defp require_can_for_errors(schemas, strict) when is_list(schemas) do
+      cond do
+        not Enum.all?(schemas, &(is_atom(&1) and &1 != nil)) ->
+          ["`:require_can_for` must be a list of modules"]
+
+        strict != :all ->
+          ["`:require_can_for` needs `strict_mode: :all`"]
+
+        true ->
+          []
+      end
+    end
+
+    defp require_can_for_errors(_schemas, _strict),
+      do: ["`:require_can_for` must be a list of modules"]
 
     defp batch_across_parents_errors(value) when is_boolean(value), do: []
     defp batch_across_parents_errors(_value), do: ["`:batch_across_parents` must be a boolean"]

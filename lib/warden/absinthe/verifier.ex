@@ -8,7 +8,7 @@ if Code.ensure_loaded?(Absinthe) do
     # every subscription field's `config` is wrapped.
 
     alias Absinthe.Type
-    alias Warden.Absinthe.{Config, Middleware, Plan}
+    alias Warden.Absinthe.{Config, Middleware, Plan, RequireCan}
 
     def verify!(schema) do
       case verify(schema) do
@@ -35,7 +35,9 @@ if Code.ensure_loaded?(Absinthe) do
             {_, field} <- Enum.sort_by(object.fields, &elem(&1, 0)),
             error <- check_field(object, field, plan),
             do: error
-          ) ++ check_subscriptions(types, plan) ++ check_batch_plugin(schema, config)
+          ) ++
+          check_subscriptions(types, plan) ++
+          check_batch_plugin(schema, config) ++ RequireCan.errors(types, plan, config)
 
       if errors == [], do: :ok, else: {:error, errors}
     end

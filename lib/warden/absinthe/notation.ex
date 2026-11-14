@@ -17,6 +17,8 @@ if Code.ensure_loaded?(Absinthe) do
       * `list_policy :null_item | :filter | :fail_list` - inside an object `field`.
       * `redact_with FieldsModule` - inside `object`: the field policy (`Warden.Fields`)
         applied to the object's values.
+      * `warden_schema Schema` - inside `object`: the Ecto schema (or struct) of the
+        object's values, for `require_can_for:`.
 
     Rules are evaluated when the schema compiles, so they must be built from literals,
     module attributes or compile-time expressions. They are stored in the schema `meta`
@@ -53,7 +55,14 @@ if Code.ensure_loaded?(Absinthe) do
           ]
 
         import Warden.Absinthe.Notation,
-          only: [authorize: 1, authorize: 2, authorize_args: 1, list_policy: 1, redact_with: 1]
+          only: [
+            authorize: 1,
+            authorize: 2,
+            authorize_args: 1,
+            list_policy: 1,
+            redact_with: 1,
+            warden_schema: 1
+          ]
       end
     end
 
@@ -210,6 +219,24 @@ if Code.ensure_loaded?(Absinthe) do
       record!(env, scope, :warden_redact_with, module)
     end
 
+    @doc """
+    Links the enclosing object type to the schema (or struct module) of its values:
+    `warden_schema MyApp.Issues.Issue`. With `use Warden.Absinthe, strict_mode: :all,
+    require_can_for: [MyApp.Issues.Issue]`, an object type linked to a listed schema
+    whose object rule has no `can/2` for that schema's policy fails compilation.
+    """
+    defmacro warden_schema(schema) do
+      env = __CALLER__
+      scope = current_scope(env, :warden_schema, [:object])
+      schema = eval!(schema, env, "warden_schema")
+
+      if not (is_atom(schema) and schema not in [nil, true, false]) do
+        compile_error!(env, "`warden_schema` needs a module, got: #{inspect(schema)}")
+      end
+
+      record!(env, scope, :warden_schema, schema)
+    end
+
     defp fields_module?(module) do
       is_atom(module) and match?({:module, _module}, Code.ensure_compiled(module)) and
         function_exported?(module, :__warden_fields__, 1)
@@ -274,6 +301,7 @@ if Code.ensure_loaded?(Absinthe) do
     defp macro_name(:warden_list_policy), do: "`list_policy`"
     defp macro_name(:warden_on_deny), do: "`on_deny:`"
     defp macro_name(:warden_redact_with), do: "`redact_with`"
+    defp macro_name(:warden_schema), do: "`warden_schema`"
 
     # Finds the reference of the definition that is currently open, by walking the
     # recorded blueprint attributes backwards and balancing `:close` markers.
