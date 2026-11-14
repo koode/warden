@@ -26,7 +26,7 @@ defmodule Warden.Rule do
   """
 
   alias Warden.{Actor, Check}
-  alias Warden.Authorizer.Callbacks
+  alias Warden.Authorizer.{Callbacks, Catalog}
 
   @type role :: atom
   @type permission :: term
@@ -145,6 +145,10 @@ defmodule Warden.Rule do
           | errors
         ]
 
+      catalog != nil ->
+        option_errors = check_option_errors(name, opts, catalog)
+        Enum.reverse(option_errors, errors)
+
       true ->
         errors
     end
@@ -156,6 +160,11 @@ defmodule Warden.Rule do
 
   defp do_validate(other, _catalog, errors) do
     ["invalid rule: #{inspect(other)}" | errors]
+  end
+
+  defp check_option_errors(name, opts, catalog) do
+    spec = Map.get(catalog[:check_specs] || %{}, name, Catalog.default_check_spec())
+    Catalog.check_options_errors(name, opts, spec)
   end
 
   defp validate_role(role, nil, errors) when is_atom(role) and not is_nil(role), do: errors

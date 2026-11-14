@@ -29,8 +29,30 @@ defmodule Warden.Authorizer do
       roles only.
     * `:role_permissions` - `%{role => [permission] | :all}`. `:all` grants every
       permission.
-    * `:checks` - the names handled by `c:check/2`. A rule that names an undeclared check
-      fails compilation. If any check is declared, `c:check/2` must be defined.
+    * `:checks` - the names handled by `c:check/2`: atoms, or `name: options` entries. A
+      rule that names an undeclared check fails compilation. If any check that is not
+      batched is declared, `c:check/2` must be defined. Entry options:
+      * `batch: true` - `c:check_many/2` answers the check for a list of values at once
+        (it must then be defined).
+      * `timeout: ms` - run the check in a separate process; when it takes longer, every
+        value it was asked about is denied with reason `:unavailable`.
+      * `opts: [name: type]` - the schema of the rule options (`check(name, opts)`),
+        validated wherever rules are validated. Types: `:atom`, `:string`, `:integer`,
+        `:boolean`, `:any`, `{:in, list}`, `{:list, type}`. Without `opts:` any options
+        are accepted.
+      * `required: [name]` - options every rule must give (needs `opts:`).
+      * `system_kinds: [kind]` - the system actor kinds the check is called for. Every
+        other system actor is denied without calling it.
+    * `:kinds` - the actor kinds `c:kind/2` may return and system actors may have. `:user`
+      is always declared; `:anonymous` (an actor without a subject) cannot be declared.
+    * `:tenant_roles` - the catalog of roles an actor holds per tenant (see
+      `c:tenant_roles/3`, which must then be defined). Default `nil` (none).
+    * `:tenant_role_hierarchy` - `%{tenant_role => [implied_tenant_role]}`, like
+      `:role_hierarchy`.
+    * `:credential_scopes` - the catalog of credential scopes. `nil` (default) accepts any
+      string.
+    * `:policies` - the `Warden.Policy` modules of this authorizer. A `can/2` rule may
+      only name a listed policy, and Warden finds the policy of a struct through this list.
     * `:expose_denial_reasons` - when `true`, the default `c:deny/1` adds
       `missing_roles` and `missing_permissions` to the error extensions. Default `false`.
     * `:spec_compliant_errors` - set to `true` when you run Absinthe with
@@ -42,6 +64,9 @@ defmodule Warden.Authorizer do
 
   alias Warden.{Actor, Check, Denial}
   alias Warden.Authorizer.Catalog
+
+  @typedoc "What a check returns. Only `true` grants."
+  @type check_result :: boolean | {:deny, Denial.reason()}
 
   @typedoc "What a denial handler returns."
   @type denial_result :: {:error, term} | :null | {:replace, term}
@@ -76,8 +101,34 @@ defmodule Warden.Authorizer do
   """
   @callback permissions(subject :: term, context :: map) :: [term]
 
-  @doc "Handles a `check(name, opts)` rule. Must return `true` or `false`."
-  @callback check(name :: atom, check :: Check.t()) :: boolean
+  @doc """
+  Handles a `check(name, opts)` rule. Must return `true`, `false` or `{:deny, reason}`
+  (`reason`: an atom or `{atom, map}`). Only `true` grants; anything else raises
+  `Warden.PolicyError`.
+  """
+  @callback check(name :: atom, check :: Check.t()) :: check_result
+
+  @doc """
+  Handles a check declared with `batch: true` for many values at once. Returns a list of
+  the same length and order as `checks`, with `true`, `false` or `{:deny, reason}` per
+  check. A wrong length, a bad element or a raise is a `Warden.PolicyError`, and denies.
+
+  Warden calls it for list items in GraphQL and for `Warden.filter/4`. A single value goes
+  to `c:check/2` when that handles the name, else to `check_many/2` with one element.
+  """
+  @callback check_many(name :: atom, checks :: [Check.t()]) :: [check_result]
+
+  @doc """
+  Returns the subject's roles in one tenant, as tenant roles from the `:tenant_roles`
+  catalog (unknown ones are dropped with a warning). Required when `:tenant_roles` is
+  set.
+
+  Called at most once per actor and tenant: the result is kept in the actor, and an actor
+  is rebuilt per request, per GraphQL execution and per subscription publish. Not called
+  for an anonymous or system actor, or for a tenant other than the one the actor's
+  credential is bound to.
+  """
+  @callback tenant_roles(subject :: term, tenant :: term, context :: map) :: [atom]
 
   @doc """
   Turns a denial into a result: `{:error, term}`, `:null` or `{:replace, value}`.
@@ -118,6 +169,8 @@ defmodule Warden.Authorizer do
 
   @optional_callbacks permissions: 2,
                       check: 2,
+                      check_many: 2,
+                      tenant_roles: 3,
                       deny: 1,
                       actor_key: 2,
                       conn_context: 1,
@@ -143,9 +196,9 @@ defmodule Warden.Authorizer do
     quote do
       @behaviour Warden.Authorizer
       @before_compile Warden.Authorizer
-      @__warden_catalog__ unquote(Macro.escape(catalog))
+      @__warden_catalog__ unquote(Macro.escape(Map.put(catalog, :authorizer, __CALLER__.module)))
 
-      def __warden_catalog__, do: unquote(Macro.escape(catalog))
+      def __warden_catalog__, do: @__warden_catalog__
     end
   end
 
@@ -155,13 +208,12 @@ defmodule Warden.Authorizer do
     catalog = Module.get_attribute(env.module, :__warden_catalog__)
     defines? = &Module.defines?(env.module, &1)
 
-    if catalog.checks != [] and not defines?.({:check, 2}) do
-      raise CompileError,
-        file: env.file,
-        line: env.line,
-        description:
-          "#{inspect(env.module)} declares checks #{inspect(catalog.checks)} " <>
-            "but does not define check/2"
+    case missing_callback_errors(env.module, catalog, defines?) do
+      [] ->
+        :ok
+
+      [message | _others] ->
+        raise CompileError, file: env.file, line: env.line, description: message
     end
 
     if defines?.({:actor_key, 1}) and not defines?.({:actor_key, 2}) do
@@ -175,6 +227,25 @@ defmodule Warden.Authorizer do
     quote do
       def __warden_dedup__, do: unquote(defines?.({:actor_key, 2}))
     end
+  end
+
+  # Callbacks the catalog makes required: check/2 for checks that are not batched,
+  # check_many/2 for batched ones, tenant_roles/3 when tenant roles are declared.
+  defp missing_callback_errors(module, catalog, defines?) do
+    {batched, single} = Enum.split_with(catalog.checks, &catalog.check_specs[&1].batch)
+
+    [
+      single != [] and not defines?.({:check, 2}) and
+        "#{inspect(module)} declares checks #{inspect(single)} but does not define check/2",
+      batched != [] and not defines?.({:check_many, 2}) and
+        """
+        #{inspect(module)} declares batched checks #{inspect(batched)} but does not \
+        define check_many/2\
+        """,
+      catalog.tenant_roles != nil and not defines?.({:tenant_roles, 3}) and
+        "#{inspect(module)} declares `tenant_roles:` but does not define tenant_roles/3"
+    ]
+    |> Enum.filter(&is_binary/1)
   end
 
   @doc """

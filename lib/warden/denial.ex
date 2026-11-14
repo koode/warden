@@ -17,6 +17,9 @@ defmodule Warden.Denial do
       `:fail_list`), else `nil`.
   """
 
+  @typedoc "Why a check or policy denied: an atom, or an atom with details."
+  @type reason :: atom | {atom, map}
+
   @type kind :: :field | :object | :argument | :subscribe | :introspection | :call
 
   @type t :: %__MODULE__{
