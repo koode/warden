@@ -731,6 +731,29 @@ defmodule Warden.Ecto.ScopeTest do
     end
   end
 
+  describe "values of another type" do
+    test "within: bounds of another type are cast like the query casts them" do
+      world = world()
+      as_strings = webhook(tenant: "t1", bounds: %{team_ids: ["#{world.t1_private.id}", "nope"]})
+
+      assert assert_agrees(Team, as_strings, :read) == [world.t1_private.id]
+    end
+
+    test "actor_in: a subject id that does not cast to the field's type matches nothing" do
+      world = world()
+
+      authored =
+        insert!(%Issue{workspace_id: "t1", author_id: "42", team_id: world.t1_private.id})
+
+      numeric = %{id: 42, memberships: %{"t1" => [:guest]}}
+      key = %Credential{method: :api_key, scopes: ["issues:write"]}
+
+      # An integer does not cast to the string column, in memory or in the query.
+      ids = assert_agrees(Issue, actor(numeric, %{credential: key}), :write, [:team])
+      refute authored.id in ids
+    end
+  end
+
   describe "guards" do
     test "update_all/4 refuses to change the tenant field or a through foreign key" do
       world = world()

@@ -187,9 +187,9 @@ if Code.ensure_loaded?(Ecto) do
             false
 
           id ->
-            Enum.reduce(fields, false, fn field, acc ->
-              either(acc, field_equals(info, struct, field, id))
-            end)
+            for field <- fields, {:ok, cast} <- [Scope.cast(info, field, id)], reduce: false do
+              acc -> either(acc, field_equals(info, struct, field, cast))
+            end
         end
 
       {answer, actor, state}
@@ -221,7 +221,7 @@ if Code.ensure_loaded?(Ecto) do
       answer =
         case Scope.bounds!(actor, bounds_key, info) do
           nil -> if_missing == :allow
-          ids -> if exact?(info, field), do: Map.get(struct, field) in ids, else: :unknown
+          bounds -> within_bounds(info, struct, field, bounds)
         end
 
       {answer, actor, state}
@@ -238,6 +238,12 @@ if Code.ensure_loaded?(Ecto) do
         exact?(info, field) -> Map.get(struct, field) == value
         true -> :unknown
       end
+    end
+
+    defp within_bounds(info, struct, field, bounds) do
+      if exact?(info, field),
+        do: Map.get(struct, field) in Scope.cast_all(info, field, bounds),
+        else: :unknown
     end
 
     defp exact?(info, field), do: Compiler.exact_type?(info.schema.__schema__(:type, field))

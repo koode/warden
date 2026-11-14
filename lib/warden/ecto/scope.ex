@@ -369,9 +369,9 @@ if Code.ensure_loaded?(Ecto) do
             false
 
           id ->
-            Enum.reduce(fields, false, fn field, acc ->
-              any(acc, dynamic([{^info.as, row}], field(row, ^field) == ^id))
-            end)
+            for field <- fields, {:ok, cast} <- [cast(info, field, id)], reduce: false do
+              acc -> any(acc, dynamic([{^info.as, row}], field(row, ^field) == ^cast))
+            end
         end
 
       {verdict, actor, state}
@@ -421,7 +421,7 @@ if Code.ensure_loaded?(Ecto) do
       verdict =
         case bounds!(actor, bounds_key, info) do
           nil -> if_missing == :allow
-          ids -> dynamic([{^info.as, row}], field(row, ^field) in ^ids)
+          bounds -> bounds_in(info, field, bounds)
         end
 
       {verdict, actor, state}
@@ -664,6 +664,28 @@ if Code.ensure_loaded?(Ecto) do
           """
       end
     end
+
+    defp bounds_in(info, field, bounds) do
+      case cast_all(info, field, bounds) do
+        [] -> false
+        ids -> dynamic([{^info.as, row}], field(row, ^field) in ^ids)
+      end
+    end
+
+    # A bound or subject id cast through the field's Ecto type, as the query would cast
+    # it, so the in-memory path compares the same values. A value that does not cast
+    # matches nothing (the query would raise).
+    @spec cast(map, atom, term) :: {:ok, term} | :error
+    def cast(info, field, value) do
+      case Ecto.Type.cast(info.schema.__schema__(:type, field), value) do
+        {:ok, cast} when cast != nil -> {:ok, cast}
+        _invalid -> :error
+      end
+    end
+
+    @spec cast_all(map, atom, list) :: list
+    def cast_all(info, field, values),
+      do: for(value <- values, {:ok, cast} <- [cast(info, field, value)], do: cast)
 
     # A scope result: a dynamic, `true` or `false`. Anything else is a bug.
     @spec checked!(term, String.t()) :: verdict
