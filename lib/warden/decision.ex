@@ -50,7 +50,7 @@ defmodule Warden.Decision do
   @spec setup(Warden.actor_or_context(), keyword) :: {Actor.t(), map, module}
   def setup(%Actor{} = actor, opts) do
     authorizer = Warden.resolve_authorizer!(opts[:authorizer], actor)
-    {actor, Keyword.get(opts, :context, %{}), authorizer}
+    {actor, Keyword.get_lazy(opts, :context, fn -> actor.context || %{} end), authorizer}
   end
 
   def setup(context, opts) when is_map(context) do

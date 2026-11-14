@@ -58,7 +58,7 @@ if Code.ensure_loaded?(Absinthe) do
           {share, res}
 
         _none ->
-          shared = :erlang.term_to_binary({actor, res.context})
+          shared = :erlang.term_to_binary({%{actor | context: nil}, res.context})
           share = {make_ref(), shared}
           {share, %{res | acc: Map.put(acc, @acc_key, Map.put(state, :execution, share))}}
       end
@@ -480,6 +480,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp decide_group(rule, authorizer, redactor, [{_ref, shared, _check} | _rest] = members) do
       {actor, context} = :erlang.binary_to_term(shared)
+      actor = %{actor | context: context}
       refs = Enum.map(members, &elem(&1, 0))
 
       checks =

@@ -10,13 +10,14 @@ defmodule Warden.ActorTest do
 
   test "an anonymous actor has no roles or permissions and roles/2 is not called" do
     actor = build(nil, %{roles_fun: fn _ -> raise "must not be called" end})
-    assert actor == %Actor{authorizer: Authz}
+    # Since 0.2 an actor keeps the context it was built from.
+    assert %{actor | context: nil} == %Actor{authorizer: Authz}
     assert Actor.anonymous?(actor)
   end
 
   test "a false subject is anonymous" do
     actor = build(false, %{roles_fun: fn _ -> raise "must not be called" end})
-    assert actor == %Actor{authorizer: Authz}
+    assert %{actor | context: nil} == %Actor{authorizer: Authz}
   end
 
   test "an error subject raises Warden.PolicyError" do

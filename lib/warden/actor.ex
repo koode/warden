@@ -33,8 +33,11 @@ defmodule Warden.Actor do
       that other actor. Every rule is evaluated for both and ANDed.
     * `bounds` - a map Warden does not read, for policies: the credential's bounds, the
       bounds of a system actor, plus the bounds given to `Warden.on_behalf_of/3`.
-    * `cache` - private. The tenant roles already read, per tenant. It lives only in this
-      struct, so it never outlives the actor.
+    * `cache` - private. The tenant roles and tenants already read. It lives only in
+      this struct, so it never outlives the actor.
+    * `context` - private. The context the actor was built from. The core API, the Ecto
+      layer and every other function given an actor without `context:` give checks and
+      policies this context. Never shown by `inspect/1`.
   """
 
   alias Warden.Authorizer.Callbacks
@@ -52,7 +55,8 @@ defmodule Warden.Actor do
           system?: boolean,
           delegator: t | nil,
           bounds: map,
-          cache: map
+          cache: map,
+          context: map | nil
         }
 
   @anonymous_kind :anonymous
@@ -71,7 +75,8 @@ defmodule Warden.Actor do
             system?: false,
             delegator: nil,
             bounds: %{},
-            cache: %{}
+            cache: %{},
+            context: nil
 
   @doc "Returns true when the actor has no subject and is not a system actor."
   @spec anonymous?(t) :: boolean
@@ -124,7 +129,7 @@ defmodule Warden.Actor do
     case authorizer.subject(context) do
       # `false` is a common "no user" value; it is anonymous, never a subject.
       anonymous when anonymous in [nil, false] ->
-        %__MODULE__{authorizer: authorizer, kind: @anonymous_kind}
+        %__MODULE__{authorizer: authorizer, kind: @anonymous_kind, context: context}
 
       # A failed lookup is a bug in subject/1 (or an unhandled error), not a user.
       failed when failed == :error or (is_tuple(failed) and elem(failed, 0) == :error) ->
@@ -157,7 +162,8 @@ defmodule Warden.Actor do
           authorizer: authorizer,
           kind: kind,
           credential: credential,
-          bounds: credential_bounds(credential)
+          bounds: credential_bounds(credential),
+          context: context
         }
     end
   end

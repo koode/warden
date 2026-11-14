@@ -54,6 +54,16 @@ Every name in a rule is checked against these catalogs: an unknown tenant role, 
 credential scope, policy or policy action fails compilation in a schema or a plug, and
 raises `Warden.PolicyError` in the core API.
 
+## The context of an actor
+
+An actor keeps the context it was built from (`Warden.actor/2`, `Warden.Plug.actor/2`,
+GraphQL). When you pass the actor to `Warden.authorize/3`, `Warden.filter/4`,
+`Warden.Ecto` or `Warden.redact/3` without `context:`, checks and policies get that
+context, as they would have with the context map itself. A `context:` option wins. A
+system actor has no context; its checks get `context:` or `%{}`. For a delegated actor
+the context is the request's (the agent's) in both passes, see below. `inspect/1` never
+shows the context.
+
 ## Kinds
 
 `kind/2` says what the subject is. It must return a kind from `kinds:` (`:user` is
