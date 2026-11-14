@@ -62,29 +62,32 @@ defmodule Warden.Decision do
     raise ArgumentError, "expected a %Warden.Actor{} or a context map, got: #{inspect(other)}"
   end
 
-  # Outside GraphQL no object rule guards anything, so `covered()` would be a silent
-  # `public()`: refuse it.
   @spec validate_rule!(Rule.t(), module) :: :ok
   def validate_rule!(rule, authorizer) do
+    case rule_errors(rule, authorizer) do
+      [] ->
+        :ok
+
+      errors ->
+        raise Warden.PolicyError,
+              "invalid rule for #{inspect(authorizer)}: " <> Enum.join(errors, "; ")
+    end
+  end
+
+  # Catalog errors, plus `covered()`: outside GraphQL no object rule guards anything, so
+  # it would be a silent `public()`.
+  @spec rule_errors(Rule.t(), module) :: [String.t()]
+  def rule_errors(rule, authorizer) do
     errors =
       case Rule.validate(rule, authorizer.__warden_catalog__()) do
         :ok -> []
         {:error, errors} -> errors
       end
 
-    errors =
-      if covered?(rule),
-        do:
-          errors ++
-            ["covered() is only meaningful on GraphQL fields of a type with an object rule"],
-        else: errors
-
-    if errors != [] do
-      raise Warden.PolicyError,
-            "invalid rule for #{inspect(authorizer)}: " <> Enum.join(errors, "; ")
-    end
-
-    :ok
+    if covered?(rule),
+      do:
+        errors ++ ["covered() is only meaningful on GraphQL fields of a type with an object rule"],
+      else: errors
   end
 
   defp covered?(:covered), do: true

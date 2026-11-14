@@ -69,7 +69,7 @@ if Code.ensure_loaded?(Plug) do
 
     import Plug.Conn
 
-    alias Warden.{Actor, Denial, Rule}
+    alias Warden.{Actor, Decision, Denial, Rule}
 
     @option_keys [:rule, :authorizer, :on_deny]
 
@@ -103,11 +103,11 @@ if Code.ensure_loaded?(Plug) do
     end
 
     defp validate_rule!(rule, authorizer) do
-      case Rule.validate(rule, authorizer.__warden_catalog__()) do
-        :ok ->
+      case Decision.rule_errors(rule, authorizer) do
+        [] ->
           :ok
 
-        {:error, errors} ->
+        errors ->
           raise ArgumentError,
                 "invalid Warden.Plug rule for #{inspect(authorizer)}: " <> Enum.join(errors, "; ")
       end
@@ -151,7 +151,7 @@ if Code.ensure_loaded?(Plug) do
     def call(conn, %{rule: rule, authorizer: authorizer} = config) do
       {actor, context} = build_actor(conn, authorizer)
 
-      case Warden.authorize(actor, rule, authorizer: authorizer, context: context) do
+      case Decision.authorize(actor, rule, [authorizer: authorizer, context: context], :plug) do
         :ok -> conn
         {:error, denial} -> deny(conn, denial, config)
       end
@@ -192,11 +192,9 @@ if Code.ensure_loaded?(Plug) do
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
       {actor, context} = build_actor(conn, authorizer)
 
-      case Warden.authorize(actor, rule,
-             authorizer: authorizer,
-             context: context,
-             value: Keyword.get(opts, :value)
-           ) do
+      decision_opts = [authorizer: authorizer, context: context, value: Keyword.get(opts, :value)]
+
+      case Decision.authorize(actor, rule, decision_opts, :plug) do
         :ok -> {:ok, conn}
         {:error, denial} -> {:error, denial}
       end
@@ -276,11 +274,9 @@ if Code.ensure_loaded?(Plug) do
     end
 
     defp default_response(conn, %Denial{actor: actor}) do
+      # A system actor has no subject but is not anonymous: it gets 403.
       {status, body} =
-        case actor do
-          %Actor{subject: nil} -> {401, "Unauthorized"}
-          _ -> {403, "Forbidden"}
-        end
+        if Actor.anonymous?(actor), do: {401, "Unauthorized"}, else: {403, "Forbidden"}
 
       conn
       |> put_resp_content_type("text/plain")
