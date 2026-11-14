@@ -16,10 +16,15 @@ if Code.ensure_loaded?(Absinthe) do
     # For abstract types the abstract type's rule is decided first; the concrete type's
     # rule only for the values that passed it, as before batching. A value whose concrete
     # type cannot be determined is denied (fail closed).
+    #
+    # Then `redact_with`: every value that passed is replaced by its redacted struct,
+    # decided per field policy for the whole group (`Warden.Fields.Redactor`), so the
+    # walk, and every child field after it, sees the redacted value.
 
     alias Absinthe.Resolution
     alias Warden.Absinthe.Middleware
     alias Warden.{Check, Denial, Evaluator}
+    alias Warden.Fields.Redactor
 
     @decided :__warden_decided__
     @undetermined %{failed_rule: :deny, missing_roles: [], missing_permissions: []}
@@ -27,34 +32,87 @@ if Code.ensure_loaded?(Absinthe) do
     # Returns {decided_value, actor, %{count: n, denied: d, reason: first_reason}}.
     def decide(value, spec, ctx) do
       values = value |> flatten(spec.shape, []) |> Enum.reverse()
-      {outcomes, actor} = decide_values(values, spec, ctx)
-      {decided, []} = rebuild(value, spec.shape, outcomes)
+      {outcomes, types, actor} = decide_values(values, spec, ctx)
+      {values, actor} = redact(values, outcomes, types, spec, %{ctx | actor: actor})
+      {decided, []} = rebuild(value, spec.shape, Enum.zip(values, outcomes))
       denials = for {:deny, denial} <- outcomes, do: denial
 
       stats = %{
         count: length(values),
         denied: length(denials),
         reason: first_reason(denials),
-        admitted: admitted(values, outcomes, spec, ctx)
+        admitted: admitted(values, outcomes, types, spec, ctx)
       }
 
       {decided, actor, stats}
     end
 
-    # The values admitted by a batched object rule of a plain object type. Their fields'
-    # pre middleware does not decide that rule again for them (see `Middleware.pre/2`),
-    # so a list stays one batched call instead of one call per value and field.
-    defp admitted(values, outcomes, %{abstract: nil} = spec, ctx) do
+    # The values whose object rule the fields' pre middleware does not decide again (see
+    # `Middleware.pre/2`): values admitted by a batched object rule of a plain object type,
+    # so a list stays one batched call instead of one call per value and field, and every
+    # redacted value. A redacted value is admitted as the children see it (redacted): its
+    # object rule was decided on the value before redaction, and deciding it again on the
+    # redacted struct could disagree with that decision.
+    defp admitted(values, outcomes, _types, %{abstract: nil} = spec, ctx) do
       rule = Map.get(spec.rules, spec.named)
+      catalog = ctx.spec.authorizer.__warden_catalog__()
+      redacted? = Map.has_key?(redactors(spec), spec.named)
 
-      if rule != nil and Evaluator.batched?(rule, ctx.spec.authorizer.__warden_catalog__()) do
+      if rule != nil and (redacted? or Evaluator.batched?(rule, catalog)) do
         for {value, :ok} <- Enum.zip(values, outcomes), do: {spec.named, value}
       else
         []
       end
     end
 
-    defp admitted(_values, _outcomes, _spec, _ctx), do: []
+    defp admitted(values, outcomes, types, spec, _ctx) do
+      redactors = redactors(spec)
+
+      for {{value, :ok}, index} <- values |> Enum.zip(outcomes) |> Enum.with_index(),
+          type = Map.get(types, index),
+          Map.has_key?(redactors, type),
+          Map.has_key?(spec.rules, type),
+          do: {type, value}
+    end
+
+    defp redactors(spec), do: Map.get(spec, :redactors, %{})
+
+    # Replaces every value that passed with its redacted struct. Returns {values, actor}.
+    defp redact(values, outcomes, types, spec, ctx) do
+      redactors = redactors(spec)
+
+      if map_size(redactors) == 0 do
+        {values, ctx.actor}
+      else
+        groups =
+          for {{value, :ok}, index} <- values |> Enum.zip(outcomes) |> Enum.with_index(),
+              module = Map.get(redactors, value_type(index, types, spec)),
+              module != nil do
+            {module, index, value}
+          end
+          |> Enum.group_by(&elem(&1, 0), fn {_module, index, value} -> {index, value} end)
+
+        {replaced, actor} = Enum.reduce(groups, {%{}, ctx.actor}, &redact_group(&1, &2, ctx))
+        redacted = values |> Enum.with_index() |> Enum.map(&replaced_value(&1, replaced))
+        {redacted, actor}
+      end
+    end
+
+    defp value_type(_index, _types, %{abstract: nil} = spec), do: spec.named
+    defp value_type(index, types, _spec), do: Map.get(types, index)
+
+    defp redact_group({module, members}, {replaced, actor}, ctx) do
+      {indexes, values} = Enum.unzip(members)
+      authorizer = ctx.spec.authorizer
+
+      {redacted, actor} =
+        Redactor.redact_group(module, values, actor, ctx.base.context, authorizer)
+
+      replaced = indexes |> Enum.zip(redacted) |> Map.new() |> Map.merge(replaced)
+      {replaced, actor}
+    end
+
+    defp replaced_value({value, index}, replaced), do: Map.get(replaced, index, value)
 
     defp first_reason([%Denial{reason: reason} | _rest]), do: reason
     defp first_reason([]), do: nil
@@ -70,24 +128,28 @@ if Code.ensure_loaded?(Absinthe) do
     defp flatten(value, {:list, inner}, acc), do: flatten([value], {:list, inner}, acc)
     defp flatten(value, :named, acc), do: [value | acc]
 
-    # Wraps every checked position with its outcome; returns {value, rest_outcomes}.
-    defp rebuild(nil, _shape, outcomes), do: {nil, outcomes}
-    defp rebuild(value, {:non_null, inner}, outcomes), do: rebuild(value, inner, outcomes)
+    # Wraps every checked position with its (possibly redacted) value and outcome;
+    # returns {value, rest_entries}.
+    defp rebuild(nil, _shape, entries), do: {nil, entries}
+    defp rebuild(value, {:non_null, inner}, entries), do: rebuild(value, inner, entries)
 
-    defp rebuild(values, {:list, inner}, outcomes) when is_list(values),
-      do: Enum.map_reduce(values, outcomes, &rebuild(&1, inner, &2))
+    defp rebuild(values, {:list, inner}, entries) when is_list(values),
+      do: Enum.map_reduce(values, entries, &rebuild(&1, inner, &2))
 
-    defp rebuild(value, {:list, inner}, outcomes), do: rebuild([value], {:list, inner}, outcomes)
+    defp rebuild(value, {:list, inner}, entries), do: rebuild([value], {:list, inner}, entries)
 
-    defp rebuild(value, :named, [outcome | rest]) do
+    defp rebuild(_value, :named, [{value, outcome} | rest]) do
       decided = {@decided, value, outcome}
       {decided, rest}
     end
 
-    defp decide_values([], _spec, ctx), do: {[], ctx.actor}
+    # Returns {outcomes, %{index => concrete_type}, actor}; the concrete types are only
+    # known for abstract types.
+    defp decide_values([], _spec, ctx), do: {[], %{}, ctx.actor}
 
     defp decide_values(values, %{abstract: nil} = spec, ctx) do
-      decide_group(Map.get(spec.rules, spec.named), spec.named, values, ctx)
+      {outcomes, actor} = decide_group(Map.get(spec.rules, spec.named), spec.named, values, ctx)
+      {outcomes, %{}, actor}
     end
 
     defp decide_values(values, spec, ctx) do
@@ -98,17 +160,19 @@ if Code.ensure_loaded?(Absinthe) do
         for {{value, :ok}, index} <- values |> Enum.zip(abstract) |> Enum.with_index(),
             do: {index, value}
 
-      {concrete, actor} = decide_concrete(passed, spec, ctx)
+      {concrete, types, actor} = decide_concrete(passed, spec, ctx)
       outcomes = abstract |> Enum.with_index() |> Enum.map(&merge_concrete(&1, concrete))
-      {outcomes, actor}
+      {outcomes, types, actor}
     end
 
     defp merge_concrete({:ok, index}, concrete), do: Map.fetch!(concrete, index)
     defp merge_concrete({denied, _index}, _concrete), do: denied
 
-    # Returns {%{index => outcome}, actor}.
-    defp decide_concrete(passed, %{rules: rules}, ctx) when map_size(rules) == 0,
-      do: {Map.new(passed, fn {index, _value} -> {index, :ok} end), ctx.actor}
+    # Returns {%{index => outcome}, %{index => concrete_type}, actor}. The concrete type is
+    # resolved when an object rule or a field policy may apply.
+    defp decide_concrete(passed, %{rules: rules} = spec, ctx)
+         when map_size(rules) == 0 and not is_map_key(spec, :redactors),
+         do: {Map.new(passed, fn {index, _value} -> {index, :ok} end), %{}, ctx.actor}
 
     defp decide_concrete(passed, spec, ctx) do
       groups =
@@ -119,11 +183,12 @@ if Code.ensure_loaded?(Absinthe) do
           end
         )
 
-      Enum.reduce(groups, {%{}, ctx.actor}, fn {concrete, members}, {acc, actor} ->
+      Enum.reduce(groups, {%{}, %{}, ctx.actor}, fn {concrete, members}, {acc, types, actor} ->
         {indexes, values} = Enum.unzip(members)
         {outcomes, actor} = decide_concrete_group(concrete, values, spec, %{ctx | actor: actor})
         decided = indexes |> Enum.zip(outcomes) |> Map.new()
-        {Map.merge(acc, decided), actor}
+        typed = Map.new(indexes, &{&1, concrete})
+        {Map.merge(acc, decided), Map.merge(types, typed), actor}
       end)
     end
 

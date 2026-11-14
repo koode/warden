@@ -15,6 +15,8 @@ if Code.ensure_loaded?(Absinthe) do
         `field`: what a denial of this field's rule becomes, for this field only.
       * `authorize_args name: rule, ...` - inside an object `field`.
       * `list_policy :null_item | :filter | :fail_list` - inside an object `field`.
+      * `redact_with FieldsModule` - inside `object`: the field policy (`Warden.Fields`)
+        applied to the object's values.
 
     Rules are evaluated when the schema compiles, so they must be built from literals,
     module attributes or compile-time expressions. They are stored in the schema `meta`
@@ -51,7 +53,7 @@ if Code.ensure_loaded?(Absinthe) do
           ]
 
         import Warden.Absinthe.Notation,
-          only: [authorize: 1, authorize: 2, authorize_args: 1, list_policy: 1]
+          only: [authorize: 1, authorize: 2, authorize_args: 1, list_policy: 1, redact_with: 1]
       end
     end
 
@@ -178,6 +180,41 @@ if Code.ensure_loaded?(Absinthe) do
       record!(env, scope, :warden_list_policy, policy)
     end
 
+    @doc """
+    Applies a field policy (a `Warden.Fields` module) to the values of the enclosing
+    object type. After the object rule passes and before any child field resolves, Warden
+    replaces the value with `Warden.redact/2` of it, so default and custom resolvers of the
+    child fields read the redacted struct. It runs per list item (one decision per rule and
+    list), behind interfaces and unions, on Dataloader, `Async` and `Batch` values, and on
+    every subscription publish.
+
+    Fails compilation when the module is not a field policy, belongs to another
+    authorizer, or redacts another struct than the one the object type's `can/2` policy
+    is about, and when it redacts a field with `with: nil` that the object type declares
+    non-null.
+
+    A value of another type than the policy's struct raises `Warden.PolicyError`.
+    """
+    defmacro redact_with(module) do
+      env = __CALLER__
+      scope = current_scope(env, :redact_with, [:object])
+      module = eval!(module, env, "redact_with")
+
+      if not fields_module?(module) do
+        compile_error!(env, """
+        `redact_with` needs a field policy (a module that does `use Warden.Fields`), got: \
+        #{inspect(module)}\
+        """)
+      end
+
+      record!(env, scope, :warden_redact_with, module)
+    end
+
+    defp fields_module?(module) do
+      is_atom(module) and match?({:module, _module}, Code.ensure_compiled(module)) and
+        function_exported?(module, :__warden_fields__, 1)
+    end
+
     ## Helpers
 
     defp eval!(ast, env, macro) do
@@ -236,6 +273,7 @@ if Code.ensure_loaded?(Absinthe) do
     defp macro_name(:warden_args), do: "`authorize_args`"
     defp macro_name(:warden_list_policy), do: "`list_policy`"
     defp macro_name(:warden_on_deny), do: "`on_deny:`"
+    defp macro_name(:warden_redact_with), do: "`redact_with`"
 
     # Finds the reference of the definition that is currently open, by walking the
     # recorded blueprint attributes backwards and balancing `:close` markers.

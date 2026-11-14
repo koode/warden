@@ -30,7 +30,12 @@ if Code.ensure_loaded?(Absinthe) do
     def build(types, config) do
       catalog = config.catalog
       object_rules = object_rules(types, config)
-      errors = validate_meta(types, catalog) ++ covered_errors(types, object_rules)
+      redactors = redactors(types)
+
+      errors =
+        validate_meta(types, catalog) ++
+          covered_errors(types, object_rules) ++ redact_errors(types, config)
+
       inputs = input_plans(types)
 
       # For abstract types the concrete type comes from user code (`resolve_type`), which
@@ -49,7 +54,8 @@ if Code.ensure_loaded?(Absinthe) do
             reduce: {%{}, %{}} do
           {fields, subs} ->
             pre = pre_spec(object, field, types, object_rules, inputs, config)
-            post = post_spec(object, field, types, object_rules, object_type_rules, config)
+            rules = {object_rules, object_type_rules, redactors}
+            post = post_spec(object, field, types, rules, config)
 
             fields =
               if pre || post,
@@ -418,7 +424,9 @@ if Code.ensure_loaded?(Absinthe) do
 
     ## Post
 
-    defp post_spec(object, field, types, object_rules, object_type_rules, config) do
+    defp post_spec(object, field, types, rules, config) do
+      {object_rules, object_type_rules, redactors} = rules
+
       if introspection_field?(field) do
         nil
       else
@@ -426,21 +434,14 @@ if Code.ensure_loaded?(Absinthe) do
         shape = shape(field.type)
 
         {abstract_rule, concrete_rules, abstract_kind} =
-          case Map.get(types, named) do
-            %Type.Object{} ->
-              {nil, Map.take(object_rules, [named]), nil}
+          return_rules(Map.get(types, named), named, object_rules, object_type_rules)
 
-            %Type.Interface{} ->
-              {Map.get(object_rules, named), object_type_rules, :interface}
+        # Like object rules, any object type may stand behind an abstract type.
+        field_redactors =
+          if abstract_kind == nil, do: Map.take(redactors, [named]), else: redactors
 
-            %Type.Union{} ->
-              {Map.get(object_rules, named), object_type_rules, :union}
-
-            _ ->
-              {nil, %{}, nil}
-          end
-
-        if abstract_rule == nil and map_size(concrete_rules) == 0 do
+        if abstract_rule == nil and map_size(concrete_rules) == 0 and
+             map_size(field_redactors) == 0 do
           nil
         else
           spec = %{
@@ -453,10 +454,24 @@ if Code.ensure_loaded?(Absinthe) do
             list_policy: list_policy(object, field, types, config)
           }
 
-          with_across_parents(spec, config)
+          spec
+          |> with_redactors(field_redactors)
+          |> with_across_parents(config)
         end
       end
     end
+
+    # {abstract_rule, concrete_rules, abstract_kind} for a field's return type.
+    defp return_rules(%Type.Object{}, named, object_rules, _object_type_rules),
+      do: {nil, Map.take(object_rules, [named]), nil}
+
+    defp return_rules(%Type.Interface{}, named, object_rules, object_type_rules),
+      do: {Map.get(object_rules, named), object_type_rules, :interface}
+
+    defp return_rules(%Type.Union{}, named, object_rules, object_type_rules),
+      do: {Map.get(object_rules, named), object_type_rules, :union}
+
+    defp return_rules(_type, _named, _object_rules, _object_type_rules), do: {nil, %{}, nil}
 
     # `batch_across_parents: true`: the object rule of a single object (not a list, not
     # an abstract type) is deferred through `Absinthe.Middleware.Batch` when the rule has
@@ -474,6 +489,139 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     defp with_across_parents(spec, _config), do: spec
+
+    # `redact_with`: the field policy of every object type the value may have. Only set
+    # when there is one, so the specs of schemas without redaction stay as they were.
+    defp with_redactors(spec, redactors) when map_size(redactors) == 0, do: spec
+    defp with_redactors(spec, redactors), do: Map.put(spec, :redactors, redactors)
+
+    ## Redaction
+
+    defp redactors(types) do
+      for {ident, %Type.Object{} = object} <- types,
+          module = meta(object, :warden_redact_with),
+          module != nil,
+          into: %{},
+          do: {ident, module}
+    end
+
+    defp redact_errors(types, config) do
+      sorted = Enum.sort_by(types, fn {ident, _type} -> ident end)
+
+      own =
+        for {ident, type} <- sorted,
+            module = meta(type, :warden_redact_with),
+            module != nil,
+            error <- redact_type_errors(ident, type, module, config),
+            do: error
+
+      stray =
+        for {_ident, %{fields: fields} = type} <- sorted,
+            is_map(fields),
+            {_field_ident, field} <- Enum.sort_by(fields, &elem(&1, 0)),
+            meta(field, :warden_redact_with) != nil do
+          "#{type.name}.#{field.name}: `redact_with` is only supported on object types"
+        end
+
+      own ++ stray
+    end
+
+    defp redact_type_errors(ident, %Type.Object{} = object, module, config) do
+      case fields_info(module) do
+        {:ok, info} ->
+          root_errors(ident, object) ++
+            redactor_authorizer_errors(object, module, info, config) ++
+            struct_errors(object, module, info) ++ nil_errors(object, module, info)
+
+        :error ->
+          error = """
+          #{object.name}: `redact_with` names #{inspect(module)}, which is not a field \
+          policy (use Warden.Fields)\
+          """
+
+          [error]
+      end
+    end
+
+    defp redact_type_errors(_ident, type, _module, _config),
+      do: ["#{type.name}: `redact_with` is only supported on object types"]
+
+    defp fields_info(module) do
+      if is_atom(module) and match?({:module, _module}, Code.ensure_compiled(module)) and
+           function_exported?(module, :__warden_fields__, 1),
+         do: {:ok, module.__warden_fields__(:info)},
+         else: :error
+    end
+
+    defp root_errors(ident, object) when ident in @root_types,
+      do: ["#{object.name}: `redact_with` is not supported on root types"]
+
+    defp root_errors(_ident, _object), do: []
+
+    defp redactor_authorizer_errors(object, module, info, config) do
+      error = """
+      #{object.name}: `redact_with` #{inspect(module)} belongs to \
+      #{inspect(info.authorizer)}, not #{inspect(config.authorizer)}\
+      """
+
+      if info.authorizer == config.authorizer, do: [], else: [error]
+    end
+
+    # The structs the object type is linked to: the `for:` of every policy its own rule
+    # names with `can/2,3`, and its `warden_schema`. A field policy for another struct
+    # fails compilation.
+    defp struct_errors(object, module, info) do
+      linked = linked_structs(object)
+
+      if linked == [] or info.for in linked do
+        []
+      else
+        about = Enum.map_join(linked, " and ", &inspect/1)
+
+        error = """
+        #{object.name}: `redact_with` #{inspect(module)} redacts #{inspect(info.for)}, \
+        but the object type is about #{about}\
+        """
+
+        [error]
+      end
+    end
+
+    defp linked_structs(object) do
+      from_policies =
+        for {:can, policy, _action, _opts} <- rule_leaves(meta(object, :warden_rule)),
+            {:ok, struct_module} <- [policy_struct(policy)],
+            do: struct_module
+
+      schema = meta(object, :warden_schema)
+      from_schema = if is_atom(schema) and schema != nil, do: [schema], else: []
+      Enum.uniq(from_policies ++ from_schema)
+    end
+
+    defp rule_leaves({tag, rules}) when tag in [:all, :any] and is_list(rules),
+      do: Enum.flat_map(rules, &rule_leaves/1)
+
+    defp rule_leaves(nil), do: []
+    defp rule_leaves(rule), do: [rule]
+
+    defp policy_struct(policy) do
+      if is_atom(policy) and match?({:module, _module}, Code.ensure_compiled(policy)) and
+           function_exported?(policy, :__warden_policy__, 1),
+         do: {:ok, policy.__warden_policy__(:info).for},
+         else: :error
+    end
+
+    # A redacted value of `nil` in a non-null GraphQL field (same identifier) would null
+    # the whole object for every actor the rule denies.
+    defp nil_errors(object, module, info) do
+      for %{field: field_ident, with: nil} <- info.redactions,
+          %{type: %Type.NonNull{}} = field <- [Map.get(object.fields, field_ident)] do
+        """
+        #{object.name}.#{field.name}: #{inspect(module)} redacts #{inspect(field_ident)} \
+        with nil, but the field is non-null\
+        """
+      end
+    end
 
     defp list_policy(object, field, types, config) do
       own = meta(field, :warden_list_policy)
@@ -733,7 +881,8 @@ if Code.ensure_loaded?(Absinthe) do
         end
 
       stray =
-        for key <- [:warden_args, :warden_list_policy, :warden_on_deny], meta(arg, key) != nil do
+        for key <- [:warden_args, :warden_list_policy, :warden_on_deny, :warden_redact_with],
+            meta(arg, key) != nil do
           "#{where}: #{inspect(key)} is not supported on an argument"
         end
 

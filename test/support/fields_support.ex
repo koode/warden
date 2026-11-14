@@ -187,3 +187,22 @@ defmodule Warden.Test.Fields.DupB do
   use Warden.Fields, authorizer: Warden.Test.Fields.DupAuthz, for: Warden.Test.Fields.Comment
   redact :anchor, with: nil, unless: role(:staff)
 end
+
+defmodule Warden.Test.Fields.NilAuthz do
+  @moduledoc false
+  # Lists a field policy that blanks a field with nil, for the non-null compile check.
+  use Warden.Authorizer, roles: [:staff], fields: [Warden.Test.Fields.NilBodyFields]
+
+  @impl true
+  def subject(context), do: context[:current_user]
+
+  @impl true
+  def roles(_user, _context), do: []
+end
+
+defmodule Warden.Test.Fields.NilBodyFields do
+  @moduledoc false
+  use Warden.Fields, authorizer: Warden.Test.Fields.NilAuthz, for: Warden.Test.Fields.Comment
+  redact :body, with: nil, unless: role(:staff)
+  redact :anchor, with: nil, unless: role(:staff)
+end

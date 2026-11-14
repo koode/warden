@@ -29,6 +29,8 @@ if Code.ensure_loaded?(Absinthe) do
       * `:list_policy` - `:null_item`, `:filter` or `:fail_list`, for object fields.
       * `:on_deny` - `:null`, `{:replace, value}` or `:error`, for object fields with a
         `:rule` (see `Warden.Absinthe.Notation.authorize/2`).
+      * `:redact_with` - a `Warden.Fields` module, for object types (see
+        `Warden.Absinthe.Notation.redact_with/1`).
     """
     @spec meta(keyword, keyword) :: {:meta, keyword}
     def meta(opts, extra_meta \\ []) do
@@ -56,6 +58,13 @@ if Code.ensure_loaded?(Absinthe) do
             end
 
             {:warden_on_deny, on_deny}
+
+          {:redact_with, module} ->
+            if not (is_atom(module) and module != nil) do
+              raise ArgumentError, "invalid redact_with: #{inspect(module)}"
+            end
+
+            {:warden_redact_with, module}
 
           {key, _} ->
             raise ArgumentError, "unknown Warden.Absinthe.Hydrate.meta option: #{inspect(key)}"

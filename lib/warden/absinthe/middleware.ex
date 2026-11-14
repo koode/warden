@@ -17,6 +17,7 @@ if Code.ensure_loaded?(Absinthe) do
     alias Warden.Absinthe.Decide
     alias Warden.{Actor, Check, Denial, Evaluator}
     alias Warden.Authorizer.Callbacks
+    alias Warden.Fields.Redactor
 
     @acc_key Warden
     @decided :__warden_decided__
@@ -410,7 +411,8 @@ if Code.ensure_loaded?(Absinthe) do
       }
 
       ref = make_ref()
-      batch_key = {__MODULE__, :decide_across_parents, {rule, spec.authorizer}}
+      redactor = spec |> Map.get(:redactors, %{}) |> Map.get(spec.named)
+      batch_key = {__MODULE__, :decide_across_parents, {rule, spec.authorizer, redactor}}
       continuation = {{__MODULE__, :post_decided}, {spec, value}}
 
       waiting = %{
@@ -428,18 +430,27 @@ if Code.ensure_loaded?(Absinthe) do
 
     # Called by `Absinthe.Middleware.Batch` with the deferred checks of one level. Checks
     # are grouped by actor and context (a batch may span several documents) and each group
-    # is decided with one `Warden.Evaluator.many/3` call. Returns `%{ref => result}`.
-    def decide_across_parents({rule, authorizer}, items) do
+    # is decided with one `Warden.Evaluator.many/3` call; with `redact_with`, the values
+    # that pass are redacted together too. Returns `%{ref => {result, value}}`.
+    def decide_across_parents({rule, authorizer, redactor}, items) do
       items
       |> Enum.group_by(fn {_ref, check} -> {without_cache(check.actor), check.context} end)
-      |> Enum.flat_map(fn {_group, members} -> decide_group(rule, authorizer, members) end)
+      |> Enum.flat_map(fn {_group, members} ->
+        decide_group(rule, authorizer, redactor, members)
+      end)
       |> Map.new()
     end
 
-    defp decide_group(rule, authorizer, [{_ref, %Check{actor: actor}} | _rest] = members) do
+    defp decide_group(
+           rule,
+           authorizer,
+           redactor,
+           [{_ref, %Check{actor: actor}} | _rest] = members
+         ) do
       {refs, checks} = Enum.unzip(members)
       checks = Enum.map(checks, &%{&1 | actor: actor})
       {results, actor} = Evaluator.many(rule, checks, authorizer)
+      values = redact_passed(redactor, checks, results, actor, authorizer)
       denied = Enum.count(results, &(&1 != :ok))
       reason = Enum.find_value(results, fn result -> deny_reason(result) end)
 
@@ -454,8 +465,28 @@ if Code.ensure_loaded?(Absinthe) do
       }
 
       Warden.Telemetry.decision(decision)
-      Enum.zip(refs, results)
+      Enum.zip(refs, Enum.zip(results, values))
     end
+
+    defp redact_passed(nil, checks, _results, _actor, _authorizer),
+      do: Enum.map(checks, & &1.value)
+
+    defp redact_passed(redactor, [first | _rest] = checks, results, actor, authorizer) do
+      passed = for {check, :ok} <- Enum.zip(checks, results), do: check.value
+
+      {redacted, _actor} =
+        Redactor.redact_group(redactor, passed, actor, first.context, authorizer)
+
+      merge_passed(checks, results, redacted)
+    end
+
+    defp merge_passed([], [], _redacted), do: []
+
+    defp merge_passed([_check | checks], [:ok | results], [value | redacted]),
+      do: [value | merge_passed(checks, results, redacted)]
+
+    defp merge_passed([check | checks], [_denied | results], redacted),
+      do: [check.value | merge_passed(checks, results, redacted)]
 
     defp deny_reason({:deny, %{reason: reason}}), do: reason
     defp deny_reason(_result), do: nil
@@ -465,8 +496,12 @@ if Code.ensure_loaded?(Absinthe) do
     defp without_cache(%Actor{delegator: delegator} = actor),
       do: %{actor | cache: %{}, delegator: without_cache(delegator)}
 
-    # Resumes a deferred check: rebuilds the decided value and walks it like `post/2`.
-    def post_decided(%Resolution{value: {:__warden_outcome__, result}} = res, {spec, value}) do
+    # Resumes a deferred check: rebuilds the decided (and redacted) value and walks it like
+    # `post/2`.
+    def post_decided(
+          %Resolution{value: {:__warden_outcome__, {result, value}}} = res,
+          {spec, _original}
+        ) do
       {actor, res} = actor(res, spec.authorizer)
       res = %{res | value: value}
 
