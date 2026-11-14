@@ -105,6 +105,8 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
   IO.puts("absinthe=" <> inspect(Code.ensure_loaded?(Warden.Absinthe)))
   IO.puts("plug=" <> inspect(Code.ensure_loaded?(Warden.Plug)))
   IO.puts("phoenix=" <> inspect(Code.ensure_loaded?(Warden.Phoenix.Channel)))
+  IO.puts("ecto=" <> inspect(Code.ensure_loaded?(Warden.Ecto)))
+  IO.puts("ecto_policy=" <> inspect(Code.ensure_loaded?(Warden.Ecto.Policy)))
   """
 
   test "neither absinthe nor plug: explicit authorizer" do
@@ -117,6 +119,8 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
     assert out =~ "absinthe=false"
     assert out =~ "plug=false"
     assert out =~ "phoenix=false"
+    assert out =~ "ecto=false"
+    assert out =~ "ecto_policy=false"
   end
 
   test "neither absinthe nor plug: only the configured default authorizer" do
@@ -168,6 +172,70 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
       """)
 
     assert out =~ ~s(bodies=["", ""])
+  end
+
+  test "ecto without ecto_sql, absinthe or plug" do
+    files = %{
+      "lib/authz.ex" => """
+      defmodule Standalone.Authz do
+        use Warden.Authorizer,
+          roles: [:admin],
+          tenant_roles: [:member],
+          policies: [Standalone.Docs]
+
+        @impl true
+        def subject(context), do: context[:current_user]
+
+        @impl true
+        def roles(_user, _context), do: []
+
+        @impl true
+        def tenant_roles(user, tenant, _context), do: Map.get(user.memberships, tenant, [])
+
+        @impl true
+        def tenants(actor, _context), do: Map.keys(actor.subject.memberships)
+      end
+      """,
+      "lib/docs.ex" => """
+      defmodule Standalone.Doc do
+        use Ecto.Schema
+
+        schema "docs" do
+          field :workspace_id, :string
+          field :public, :boolean
+        end
+      end
+
+      defmodule Standalone.Docs do
+        use Warden.Ecto.Policy,
+          authorizer: Standalone.Authz,
+          schema: Standalone.Doc,
+          as: :doc,
+          tenant: :workspace_id,
+          actions: [:read]
+
+        allow :read, rule: tenant_role(:member), where: [public: true]
+      end
+      """
+    }
+
+    dir = project("ecto_only", ~s([{:ecto, "~> 3.12"}]), files)
+    build!(dir)
+
+    out =
+      run!(dir, """
+      context = %{current_user: %{id: "u1", memberships: %{"w1" => [:member]}}}
+      query = Warden.Ecto.scope(Standalone.Doc, context, :read, authorizer: Standalone.Authz)
+      IO.puts("scope=" <> inspect(query))
+      IO.puts("to_sql=" <> inspect(function_exported?(Warden.Ecto, :to_sql, 4)))
+      IO.puts("absinthe=" <> inspect(Code.ensure_loaded?(Warden.Absinthe)))
+      IO.puts("plug=" <> inspect(Code.ensure_loaded?(Warden.Plug)))
+      """)
+
+    assert out =~ ~s(where: d0.workspace_id == ^"w1" and d0.public == ^true)
+    assert out =~ "to_sql=false"
+    assert out =~ "absinthe=false"
+    assert out =~ "plug=false"
   end
 
   test "plug without absinthe" do
