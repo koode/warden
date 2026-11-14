@@ -48,11 +48,37 @@ if Code.ensure_loaded?(Ecto) do
     def validate(policy) do
       info = Info.fetch!(policy)
 
-      info.actions
-      |> Map.keys()
-      |> Enum.sort()
-      |> Enum.flat_map(&visit(info, &1, [{policy, &1}]))
-      |> Enum.uniq()
+      graph_errors =
+        info.actions
+        |> Map.keys()
+        |> Enum.sort()
+        |> Enum.flat_map(&visit(info, &1, [{policy, &1}]))
+
+      Enum.uniq(duplicate_errors(info) ++ graph_errors)
+    end
+
+    # One struct has one policy in an authorizer: with two, which one decides a row would
+    # depend on their order in `policies:`.
+    defp duplicate_errors(info) do
+      others =
+        for other <- info.authorizer.__warden_catalog__().policies,
+            other != info.policy,
+            Code.ensure_loaded?(other),
+            function_exported?(other, :__warden_policy__, 1),
+            other.__warden_policy__(:info).for == info.schema,
+            do: other
+
+      case others do
+        [] ->
+          []
+
+        _duplicates ->
+          names = Enum.map_join(others, ", ", &inspect/1)
+
+          [
+            "#{inspect(info.schema)} has another policy in #{inspect(info.authorizer)}'s `policies:`: #{names}"
+          ]
+      end
     end
 
     defp visit(info, action, path) do

@@ -411,6 +411,38 @@ defmodule Warden.Ecto.PolicyCompileTest do
       assert warnings =~ "must both have a `:tenant` or both have none"
     end
 
+    test "two policies for one schema warn after compiling and raise on first use" do
+      authorizer = unique("Warden.Test.Compiled.TwinAuthz")
+      first = unique("Warden.Test.Compiled.TwinFirst")
+      second = unique("Warden.Test.Compiled.TwinSecond")
+
+      code = """
+      defmodule #{authorizer} do
+        use Warden.Authorizer, roles: [:admin], policies: [#{first}, #{second}]
+        def subject(context), do: context[:current_user]
+        def roles(_user, _context), do: []
+      end
+
+      defmodule #{first} do
+        use Warden.Ecto.Policy, authorizer: #{authorizer}, schema: Warden.Test.Ecto.Team, as: :team, actions: [:read]
+        allow :read, rule: public()
+      end
+
+      defmodule #{second} do
+        use Warden.Ecto.Policy, authorizer: #{authorizer}, schema: Warden.Test.Ecto.Team, as: :team, actions: [:read]
+        allow :read, rule: authenticated()
+      end
+      """
+
+      warnings = ExUnit.CaptureIO.capture_io(:stderr, fn -> Code.compile_string(code) end)
+      assert warnings =~ "Warden.Test.Ecto.Team has another policy in"
+      assert warnings =~ second
+
+      assert_raise Warden.PolicyError, ~r/has another policy/, fn ->
+        Graph.ensure_valid!(Module.concat([first]))
+      end
+    end
+
     test "the policies of the suite are valid" do
       for policy <- Authz.__warden_catalog__().policies do
         assert Graph.validate(policy) == []
