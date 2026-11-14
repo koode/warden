@@ -206,6 +206,37 @@ lists at once (`batch: true` and `check_many/2`) and can have a timeout. Every d
 emits a `[:warden, :decision]` telemetry event, and `Warden.explain/3` shows every step of
 a rule. See the [actors guide](guides/actors.md).
 
+## Policies and Ecto
+
+A policy answers "may this actor do `action` on this row?" once per resource. With
+`Warden.Ecto.Policy` the same declaration is also a query scope, so lists, search,
+exports and jobs load only the rows the actor may see, and the GraphQL object rule
+(`can/2`) checks every returned value against the same declaration.
+
+```elixir
+defmodule MyApp.Authz.Issues do
+  use Warden.Ecto.Policy,
+    authorizer: MyApp.Authz,
+    schema: MyApp.Issues.Issue,
+    as: :issue,
+    tenant: :workspace_id,
+    repo: MyApp.Repo,
+    actions: [:read, :write],
+    write_actions: [:write]
+
+  allow :read, through: :team, where: [trashed_at: nil]
+  allow :write, rule: tenant_role(:member), through: {:team, :read}
+  requires :write, credential_scope("issues:write")
+end
+
+Issue |> Warden.Ecto.scope(actor, :read, tenant: workspace_id) |> Repo.all()
+Warden.Ecto.allowed?(actor, :write, {Issue, id})     # one EXISTS query
+Warden.Ecto.filter(actor, :read, issues)             # one query, order kept
+```
+
+`Warden.Policy` is the in-memory variant for apps without Ecto. See the
+[policies and Ecto guide](guides/policies-and-ecto.md).
+
 ## Field redaction
 
 A field policy says which fields of a struct an actor may read. It is declared once per
