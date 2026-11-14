@@ -197,6 +197,10 @@ if Code.ensure_loaded?(Ecto) do
         later request, by `Warden.on_behalf_of/3`) decides the row through its policy;
       * for the same policy and action: rows loaded for `:read` are decided as usual for
         `:write`;
+      * for the same context: the scope ran with the `:context` option, else the actor's
+        own context, and a decision under any other context (not `===`) decides the row
+        through its policy. The `:loader` key is left out of that comparison: Absinthe's
+        Dataloader plugin replaces it on every resolution pass;
       * for the struct as loaded: a struct whose persisted fields or prefix changed is
         decided as it is.
 
@@ -222,7 +226,7 @@ if Code.ensure_loaded?(Ecto) do
       info = Info.policy_for!(authorizer, root_schema!(scoped))
       repo_opts = Keyword.merge(repo_opts, Keyword.take(scope_opts, [:prefix]))
       rows = repo.all(scoped, repo_opts)
-      Mark.mark_all(rows, info, action, actor, scoped)
+      Mark.mark_all(rows, info, action, actor, context, scoped)
     end
 
     @doc """

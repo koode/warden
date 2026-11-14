@@ -81,7 +81,7 @@ if Code.ensure_loaded?(Ecto) do
     # A struct that `Warden.Ecto.all/5` loaded for this side and action is decided by the
     # scope that admitted it, as `can/2` decides it: one step, no query.
     defp admitted_or_planned(info, action, side, row, key, tenant, state) do
-      if Mark.admits?(row, info, action, side) do
+      if Mark.admits?(row, info, action, side, state.context) do
         step = %{rule: {:admitted_by_scope, action}, result: :ok, steps: []}
         %Explanation{result: :ok, steps: [step]}
       else

@@ -1253,8 +1253,11 @@ Paths are relative to `lib/warden/`.
   marked. A query whose select is not the root binding as is (a join's binding, a
   `select_merge`) and a struct from a source other than the schema's are not marked.
   The mark names the policy, the action, the actor's `instance` (and, for a delegated
-  actor, the instance of the delegator it carries), the prefix and the values of every
-  persisted field, the tenant included. `Decide` (the one place that decides a loaded
+  actor, the instance of the delegator it carries), the context the scope ran with (the
+  `context:` option, else the actor's own; a decision under a context that is not `===`
+  to it does not match, except for the `:loader` key, which Absinthe's Dataloader plugin
+  replaces on every resolution pass), the prefix and the values of every persisted field, the tenant
+  included. `Decide` (the one place that decides a loaded
   struct for every entry point: `can/2` in GraphQL and the core API, `allowed?/4`,
   `filter/4`) runs the scope gates first and then answers `true` for a struct whose mark
   matches all of these, before a hand-written `allowed?/4` and before the in-memory

@@ -7,7 +7,8 @@
 - `Warden.Ecto.all/4,5`: runs a query scoped by `scope/4` and marks the rows it returns,
   so a later `can/2` decision (a GraphQL object rule, `Warden.Ecto.allowed?/4`,
   `Warden.Ecto.filter/4`, `Warden.filter/4`) by the same actor instance for the same
-  policy and action allows them without a query, after the tenant, binding and
+  policy and action, under the same (`===`, `:loader` aside) context the scope ran with
+  (`context:`, else the actor's own), allows them without a query, after the tenant, binding and
   system-kind gates. `Warden.Ecto.explain/4` explains such a row as
   `{:admitted_by_scope, action}`.
 - `Warden.Absinthe.actor/1`: the actor of the document execution, for resolvers (for

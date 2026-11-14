@@ -125,6 +125,20 @@ defmodule Warden.Ecto.ScopedRowsTest do
       assert count == 3
     end
 
+    test "in a GraphQL list resolved in a later Dataloader pass need only the resolver's query" do
+      context = context(@both_tenants)
+
+      {{:ok, %{data: %{"scopedIssuesAfterLoad" => scoped}}}, count} =
+        count_queries(fn ->
+          Absinthe.run("{ scopedIssuesAfterLoad { id } }", Warden.Test.Ecto.GraphQL,
+            context: context
+          )
+        end)
+
+      assert [_first, _second, _third, _fourth] = scoped
+      assert count == 1
+    end
+
     test "agree with the scope in Warden.Test.assert_policy_consistent/4" do
       actor = actor(@both_tenants)
       other = actor(sam())

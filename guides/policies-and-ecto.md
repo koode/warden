@@ -518,6 +518,10 @@ credential's tenant (`:tenant_binding`) and the system kinds. A mark counts only
   GraphQL that is `Warden.Absinthe.actor(resolution)`;
 * for the policy and action it was loaded for: rows loaded for `:read` are decided as
   usual for `:write`;
+* for the context the rows were loaded with (the `context:` option of `all/5`, else the
+  actor's own): a decision under another context decides the rows through the policy,
+  since a policy may read the context. Only `:loader` is left out of the comparison,
+  because Absinthe's Dataloader plugin replaces it on every resolution pass;
 * for the row as loaded: a struct whose persisted fields or prefix changed is decided as
   it is.
 

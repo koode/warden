@@ -5,10 +5,19 @@ defmodule Warden.Test.Ecto.GraphQL do
   use Absinthe.Schema
   use Warden.Absinthe, authorizer: Warden.Test.Ecto.Authz, list_policy: :filter
 
+  import Absinthe.Resolution.Helpers, only: [on_load: 2]
   import Ecto.Query, only: [from: 2]
 
   alias Warden.Test.Ecto.{Comment, CommentFields, Comments, Issue, Issues}
   alias Warden.Test.Repo
+
+  # Absinthe's Dataloader plugin replaces `context.loader` on every resolution pass.
+  def plugins, do: [Absinthe.Middleware.Dataloader | Absinthe.Plugin.defaults()]
+
+  def context(context) do
+    source = Dataloader.KV.new(fn _batch, keys -> Map.new(keys, &{&1, &1}) end)
+    Map.put_new(context, :loader, Dataloader.add_source(Dataloader.new(), :kv, source))
+  end
 
   object :issue do
     authorize can(Issues, :read)
@@ -48,6 +57,20 @@ defmodule Warden.Test.Ecto.GraphQL do
         query = from(issue in Issue, order_by: issue.id)
         actor = Warden.Absinthe.actor(resolution)
         {:ok, Warden.Ecto.all(Repo, query, actor, :read)}
+      end
+    end
+
+    # The same list, loaded after a Dataloader round trip: its rows are decided in a later
+    # resolution pass, under a context whose `:loader` changed.
+    field :scoped_issues_after_load, list_of(:issue) do
+      resolve fn _args, %{context: %{loader: loader}} = resolution ->
+        loader
+        |> Dataloader.load(:kv, :tick, 1)
+        |> on_load(fn _loaded ->
+          query = from(issue in Issue, order_by: issue.id)
+          actor = Warden.Absinthe.actor(resolution)
+          {:ok, Warden.Ecto.all(Repo, query, actor, :read)}
+        end)
       end
     end
   end

@@ -73,7 +73,7 @@ if Code.ensure_loaded?(Ecto) do
         gate != nil ->
           {{:done, false}, {side, state}}
 
-        Mark.admits?(struct, info, action, side) ->
+        Mark.admits?(struct, info, action, side, state.context) ->
           {{:done, true}, {side, state}}
 
         info.allowed? or info.allowed_many? ->
