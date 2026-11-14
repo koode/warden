@@ -263,6 +263,16 @@ defmodule Warden.FieldsTest do
       refute inspect(events) =~ "abby"
     end
 
+    test "the checks handed to the authorizer never show the value in inspect" do
+      secret = "the secret body"
+      context = context(abby(), %{inspect_checks: true})
+      _redacted = Warden.redact(context, [comment(1, body: secret)], authorizer: Authz)
+
+      assert_received {:inspected, inspected}
+      assert inspected =~ "Warden.Check"
+      refute inspected =~ secret
+    end
+
     test "errors about a value never show it" do
       secret = "the secret body"
       value = %{__struct__: Tag, label: secret, body: secret}

@@ -69,6 +69,7 @@ defmodule Warden.Test.Fields.Authz do
   def check_many(name, checks) do
     context = List.first(checks).context
     notify(context, {:check_many, name, length(checks)})
+    if context[:inspect_checks], do: notify(context, {:inspected, inspect(checks)})
     Enum.map(checks, &many(name, &1.value))
   end
 
