@@ -46,38 +46,83 @@ if Code.ensure_loaded?(Ecto) do
       %{query | wheres: wheres}
     end
 
-    # Raises when a CTE of the query is named like the root's table or a table that a
-    # Warden scope of the query reads (through every subquery of its `where`).
+    # Raises when a CTE anywhere in the query (the outer query included) is named like a
+    # table that a Warden scope anywhere in the query reads: the root of each scoped
+    # (sub)query and every table in the subqueries of its marked `where`.
     @spec ctes!(Ecto.Query.t()) :: :ok
-    def ctes!(%Ecto.Query{with_ctes: nil}), do: :ok
+    def ctes!(%Ecto.Query{} = query) do
+      nodes = nodes(query)
+      names = MapSet.new(for node <- nodes, name <- cte_names(node), do: name)
 
-    def ctes!(%Ecto.Query{with_ctes: %{queries: ctes}} = query) do
-      names = MapSet.new(ctes, &to_string(elem(&1, 0)))
-      read = scope_tables(query)
+      shadowed =
+        if MapSet.size(names) == 0,
+          do: [],
+          else:
+            nodes
+            |> Enum.flat_map(&scope_tables/1)
+            |> Enum.uniq()
+            |> Enum.filter(&MapSet.member?(names, &1))
 
-      case Enum.filter(read, &MapSet.member?(names, &1)) do
-        [] ->
-          :ok
-
-        shadowed ->
-          raise Warden.PolicyError, """
-          the query has CTEs named like tables its Warden scope reads \
-          (#{Enum.join(Enum.sort(shadowed), ", ")}), which would replace the policy's rows\
-          """
+      if shadowed != [] do
+        raise Warden.PolicyError, """
+        the query has CTEs named like tables its Warden scope reads \
+        (#{Enum.join(Enum.sort(shadowed), ", ")}), which would replace the policy's rows\
+        """
       end
+
+      :ok
     end
 
+    # The query and every query nested in it: its source, joins, conditions, select,
+    # combinations and CTEs.
+    defp nodes(%Ecto.Query{} = query) do
+      children =
+        source_queries(query.from.source) ++
+          Enum.flat_map(query.joins, &(source_queries(&1.source) ++ expr_queries(&1.on))) ++
+          Enum.flat_map(query.wheres ++ query.havings, &expr_queries/1) ++
+          expr_queries(query.select) ++
+          for({_kind, %Ecto.Query{} = combined} <- query.combinations, do: combined) ++
+          cte_queries(query)
+
+      [query | Enum.flat_map(children, &nodes/1)]
+    end
+
+    defp source_queries(%Ecto.SubQuery{query: query}), do: [query]
+    defp source_queries(_source), do: []
+
+    defp expr_queries(%{subqueries: subqueries}), do: Enum.map(subqueries, & &1.query)
+    defp expr_queries(_expr), do: []
+
+    defp cte_queries(%Ecto.Query{with_ctes: %{queries: ctes}}),
+      do:
+        for(
+          cte <- ctes,
+          %Ecto.Query{} = cte_query <- [elem(cte, tuple_size(cte) - 1)],
+          do: cte_query
+        )
+
+    defp cte_queries(_query), do: []
+
+    defp cte_names(%Ecto.Query{with_ctes: %{queries: ctes}}),
+      do: Enum.map(ctes, &to_string(elem(&1, 0)))
+
+    defp cte_names(_query), do: []
+
+    # The tables a Warden scope of this (sub)query reads, or none when it has no scope.
     defp scope_tables(query) do
-      marked = Enum.filter(query.wheres, &marker?(&1.file))
-      root = source_tables(query.from.source)
+      case Enum.filter(query.wheres, &marker?(&1.file)) do
+        [] ->
+          []
 
-      nested =
-        for where <- marked,
-            subquery <- where.subqueries,
-            table <- tables(subquery.query),
-            do: table
+        marked ->
+          nested =
+            for where <- marked,
+                subquery <- where.subqueries,
+                table <- tables(subquery.query),
+                do: table
 
-      Enum.uniq(root ++ nested)
+          source_tables(query.from.source) ++ nested
+      end
     end
 
     # Every table a (sub)query reads: its source, its joins and the subqueries of its

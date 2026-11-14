@@ -794,6 +794,36 @@ defmodule Warden.Ecto.ScopeTest do
       assert %Ecto.Query{} = WardenEcto.scope(unrelated, actor(sam()), :read)
     end
 
+    test "a CTE in an outer query cannot shadow a table a nested scope reads" do
+      world = world()
+      forged = from(team in Team, select: %{id: team.id, team_id: team.id, user_id: "sam"})
+      issues = WardenEcto.scope(Issue, actor(sam()), :read)
+
+      outer =
+        from(note in Note, join: issue in subquery(issues), on: issue.id == note.id)
+        |> with_cte("team_memberships", as: ^forged)
+
+      assert_raise Warden.PolicyError,
+                   ~r/CTEs named like tables its Warden scope reads \(team_memberships\)/,
+                   fn ->
+                     WardenEcto.scope(outer, actor(sam()), :read)
+                   end
+
+      notes = WardenEcto.scope(Note, actor(abby()), :read)
+
+      write =
+        Issue
+        |> WardenEcto.scope(actor(sam()), :write)
+        |> join(:inner, [issue: issue], note in subquery(notes), on: note.id == issue.id)
+        |> with_cte("notes", as: ^from(note in Note, select: %{id: note.id}))
+
+      assert_raise Warden.PolicyError, ~r/\(notes\)/, fn ->
+        WardenEcto.update_all(Repo, write, [set: [title: "edited"]], [])
+      end
+
+      assert Repo.get!(Issue, world.i1_public.id).title == "t1 public"
+    end
+
     test "scope/4 refuses preloads and combinations, and a scoped preload works" do
       world = world()
       comment = insert!(%Comment{workspace_id: "t1", issue_id: world.i1_public.id})
