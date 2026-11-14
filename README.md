@@ -284,6 +284,26 @@ end
 `{:error, %Warden.Denial{}}` and sends nothing; `Warden.Plug.authorize!/3` returns the
 conn or raises `Warden.ForbiddenError`. Both take `value:` and `authorizer:`.
 
+## Phoenix channels
+
+`Warden.Phoenix.Channel` checks a rule when a client joins, and again before every push
+by default, with an actor built from the socket each time. When access ends, the
+channel pushes `"warden:denied"` with a reason the client can show and stops. Nothing
+is pushed after that.
+
+```elixir
+defmodule MyAppWeb.WorkspaceChannel do
+  use Phoenix.Channel
+  use Warden.Phoenix.Channel,
+    rule: tenant_role(:guest),
+    value: fn "workspace:" <> id -> %{tenant_id: id} end,
+    recheck: [:every_push, {:every, :timer.minutes(1)}]
+end
+```
+
+The timer recheck stops a channel that receives nothing. See the
+[channels guide](guides/channels.md).
+
 ## GraphQL
 
 ### Declaring rules
