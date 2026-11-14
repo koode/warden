@@ -15,6 +15,14 @@
 ### Changed
 
 - `none:` over a `many_to_many` reads the join table only.
+- In memory, a match on `nil` (`where: [field: nil]`, a `nil` foreign key under
+  `if_nil: :tenant`) is left to the database, since a partial `select` leaves unloaded
+  columns `nil`.
+- `within:` bounds and `actor_in:` subject ids are cast through the field's type in
+  memory and in SQL alike; values that do not cast match nothing.
+- CTE checks cover the whole query, outer queries around a scoped subquery included.
+- Two policies for one schema in an authorizer warn after compiling and raise on first
+  use.
 - A `Warden.Test.Matrix` fixture that fails names the fixture and its line.
 
 ## 0.2.0 (2026-11-14)
