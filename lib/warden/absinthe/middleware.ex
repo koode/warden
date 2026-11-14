@@ -13,12 +13,10 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Resolution
     alias Absinthe.Type.{Interface, Union}
-    alias Warden.{Actor, Check, Denial, Rule}
+    alias Warden.{Actor, Check, Denial, Evaluator, Rule}
     alias Warden.Authorizer.Callbacks
 
     @acc_key Warden
-
-    ## Specs
 
     def pre_spec(spec), do: {{__MODULE__, :pre}, spec}
     def post_spec(spec), do: {{__MODULE__, :post}, spec}
@@ -27,9 +25,9 @@ if Code.ensure_loaded?(Absinthe) do
     def warden_entry?({{__MODULE__, _}, _}), do: true
     def warden_entry?(_), do: false
 
-    ## Actor
-
     # The actor is built once per document execution and cached in `resolution.acc`.
+    # Evaluations return it with the tenant roles they read; `put_actor/2` stores that
+    # back, so `tenant_roles/3` runs at most once per tenant per execution.
     def actor(%Resolution{acc: acc, context: context} = res, authorizer) do
       case acc do
         %{@acc_key => %{actor: %Actor{} = actor}} ->
@@ -37,14 +35,16 @@ if Code.ensure_loaded?(Absinthe) do
 
         _ ->
           actor = Actor.build(authorizer, context)
-          state = Map.get(acc, @acc_key, %{})
-          {actor, %{res | acc: Map.put(acc, @acc_key, Map.put(state, :actor, actor))}}
+          {actor, put_actor(res, actor)}
       end
     end
 
-    ## Pre
+    def put_actor(%Resolution{acc: acc} = res, %Actor{} = actor) do
+      state = Map.get(acc, @acc_key, %{})
+      %{res | acc: Map.put(acc, @acc_key, Map.put(state, :actor, actor))}
+    end
 
-    def pre(%Resolution{} = res, %{authorizer: authorizer, checks: checks}) do
+    def pre(%Resolution{} = res, %{authorizer: authorizer, checks: checks} = spec) do
       {actor, res} = actor(res, authorizer)
 
       base = %Check{
@@ -57,8 +57,12 @@ if Code.ensure_loaded?(Absinthe) do
         resolution: res
       }
 
-      case run_checks(checks, base, authorizer) do
+      {verdict, actor} = run_checks(checks, base, authorizer)
+      res = put_actor(res, actor)
+
+      case verdict do
         :ok ->
+          emit(:field, checks, actor, nil)
           res
 
         {:deny, kind, rule, failure, extra} ->
@@ -71,6 +75,8 @@ if Code.ensure_loaded?(Absinthe) do
                 failed_rule: failure.failed_rule,
                 missing_roles: failure.missing_roles,
                 missing_permissions: failure.missing_permissions,
+                reason: failure.reason,
+                trace: failure.trace,
                 actor: actor,
                 path: Resolution.path(res),
                 field: base.field,
@@ -78,56 +84,89 @@ if Code.ensure_loaded?(Absinthe) do
               ] ++ extra
             )
 
-          apply_pre_denial(res, denial, authorizer)
+          emit(kind, rule, actor, denial)
+          apply_pre_denial(res, denial, authorizer, Map.get(spec, :on_deny, :error))
       end
     end
 
-    # Shared with subscribe-time checks. Returns :ok or
-    # {:deny, kind, rule, failure, extra_denial_fields}.
+    defp emit(kind, rule, actor, denial) do
+      decision = %{
+        layer: :absinthe,
+        kind: kind,
+        rule: emitted_rule(rule),
+        actor: actor,
+        denied: if(denial, do: 1, else: 0),
+        reason: denial && denial.reason
+      }
+
+      Warden.Telemetry.decision(decision)
+    end
+
+    # A passing pre entry reports the rules it ran.
+    defp emitted_rule(checks) when is_list(checks), do: Enum.map(checks, &check_rule_term/1)
+    defp emitted_rule(rule), do: rule
+
+    defp check_rule_term({:object, _type, rule}), do: rule
+    defp check_rule_term({:field, rule}), do: rule
+    defp check_rule_term({:introspection, rule}), do: rule
+    defp check_rule_term({:args, %{args: args}}), do: {:args, Enum.map(args, &elem(&1, 0))}
+
+    # Shared with subscribe-time checks. Returns {verdict, actor}: the verdict is :ok or
+    # {:deny, kind, rule, failure, extra_denial_fields}, the actor carries the tenant
+    # roles the checks read.
     def run_checks(checks, %Check{} = base, authorizer) do
-      Enum.reduce_while(checks, :ok, fn check, :ok ->
-        case run_check(check, base, authorizer) do
-          :ok -> {:cont, :ok}
-          denial -> {:halt, denial}
-        end
-      end)
+      {verdict, base} =
+        first_denial(checks, base, fn check, base -> run_check(check, base, authorizer) end)
+
+      {verdict, base.actor}
+    end
+
+    # Evaluates `rule` for `check`; returns {:ok | {:deny, failure}, check with the
+    # updated actor}.
+    defp evaluate(rule, %Check{} = check, authorizer) do
+      {result, actor, _tenant} = Evaluator.one(rule, check, authorizer)
+      {result, %{check | actor: actor}}
     end
 
     defp run_check({:object, type, rule}, base, authorizer) do
-      case Rule.evaluate(rule, %{base | type: type}, authorizer) do
-        :ok -> :ok
-        {:deny, failure} -> {:deny, :object, rule, failure, [type: type]}
+      case evaluate(rule, %{base | type: type}, authorizer) do
+        {:ok, check} -> {:ok, %{check | type: base.type}}
+        {{:deny, failure}, check} -> {{:deny, :object, rule, failure, [type: type]}, check}
       end
     end
 
     defp run_check({:field, rule}, base, authorizer) do
-      case Rule.evaluate(rule, base, authorizer) do
-        :ok -> :ok
-        {:deny, failure} -> {:deny, :field, rule, failure, []}
+      case evaluate(rule, base, authorizer) do
+        {:ok, check} -> {:ok, check}
+        {{:deny, failure}, check} -> {{:deny, :field, rule, failure, []}, check}
       end
     end
 
     defp run_check({:introspection, rule}, base, authorizer) do
-      case Rule.evaluate(rule, base, authorizer) do
-        :ok -> :ok
-        {:deny, failure} -> {:deny, :introspection, rule, failure, []}
+      case evaluate(rule, base, authorizer) do
+        {:ok, check} -> {:ok, check}
+        {{:deny, failure}, check} -> {{:deny, :introspection, rule, failure, []}, check}
       end
     end
 
     defp run_check({:args, %{args: args, inputs: inputs}}, base, authorizer) do
       walk = %{inputs: inputs, base: base, authorizer: authorizer}
 
-      first_denial(args, fn {ident, rule, defaults, specs} ->
-        check_entry(base.args, ident, {rule, defaults, specs}, [ident], walk)
-      end)
+      {verdict, walk} =
+        first_denial(args, walk, fn {ident, rule, defaults, specs}, walk ->
+          check_entry(base.args, ident, {rule, defaults, specs}, [ident], walk)
+        end)
+
+      {verdict, walk.base}
     end
 
-    # Runs `fun` on each item until one returns something other than `:ok`.
-    defp first_denial(items, fun) do
-      Enum.reduce_while(items, :ok, fn item, :ok ->
-        case fun.(item) do
-          :ok -> {:cont, :ok}
-          denial -> {:halt, denial}
+    # Runs `fun` on each item, threading `acc`, until one returns something other than
+    # `:ok`. Returns {verdict, acc}.
+    defp first_denial(items, acc, fun) do
+      Enum.reduce_while(items, {:ok, acc}, fn item, {:ok, acc} ->
+        case fun.(item, acc) do
+          {:ok, acc} -> {:cont, {:ok, acc}}
+          denied -> {:halt, denied}
         end
       end)
     end
@@ -140,32 +179,36 @@ if Code.ensure_loaded?(Absinthe) do
     def restricted?(true, value, defaults), do: Enum.any?(defaults, &(value !== &1))
 
     # Checks the argument or input field `key` of `map`, declared as
-    # {rule, defaults, input_specs}.
+    # {rule, defaults, input_specs}. Returns {verdict, walk}.
     defp check_entry(map, key, declaration, path, walk) do
       check_input_value(Map.has_key?(map, key), Map.get(map, key), declaration, path, walk)
     end
 
     defp check_input_value(present?, value, {rule, defaults, specs}, path, walk) do
-      with :ok <- check_input_rule(present?, value, rule, defaults, path, walk) do
-        first_denial(specs, &walk_input(value, &1, path, walk))
+      case check_input_rule(present?, value, rule, defaults, path, walk) do
+        {:ok, walk} -> first_denial(specs, walk, &walk_input(value, &1, path, &2))
+        denied -> denied
       end
     end
 
     defp check_input_rule(present?, value, rule, defaults, path, walk) do
       if rule != nil and restricted?(present?, value, defaults),
         do: evaluate_input_rule(rule, path, walk),
-        else: :ok
+        else: {:ok, walk}
     end
 
-    defp evaluate_input_rule(rule, path, %{base: base, authorizer: authorizer}) do
-      case Rule.evaluate(rule, %{base | argument: path}, authorizer) do
-        :ok -> :ok
-        {:deny, failure} -> {:deny, :argument, rule, failure, [argument: path]}
+    defp evaluate_input_rule(rule, path, %{base: base, authorizer: authorizer} = walk) do
+      case evaluate(rule, %{base | argument: path}, authorizer) do
+        {:ok, check} ->
+          {:ok, %{walk | base: %{check | argument: nil}}}
+
+        {{:deny, failure}, check} ->
+          {{:deny, :argument, rule, failure, [argument: path]}, %{walk | base: check}}
       end
     end
 
-    defp walk_input(nil, _spec, _path, _walk), do: :ok
-    defp walk_input(_value, nil, _path, _walk), do: :ok
+    defp walk_input(nil, _spec, _path, walk), do: {:ok, walk}
+    defp walk_input(_value, nil, _path, walk), do: {:ok, walk}
 
     defp walk_input(value, {:non_null, spec}, path, walk),
       do: walk_input(value, spec, path, walk)
@@ -173,7 +216,9 @@ if Code.ensure_loaded?(Absinthe) do
     defp walk_input(values, {:list, spec}, path, walk) when is_list(values) do
       values
       |> Enum.with_index()
-      |> first_denial(fn {value, index} -> walk_input(value, spec, path ++ [index], walk) end)
+      |> first_denial(walk, fn {value, index}, walk ->
+        walk_input(value, spec, path ++ [index], walk)
+      end)
     end
 
     # A single value given for a list input is coerced to a list by Absinthe; walk it as
@@ -184,15 +229,15 @@ if Code.ensure_loaded?(Absinthe) do
     defp walk_input(value, {:input, ident}, path, walk) when is_map(value) do
       walk.inputs
       |> Map.fetch!(ident)
-      |> first_denial(fn {field, rule, defaults, specs} ->
+      |> first_denial(walk, fn {field, rule, defaults, specs}, walk ->
         check_entry(value, field, {rule, defaults, specs}, path ++ [field], walk)
       end)
     end
 
-    defp walk_input(_value, {:input, _}, _path, _walk), do: :ok
+    defp walk_input(_value, {:input, _ident}, _path, walk), do: {:ok, walk}
 
-    defp apply_pre_denial(res, %Denial{kind: kind} = denial, authorizer) do
-      case call_deny(authorizer, denial) do
+    defp apply_pre_denial(res, %Denial{kind: kind} = denial, authorizer, on_deny) do
+      case pre_denial_result(authorizer, denial, on_deny) do
         {:error, term} ->
           res
           |> Resolution.put_result({:error, term})
@@ -213,6 +258,15 @@ if Code.ensure_loaded?(Absinthe) do
                   if(kind == :field, do: " or {:replace, value}", else: "")
       end
     end
+
+    # `authorize rule, on_deny: ...` decides the result of a field-rule denial itself;
+    # every other denial goes through the authorizer's `deny/1`.
+    defp pre_denial_result(_authorizer, %Denial{kind: :field}, :null), do: :null
+
+    defp pre_denial_result(_authorizer, %Denial{kind: :field}, {:replace, _value} = result),
+      do: result
+
+    defp pre_denial_result(authorizer, denial, _on_deny), do: call_deny(authorizer, denial)
 
     defp post_only(middleware) do
       Enum.flat_map(middleware, fn
@@ -491,6 +545,8 @@ if Code.ensure_loaded?(Absinthe) do
          failed_rule: failure.failed_rule,
          missing_roles: failure.missing_roles,
          missing_permissions: failure.missing_permissions,
+         reason: Map.get(failure, :reason),
+         trace: Map.get(failure, :trace, []),
          actor: ctx.actor,
          path: Resolution.path(ctx.res),
          field: ctx.base.field,

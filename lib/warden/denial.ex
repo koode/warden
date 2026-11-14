@@ -15,6 +15,14 @@ defmodule Warden.Denial do
     * `argument`: for argument denials, the argument or input field path.
     * `list_policy`: for denied list items, the policy in effect (`:null_item`, `:filter`,
       `:fail_list`), else `nil`.
+    * `reason`: why the failing check or policy denied (`{:deny, reason}`), `:unavailable`
+      for a check that timed out, a list in rule order for `any_of`, else `nil`.
+    * `trace`: `[{rule, :ok | {:deny, reason}}]`, every leaf rule evaluated, in order.
+      Rule terms only, never values.
+
+  `inspect/1` shows the kind, the rules, what was missing, the reason (atoms only: the
+  map of a `{atom, map}` reason is left out), the path and the types. Never the actor,
+  the guarded value or the trace.
   """
 
   @typedoc "Why a check or policy denied: an atom, or an atom with details."
@@ -35,22 +43,11 @@ defmodule Warden.Denial do
           type: atom | nil,
           value_index: nil | [non_neg_integer],
           argument: nil | [atom | non_neg_integer],
-          list_policy: nil | Warden.Rule.list_policy()
+          list_policy: nil | Warden.Rule.list_policy(),
+          reason: reason | [term] | nil,
+          trace: [{Warden.Rule.t(), :ok | {:deny, term}}]
         }
 
-  # The actor (and its subject, the user record) and the rule's argument data stay out of
-  # inspect output; the fields are still available to code.
-  @derive {Inspect,
-           only: [
-             :kind,
-             :failed_rule,
-             :missing_roles,
-             :missing_permissions,
-             :path,
-             :field,
-             :parent_type,
-             :type
-           ]}
   defstruct [
     :kind,
     :rule,
@@ -62,8 +59,32 @@ defmodule Warden.Denial do
     :value_index,
     :argument,
     :list_policy,
+    :reason,
+    trace: [],
     missing_roles: [],
     missing_permissions: [],
     path: []
   ]
+end
+
+defimpl Inspect, for: Warden.Denial do
+  # The actor (and its subject, the user record), the guarded value and the rule's
+  # argument data stay out of inspect output; the fields are still available to code.
+  import Inspect.Algebra
+
+  def inspect(denial, opts) do
+    fields = [
+      kind: denial.kind,
+      failed_rule: denial.failed_rule,
+      missing_roles: denial.missing_roles,
+      missing_permissions: denial.missing_permissions,
+      reason: Warden.Telemetry.public_reason(denial.reason),
+      path: denial.path,
+      field: denial.field,
+      parent_type: denial.parent_type,
+      type: denial.type
+    ]
+
+    concat(["#Warden.Denial<", to_doc(fields, opts), ">"])
+  end
 end

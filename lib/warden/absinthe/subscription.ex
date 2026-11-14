@@ -39,19 +39,31 @@ if Code.ensure_loaded?(Absinthe) do
 
       with :ok <- subscribe_checks(spec.pre, base, authorizer),
            :ok <- return_checks(Map.get(spec, :return), base, authorizer),
+           :ok <- emit_granted(field_ident, actor),
            {:ok, config} <- user_config(field_ident, original, args, info) do
         {:ok, fingerprint(config, actor, context, authorizer)}
       end
+    end
+
+    defp emit_granted(field_ident, actor) do
+      decision = %{
+        layer: :absinthe,
+        kind: :subscribe,
+        rule: {:subscribe, field_ident},
+        actor: actor
+      }
+
+      Warden.Telemetry.decision(decision)
     end
 
     defp subscribe_checks(nil, _base, _authorizer), do: :ok
 
     defp subscribe_checks(%{checks: checks}, base, authorizer) do
       case Middleware.run_checks(checks, base, authorizer) do
-        :ok ->
+        {:ok, _actor} ->
           :ok
 
-        {:deny, _kind, rule, failure, extra} ->
+        {{:deny, _kind, rule, failure, extra}, _actor} ->
           refuse(base, authorizer, rule, failure,
             type: Keyword.get(extra, :type),
             argument: Keyword.get(extra, :argument)
@@ -101,6 +113,8 @@ if Code.ensure_loaded?(Absinthe) do
         failed_rule: failure.failed_rule,
         missing_roles: failure.missing_roles,
         missing_permissions: failure.missing_permissions,
+        reason: Map.get(failure, :reason),
+        trace: Map.get(failure, :trace, []),
         actor: base.actor,
         path: [Atom.to_string(base.field)],
         field: base.field,
@@ -109,6 +123,16 @@ if Code.ensure_loaded?(Absinthe) do
         argument: Keyword.get(extra, :argument)
       }
 
+      decision = %{
+        layer: :absinthe,
+        kind: :subscribe,
+        rule: rule,
+        actor: base.actor,
+        denied: 1,
+        reason: denial.reason
+      }
+
+      Warden.Telemetry.decision(decision)
       {:error, subscribe_error(authorizer, denial)}
     end
 

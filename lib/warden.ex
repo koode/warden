@@ -64,7 +64,7 @@ defmodule Warden do
   See the README for the security model and its limits.
   """
 
-  alias Warden.{Actor, Check, Denial, Rule}
+  alias Warden.{Actor, Decision, Denial, Explanation, Rule}
 
   @default_authorizer Application.compile_env(:warden, :authorizer)
 
@@ -79,8 +79,10 @@ defmodule Warden do
     * `:value` - the resource the rule guards, given to checks as `Warden.Check.value`.
     * `:context` - the context given to checks as `Warden.Check.context` when the first
       argument is an actor (with a context map, that map is the context).
+    * `:args` - a map given to checks as `Warden.Check.args`, read by
+      `tenant_role(r, tenant: {:arg, path})` and `can(policy, action, arg: path)`.
   """
-  @type opts :: [authorizer: module, value: term, context: map]
+  @type opts :: [authorizer: module, value: term, context: map, args: map]
 
   ## Authorizer resolution
 
@@ -189,11 +191,8 @@ defmodule Warden do
   An unknown role, permission or check in `rule` raises `Warden.PolicyError`.
   """
   @spec authorize(actor_or_context, Rule.t(), opts) :: :ok | {:error, Denial.t()}
-  def authorize(actor_or_context, rule, opts \\ []) when is_list(opts) do
-    {actor, context, authorizer} = setup(actor_or_context, opts)
-    validate_rule!(rule, authorizer)
-    evaluate(rule, actor, context, authorizer, Keyword.get(opts, :value))
-  end
+  def authorize(actor_or_context, rule, opts \\ []) when is_list(opts),
+    do: Decision.authorize(actor_or_context, rule, opts, :core)
 
   @doc """
   Returns `true` when `actor_or_context` passes `rule`, else `false`. Same options as
@@ -216,15 +215,12 @@ defmodule Warden do
   """
   @spec authorize!(actor_or_context, Rule.t(), opts) :: :ok
   def authorize!(actor_or_context, rule, opts \\ []) when is_list(opts) do
-    {actor, context, authorizer} = setup(actor_or_context, opts)
-    validate_rule!(rule, authorizer)
-
-    case evaluate(rule, actor, context, authorizer, Keyword.get(opts, :value)) do
+    case Decision.authorize(actor_or_context, rule, opts, :core) do
       :ok ->
         :ok
 
-      {:error, denial} ->
-        raise Warden.ForbiddenError.for_denial(denial, authorizer.__warden_catalog__())
+      {:error, %Denial{actor: actor} = denial} ->
+        raise Warden.ForbiddenError.for_denial(denial, actor.authorizer.__warden_catalog__())
     end
   end
 
@@ -240,11 +236,22 @@ defmodule Warden do
   configured default) and `:context`.
   """
   @spec filter(actor_or_context, Rule.t(), Enumerable.t(), opts) :: list
-  def filter(actor_or_context, rule, values, opts \\ []) when is_list(opts) do
-    {actor, context, authorizer} = setup(actor_or_context, opts)
-    validate_rule!(rule, authorizer)
-    Enum.filter(values, &(evaluate(rule, actor, context, authorizer, &1) == :ok))
-  end
+  def filter(actor_or_context, rule, values, opts \\ []) when is_list(opts),
+    do: Decision.filter(actor_or_context, rule, values, opts, :core)
+
+  @doc """
+  Evaluates `rule` like `authorize/3`, but without short-circuiting, and returns every
+  step: a `%Warden.Explanation{}`. Its `result` is always the decision `authorize/3`
+  makes. For development tools, tests and audit logs: every check in the rule runs.
+
+      %Warden.Explanation{result: :deny, steps: steps} =
+        Warden.explain(context, any_of([role(:admin), check(:owner)]), value: post)
+
+  Same options as `authorize/3`. Emits no telemetry.
+  """
+  @spec explain(actor_or_context, Rule.t(), opts) :: Explanation.t()
+  def explain(actor_or_context, rule, opts \\ []) when is_list(opts),
+    do: Decision.explain(actor_or_context, rule, opts)
 
   @doc """
   Builds a system actor: a webhook, a job, an unfurl. It is never anonymous and never a
@@ -286,49 +293,4 @@ defmodule Warden do
   """
   @spec on_behalf_of(Actor.t(), Actor.t(), keyword) :: Actor.t()
   def on_behalf_of(actor, delegator, opts \\ []), do: Actor.delegate(actor, delegator, opts)
-
-  defp setup(%Actor{} = actor, opts) do
-    authorizer = resolve_authorizer!(opts[:authorizer], actor)
-    {actor, Keyword.get(opts, :context, %{}), authorizer}
-  end
-
-  defp setup(context, opts) when is_map(context) do
-    authorizer = resolve_authorizer!(opts[:authorizer], nil)
-    {Actor.build(authorizer, context), context, authorizer}
-  end
-
-  defp setup(other, _opts) do
-    raise ArgumentError, "expected a %Warden.Actor{} or a context map, got: #{inspect(other)}"
-  end
-
-  defp validate_rule!(rule, authorizer) do
-    case Rule.validate(rule, authorizer.__warden_catalog__()) do
-      :ok ->
-        :ok
-
-      {:error, errors} ->
-        raise Warden.PolicyError,
-              "invalid rule for #{inspect(authorizer)}: " <> Enum.join(errors, "; ")
-    end
-  end
-
-  defp evaluate(rule, actor, context, authorizer, value) do
-    check = %Check{actor: actor, value: value, context: context}
-
-    case Rule.evaluate(rule, check, authorizer) do
-      :ok ->
-        :ok
-
-      {:deny, failure} ->
-        {:error,
-         %Denial{
-           kind: :call,
-           rule: rule,
-           failed_rule: failure.failed_rule,
-           missing_roles: failure.missing_roles,
-           missing_permissions: failure.missing_permissions,
-           actor: actor
-         }}
-    end
-  end
 end

@@ -5,8 +5,9 @@ defmodule Warden.ForbiddenError do
   It carries the `%Warden.Denial{}` and `plug_status: 403`, so Phoenix (through
   `Plug.Exception`) renders it as a 403 without Warden depending on Plug.
 
-  The message is `"Forbidden"`. It names the missing roles and permissions only when
-  the authorizer sets `expose_denial_reasons: true`.
+  The message is `"Forbidden"`. It names the missing roles and permissions, and the
+  denial reason (atoms only), only when the authorizer sets
+  `expose_denial_reasons: true`. `error.denial.reason` always holds the full reason.
   """
 
   # The denial holds the actor and its subject (the whole user record). Keep them out of
@@ -21,12 +22,19 @@ defmodule Warden.ForbiddenError do
   def for_denial(%Warden.Denial{} = denial, catalog) do
     message =
       if catalog[:expose_denial_reasons] do
-        "Forbidden (missing roles: #{inspect(denial.missing_roles)}, " <>
-          "missing permissions: #{inspect(denial.missing_permissions)})"
+        reason = reason_suffix(Warden.Telemetry.public_reason(denial.reason))
+
+        """
+        Forbidden (missing roles: #{inspect(denial.missing_roles)}, missing permissions: \
+        #{inspect(denial.missing_permissions)}#{reason})\
+        """
       else
         "Forbidden"
       end
 
     %__MODULE__{message: message, denial: denial}
   end
+
+  defp reason_suffix(nil), do: ""
+  defp reason_suffix(reason), do: ", reason: #{inspect(reason)}"
 end

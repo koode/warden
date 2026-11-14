@@ -1,0 +1,462 @@
+defmodule Warden.Evaluator do
+  @moduledoc false
+  # Evaluates rules. Every front end (the core API, `Warden.Plug`, Absinthe) goes through
+  # here, so the semantics are the same everywhere:
+  #
+  #   * only a literal `true` from a check grants; `false` and `{:deny, reason}` deny;
+  #     anything else raises `Warden.PolicyError`;
+  #   * a system actor passes no `authenticated()`, role, tenant role, permission or
+  #     credential rule, and no check unless the check names its kind;
+  #   * a delegated actor is evaluated twice, for itself and for its delegator, and the
+  #     results are ANDed;
+  #   * the actor's tenant-role cache is threaded through the evaluation and the updated
+  #     actor is returned, so callers can keep it.
+  #
+  # An outcome is `:ok` or `{:deny, failed_rule, missing_roles, missing_permissions,
+  # reason}`. `trace` collects `{leaf_rule, :ok | {:deny, reason}}` in evaluation order.
+
+  alias Warden.{Actor, Check, Credential, Explanation}
+  alias Warden.Authorizer.{Callbacks, Catalog}
+
+  @unavailable :unavailable
+  @check_contract "must return true or false (or {:deny, reason})"
+
+  defstruct [:authorizer, :catalog, :check, explain?: false, trace: [], tenant: nil, decided: %{}]
+
+  @type outcome :: :ok | {:deny, term, [atom], [term], term}
+  @type failure :: %{
+          failed_rule: term,
+          missing_roles: [atom],
+          missing_permissions: [term],
+          reason: term,
+          trace: [{term, :ok | {:deny, term}}]
+        }
+
+  # One rule for one check. Returns the result, the updated actor and the first tenant
+  # the evaluation resolved (for telemetry).
+  @spec one(term, Check.t(), module) :: {:ok | {:deny, failure}, Actor.t(), term}
+  def one(rule, %Check{actor: %Actor{}} = check, authorizer) do
+    {outcome, state} = run(rule, check, authorizer, %{})
+    actor = state.check.actor
+    trace = Enum.reverse(state.trace)
+
+    case {outcome, actor.delegator} do
+      {:ok, %Actor{} = delegator} ->
+        {delegated, delegator_state} = run(rule, %{check | actor: delegator}, authorizer, %{})
+        actor = %{actor | delegator: delegator_state.check.actor}
+        trace = trace ++ Enum.reverse(delegator_state.trace)
+        result = result(delegated, trace)
+        {result, actor, state.tenant || delegator_state.tenant}
+
+      _single_or_denied ->
+        result = result(outcome, trace)
+        {result, actor, state.tenant}
+    end
+  end
+
+  # One rule for many checks that share one actor. Returns the results in order and the
+  # updated actor.
+  @spec many(term, [Check.t()], module) :: {[:ok | {:deny, failure}], Actor.t() | nil}
+  def many(_rule, [], _authorizer), do: {[], nil}
+
+  def many(rule, [%Check{actor: first_actor} | _rest] = checks, authorizer) do
+    {results, actor} =
+      Enum.map_reduce(checks, first_actor, fn check, actor ->
+        {result, actor, _tenant} = one(rule, %{check | actor: actor}, authorizer)
+        {result, actor}
+      end)
+
+    {results, actor}
+  end
+
+  # Evaluates every sub-rule (no short-circuiting) and returns the full tree. The result
+  # always equals the result of `one/3`: both reduce the same outcomes.
+  @spec explain(term, Check.t(), module) :: {Explanation.t(), Actor.t()}
+  def explain(rule, %Check{actor: %Actor{}} = check, authorizer) do
+    {outcome, step, state} = check |> new_state(authorizer, %{}, true) |> eval_step(rule)
+    actor = state.check.actor
+
+    {delegator_explanation, actor} =
+      case actor.delegator do
+        nil ->
+          {nil, actor}
+
+        %Actor{} = delegator ->
+          {explanation, delegator} = explain(rule, %{check | actor: delegator}, authorizer)
+          {explanation, %{actor | delegator: delegator}}
+      end
+
+    explanation = %Explanation{
+      result: explanation_result(outcome, delegator_explanation),
+      reason: outcome_reason(outcome),
+      steps: [step],
+      delegator: delegator_explanation
+    }
+
+    {explanation, actor}
+  end
+
+  defp explanation_result(:ok, nil), do: :ok
+  defp explanation_result(:ok, %Explanation{result: result}), do: result
+  defp explanation_result(_denied, _delegator), do: :deny
+
+  defp outcome_reason(:ok), do: nil
+  defp outcome_reason({:deny, _failed, _roles, _perms, reason}), do: reason
+
+  defp run(rule, check, authorizer, decided) do
+    {outcome, _step, state} = check |> new_state(authorizer, decided, false) |> eval_step(rule)
+    {outcome, state}
+  end
+
+  defp new_state(check, authorizer, decided, explain?) do
+    %__MODULE__{
+      authorizer: authorizer,
+      catalog: authorizer.__warden_catalog__(),
+      check: check,
+      decided: decided,
+      explain?: explain?
+    }
+  end
+
+  defp result(:ok, _trace), do: :ok
+
+  defp result({:deny, failed, roles, perms, reason}, trace) do
+    failure = %{
+      failed_rule: failed,
+      missing_roles: Enum.uniq(roles),
+      missing_permissions: Enum.uniq(perms),
+      reason: reason,
+      trace: trace
+    }
+
+    {:deny, failure}
+  end
+
+  # Returns {outcome, explain_step | nil, state}.
+  defp eval_step(state, {:all, [_ | _] = rules} = rule) do
+    {outcome, steps, state} = eval_all(rules, state, :ok, [])
+    {outcome, step(state, rule, outcome, steps), state}
+  end
+
+  defp eval_step(state, {:any, [_ | _] = rules} = rule) do
+    {outcome, steps, state} = eval_any(rules, rule, state, {:deny, rule, [], [], []}, [])
+    {outcome, step(state, rule, outcome, steps), state}
+  end
+
+  defp eval_step(state, rule) do
+    {outcome, state} = leaf(rule, state)
+    entry = {rule, trace_outcome(outcome)}
+    state = %{state | trace: [entry | state.trace]}
+    {outcome, step(state, rule, outcome, []), state}
+  end
+
+  defp step(%__MODULE__{explain?: false}, _rule, _outcome, _steps), do: nil
+
+  defp step(%__MODULE__{explain?: true}, rule, outcome, steps) do
+    %{rule: rule, result: trace_outcome(outcome), steps: steps}
+  end
+
+  defp trace_outcome(:ok), do: :ok
+  defp trace_outcome({:deny, _failed, _roles, _perms, reason}), do: {:deny, reason}
+
+  # `all_of`: the first denial is the outcome. Short-circuits unless explaining.
+  defp eval_all([], state, outcome, steps), do: {outcome, Enum.reverse(steps), state}
+
+  defp eval_all([rule | rest], state, outcome, steps) do
+    {child, step, state} = eval_step(state, rule)
+    outcome = if outcome == :ok, do: child, else: outcome
+    steps = [step | steps]
+
+    if outcome != :ok and not state.explain?,
+      do: {outcome, Enum.reverse(steps), state},
+      else: eval_all(rest, state, outcome, steps)
+  end
+
+  # `any_of`: passes at the first pass. A denial names the `any_of` rule, every missing
+  # role and permission, and the reasons of the branches in rule order.
+  defp eval_any([], _rule, state, {:deny, failed, roles, perms, reasons}, steps),
+    do: {{:deny, failed, roles, perms, Enum.reverse(reasons)}, Enum.reverse(steps), state}
+
+  defp eval_any([], _rule, state, :ok, steps), do: {:ok, Enum.reverse(steps), state}
+
+  defp eval_any([rule | rest], any_rule, state, outcome, steps) do
+    {child, step, state} = eval_step(state, rule)
+    steps = [step | steps]
+    outcome = merge_any(outcome, child)
+
+    if outcome == :ok and not state.explain?,
+      do: {:ok, Enum.reverse(steps), state},
+      else: eval_any(rest, any_rule, state, outcome, steps)
+  end
+
+  defp merge_any(:ok, _child), do: :ok
+  defp merge_any(_denied, :ok), do: :ok
+
+  defp merge_any(
+         {:deny, failed, roles, perms, reasons},
+         {:deny, _rule, more_roles, more_perms, reason}
+       ),
+       do: {:deny, failed, roles ++ more_roles, perms ++ more_perms, [reason | reasons]}
+
+  defp leaf(rule, state) when rule in [:public, :covered], do: {:ok, state}
+  defp leaf(:deny, state), do: deny(:deny, state)
+
+  defp leaf(:authenticated, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if Actor.anonymous?(actor) or actor.system?,
+      do: deny(:authenticated, state),
+      else: {:ok, state}
+  end
+
+  defp leaf({:role, role} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if user_with?(actor, &MapSet.member?(&1.roles, role)),
+      do: {:ok, state},
+      else: deny(rule, [role], [], state)
+  end
+
+  defp leaf({:any_role, roles} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if user_with?(actor, fn actor -> Enum.any?(roles, &MapSet.member?(actor.roles, &1)) end),
+      do: {:ok, state},
+      else: deny(rule, roles, [], state)
+  end
+
+  defp leaf({:permission, perm} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if user_with?(actor, &has_permission?(&1, perm)),
+      do: {:ok, state},
+      else: deny(rule, [], [perm], state)
+  end
+
+  defp leaf({:all_permissions, perms} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    missing = if actor.system?, do: perms, else: Enum.reject(perms, &has_permission?(actor, &1))
+
+    case missing do
+      [] -> {:ok, state}
+      missing -> deny(rule, [], missing, state)
+    end
+  end
+
+  defp leaf({:any_permission, perms} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if user_with?(actor, fn actor -> Enum.any?(perms, &has_permission?(actor, &1)) end),
+      do: {:ok, state},
+      else: deny(rule, [], perms, state)
+  end
+
+  defp leaf({:kind, kinds} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if Actor.kind(actor) in kinds, do: {:ok, state}, else: deny(rule, state)
+  end
+
+  defp leaf(:session, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if credentialed?(actor) and Credential.session?(actor.credential),
+      do: {:ok, state},
+      else: deny(:session, state)
+  end
+
+  defp leaf({:credential_scope, scope} = rule, %__MODULE__{check: %Check{actor: actor}} = state) do
+    if credentialed?(actor) and Credential.grants?(actor.credential, scope),
+      do: {:ok, state},
+      else: deny(rule, state)
+  end
+
+  defp leaf({:tenant_role, role, opts} = rule, %__MODULE__{} = state) when is_list(opts) do
+    %Check{actor: actor} = check = state.check
+
+    if actor.system? or Actor.anonymous?(actor) do
+      deny(rule, state)
+    else
+      tenant = rule_tenant(Keyword.get(opts, :tenant, :value), check, state.authorizer)
+      state = note_tenant(state, tenant)
+      {roles, actor} = Actor.tenant_roles(actor, tenant, check.context, state.authorizer)
+      state = put_actor(state, actor)
+
+      if MapSet.member?(roles, role), do: {:ok, state}, else: deny(rule, state)
+    end
+  end
+
+  defp leaf({:check, name, opts} = rule, %__MODULE__{} = state) when is_atom(name) do
+    spec = check_spec(state.catalog, name)
+
+    cond do
+      system_refused?(state.check.actor, spec) ->
+        deny(rule, state)
+
+      Map.has_key?(state.decided, rule) ->
+        decided(Map.fetch!(state.decided, rule), rule, state)
+
+      true ->
+        check = %{state.check | name: name, opts: opts}
+        verdict = call_check(state.authorizer, name, check, spec)
+        decided(verdict, rule, state)
+    end
+  end
+
+  defp leaf(other, _state) do
+    raise Warden.PolicyError, "invalid rule: #{inspect(other)}"
+  end
+
+  # A verdict is `:ok` or `{:deny, reason}`.
+  defp decided(:ok, _rule, state), do: {:ok, state}
+  defp decided({:deny, reason}, rule, state), do: {{:deny, rule, [], [], reason}, state}
+
+  defp deny(rule, state), do: deny(rule, [], [], state)
+  defp deny(rule, roles, perms, state), do: {{:deny, rule, roles, perms, nil}, state}
+
+  # Roles and permissions belong to users: a system actor never has any.
+  defp user_with?(%Actor{system?: true}, _fun), do: false
+  defp user_with?(%Actor{} = actor, fun), do: fun.(actor)
+
+  # Credential rules need a credential holder: an anonymous actor has no session, and a
+  # system actor's credential is not a session and grants no scopes.
+  defp credentialed?(%Actor{} = actor), do: not Actor.anonymous?(actor)
+
+  defp has_permission?(%Actor{permissions: perms}, perm) do
+    MapSet.member?(perms, :all) or MapSet.member?(perms, perm)
+  end
+
+  defp put_actor(%__MODULE__{check: check} = state, actor),
+    do: %{state | check: %{check | actor: actor}}
+
+  defp note_tenant(%__MODULE__{tenant: nil} = state, tenant), do: %{state | tenant: tenant}
+  defp note_tenant(state, _tenant), do: state
+
+  # The tenant a tenant-role rule asks about.
+  @spec rule_tenant(term, Check.t(), module) :: term
+  def rule_tenant(:value, %Check{value: nil}, _authorizer), do: nil
+
+  def rule_tenant(:value, %Check{value: value}, authorizer),
+    do: Callbacks.tenant_of(authorizer, value)
+
+  def rule_tenant({:arg, path}, %Check{args: args}, _authorizer), do: get_path(args, path)
+
+  # Reads `path` (atoms and list indexes) from argument maps. Missing keys give `nil`.
+  @spec get_path(term, [atom | non_neg_integer]) :: term
+  def get_path(value, []), do: value
+  def get_path(map, [key | rest]) when is_map(map), do: map |> Map.get(key) |> get_path(rest)
+
+  def get_path(list, [index | rest]) when is_list(list) and is_integer(index),
+    do: list |> Enum.at(index) |> get_path(rest)
+
+  def get_path(_value, _path), do: nil
+
+  @spec check_spec(map, atom) :: map
+  def check_spec(catalog, name) do
+    catalog
+    |> Map.get(:check_specs, %{})
+    |> Map.get(name, Catalog.default_check_spec())
+  end
+
+  # A system actor reaches a check only when the check names its kind.
+  @spec system_refused?(Actor.t(), map) :: boolean
+  def system_refused?(%Actor{system?: true, kind: kind}, %{system_kinds: kinds}),
+    do: kind not in kinds
+
+  def system_refused?(%Actor{}, _spec), do: false
+
+  defp call_check(authorizer, name, check, spec) do
+    case with_timeout(fn -> single_check(authorizer, name, check, spec) end, spec.timeout) do
+      {:ok, result} -> verdict!(result, authorizer, name)
+      :timeout -> {:deny, @unavailable}
+      {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
+    end
+  end
+
+  # A batched check answers single values through check/2 when that handles the name,
+  # else through check_many/2 with one element.
+  defp single_check(authorizer, name, check, %{batch: true}) do
+    if function_exported?(authorizer, :check, 2) do
+      try do
+        authorizer.check(name, check)
+      rescue
+        error in FunctionClauseError ->
+          if error.module == authorizer and error.function == :check and error.arity == 2,
+            do: single_from_many(authorizer, name, check),
+            else: reraise(error, __STACKTRACE__)
+      end
+    else
+      single_from_many(authorizer, name, check)
+    end
+  end
+
+  defp single_check(authorizer, name, check, _spec), do: Callbacks.check(authorizer, name, check)
+
+  defp single_from_many(authorizer, name, check) do
+    case Callbacks.check_many(authorizer, name, [check]) do
+      [result] ->
+        result
+
+      other ->
+        raise Warden.PolicyError, """
+        #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return one result \\
+        per check, got: #{inspect(other)}\\
+        """
+    end
+  end
+
+  # Turns a check result into a verdict. Only `true` grants.
+  @spec verdict!(term, module, atom) :: :ok | {:deny, term}
+  def verdict!(true, _authorizer, _name), do: :ok
+  def verdict!(false, _authorizer, _name), do: {:deny, nil}
+
+  def verdict!({:deny, reason} = denial, authorizer, name) do
+    if valid_reason?(reason), do: denial, else: bad_result!(denial, authorizer, name)
+  end
+
+  def verdict!(other, authorizer, name), do: bad_result!(other, authorizer, name)
+
+  @spec bad_result!(term, module, atom) :: no_return()
+  defp bad_result!(result, authorizer, name) do
+    raise Warden.PolicyError,
+          "#{inspect(authorizer)}.check(#{inspect(name)}, ...) #{@check_contract}, got: #{inspect(result)}"
+  end
+
+  @spec valid_reason?(term) :: boolean
+  def valid_reason?(reason) when is_atom(reason), do: true
+  def valid_reason?({reason, details}) when is_atom(reason) and is_map(details), do: true
+  def valid_reason?(_reason), do: false
+
+  # Runs `fun` in a separate process when `timeout` (ms) is set. Returns `{:ok, result}`,
+  # `:timeout` (the process is killed) or `{:raised, kind, reason, stacktrace}`. The
+  # process carries the caller chain, so test sandboxes that follow `$callers` see it.
+  @spec with_timeout((-> term), pos_integer | nil) ::
+          {:ok, term} | :timeout | {:raised, atom, term, list}
+  def with_timeout(fun, nil), do: {:ok, fun.()}
+
+  def with_timeout(fun, timeout) when is_integer(timeout) do
+    parent = self()
+    ref = make_ref()
+    callers = [parent | Process.get(:"$callers", [])]
+
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        Process.put(:"$callers", callers)
+        send(parent, {ref, run_caught(fun)})
+      end)
+
+    receive do
+      {^ref, result} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, ^pid, reason} ->
+        {:raised, :exit, reason, []}
+    after
+      timeout ->
+        Process.exit(pid, :kill)
+        Process.demonitor(monitor, [:flush])
+        flush_reply(ref)
+        :timeout
+    end
+  end
+
+  defp run_caught(fun) do
+    {:ok, fun.()}
+  catch
+    kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+  end
+
+  defp flush_reply(ref) do
+    receive do
+      {^ref, _late} -> :ok
+    after
+      0 -> :ok
+    end
+  end
+end

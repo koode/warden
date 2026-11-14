@@ -158,7 +158,8 @@ defmodule Warden.Authorizer do
   @callback tenant_roles(subject :: term, tenant :: term, context :: map) :: [atom]
 
   @doc """
-  Turns a denial into a result: `{:error, term}`, `:null` or `{:replace, value}`.
+  Turns a denial into a result: `{:error, term}`, `:null` or `{:replace, value}`. The
+  denial carries the check's `reason`, so a handler can map it to an error code.
 
   The default returns `{:error, %{message: "Forbidden", extensions: %{code: "FORBIDDEN"}}}`,
   and `:null` for list items under the `:filter` policy.
@@ -282,7 +283,8 @@ defmodule Warden.Authorizer do
   @doc """
   The default denial handler. Returns `"Forbidden"` with `code: "FORBIDDEN"` and,
   only when the authorizer sets `expose_denial_reasons: true`, the missing roles and
-  permissions. Items filtered by the `:filter` list policy get `:null` (no error).
+  permissions and the denial reason (`reason`: the atom, or a list of atoms for
+  `any_of`; the map of an `{atom, map}` reason is never exposed). Items filtered by the `:filter` list policy get `:null` (no error).
   """
   @spec default_deny(Denial.t(), map) :: {:error, map} | :null
   def default_deny(%Denial{list_policy: :filter, value_index: [_ | _]}, _catalog), do: :null
@@ -296,10 +298,12 @@ defmodule Warden.Authorizer do
 
     ext =
       if catalog[:expose_denial_reasons] do
-        Map.merge(ext, %{
+        reasons = %{
           missing_roles: Enum.map(denial.missing_roles, &to_string/1),
           missing_permissions: Enum.map(denial.missing_permissions, &to_string/1)
-        })
+        }
+
+        ext |> Map.merge(reasons) |> put_reason(Warden.Telemetry.public_reason(denial.reason))
       else
         ext
       end
@@ -309,6 +313,17 @@ defmodule Warden.Authorizer do
     else
       {:error, %{message: "Forbidden", extensions: ext}}
     end
+  end
+
+  # Only the atoms of a reason are exposed, never the map of an `{atom, map}` reason.
+  defp put_reason(ext, nil), do: ext
+  defp put_reason(ext, reason) when is_atom(reason), do: Map.put(ext, :reason, to_string(reason))
+
+  defp put_reason(ext, reasons) when is_list(reasons) do
+    exposed =
+      for reason <- List.flatten(reasons), is_atom(reason), reason != nil, do: to_string(reason)
+
+    if exposed == [], do: ext, else: Map.put(ext, :reason, exposed)
   end
 
   @doc """

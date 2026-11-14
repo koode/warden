@@ -17,16 +17,26 @@ defmodule Warden.Rule do
   | `all_of(rules)` | `{:all, rules}` | every rule passes |
   | `any_of(rules)` | `{:any, rules}` | at least one rule passes |
   | `deny()` | `:deny` | never |
+  | `covered()` | `:covered` | always; in Absinthe only on fields of a type with an object rule |
+  | `tenant_role(r)` / `tenant_role(r, tenant: src)` | `{:tenant_role, r, opts}` | the actor has tenant role `r` (after `tenant_role_hierarchy`) in the tenant of the value, or of `{:arg, path}` |
+  | `kind(k)` / `kind([k, ...])` | `{:kind, [k, ...]}` | the actor's kind is one of them |
+  | `credential_scope(s)` | `{:credential_scope, s}` | the credential grants scope `s` (a session grants every scope) |
+  | `session()` | `:session` | the credential is a full session |
 
   There is no negation on purpose: a negated check fails open when actor data is
   incomplete.
 
-  Only a literal `true` from a check grants access. Any value other than `true` or
-  `false` raises `Warden.PolicyError`.
+  Only a literal `true` from a check grants access. A check may deny with a reason,
+  `{:deny, reason}`. Any other value raises `Warden.PolicyError`.
+
+  A system actor (`Warden.system_actor/2`) fails every `authenticated()`, role, tenant
+  role, permission, `session()` and `credential_scope/1` rule, and every check whose
+  `system_kinds:` does not name its kind. An actor acting on behalf of another
+  (`Warden.on_behalf_of/3`) passes a rule only when both actors pass it.
   """
 
-  alias Warden.{Actor, Check}
-  alias Warden.Authorizer.{Callbacks, Catalog}
+  alias Warden.Authorizer.Catalog
+  alias Warden.{Check, Evaluator}
 
   @type role :: atom
   @type permission :: term
@@ -44,12 +54,21 @@ defmodule Warden.Rule do
           | {:check, atom, keyword}
           | {:all, [t, ...]}
           | {:any, [t, ...]}
+          | :covered
+          | :session
+          | {:tenant_role, atom, keyword}
+          | {:kind, [atom, ...]}
+          | {:credential_scope, String.t()}
 
-  @typedoc "Result of a failed evaluation."
+  @typedoc """
+  Result of a failed evaluation. `reason` and `trace` are described in `Warden.Denial`.
+  """
   @type failure :: %{
           failed_rule: t,
           missing_roles: [role],
-          missing_permissions: [permission]
+          missing_permissions: [permission],
+          reason: term,
+          trace: [{t, :ok | {:deny, term}}]
         }
 
   @doc "Always passes."
@@ -88,6 +107,39 @@ defmodule Warden.Rule do
   @spec check(atom, keyword) :: {:check, atom, keyword}
   def check(name, opts \\ []), do: {:check, name, opts}
 
+  @doc """
+  Always passes. Marks a field that its object type's rule guards, so a reviewer can tell
+  it from a field that is `public()` on purpose. Absinthe accepts it only on fields of an
+  object type (or interface) that has an object rule; the core API and `Warden.Plug`
+  refuse it.
+  """
+  @spec covered() :: t
+  def covered, do: :covered
+
+  @doc """
+  Passes when the actor has tenant role `role` (after `tenant_role_hierarchy`) in a
+  tenant. Option `tenant:` says which: `:value` (default) is the tenant of the guarded
+  value (`c:Warden.Authorizer.tenant_of/1`), `{:arg, path}` reads it from the field
+  arguments. A `nil` tenant denies.
+  """
+  @spec tenant_role(atom, keyword) :: t
+  def tenant_role(role, opts \\ []), do: {:tenant_role, role, opts}
+
+  @doc """
+  Passes when the actor's kind (`Warden.Actor.kind/1`) is `kind` or one of `kinds`. For
+  a delegated actor both kinds must be listed.
+  """
+  @spec kind(atom | [atom, ...]) :: t
+  def kind(kinds), do: {:kind, List.wrap(kinds)}
+
+  @doc "Passes when the actor's credential grants `scope`. A session grants every scope."
+  @spec credential_scope(String.t()) :: t
+  def credential_scope(scope), do: {:credential_scope, scope}
+
+  @doc "Passes when the actor's credential is a full session (`nil` or `method: :session`)."
+  @spec session() :: t
+  def session, do: :session
+
   @doc "Passes when every rule passes. Evaluates left to right and stops at the first failure."
   @spec all_of([t, ...]) :: t
   def all_of(rules), do: {:all, rules}
@@ -95,8 +147,6 @@ defmodule Warden.Rule do
   @doc "Passes when at least one rule passes. Evaluates left to right and stops at the first pass."
   @spec any_of([t, ...]) :: t
   def any_of(rules), do: {:any, rules}
-
-  ## Validation
 
   @doc """
   Validates the shape of a rule. Returns `:ok` or `{:error, [message]}`.
@@ -116,8 +166,29 @@ defmodule Warden.Rule do
     end
   end
 
-  defp do_validate(rule, _catalog, errors) when rule in [:public, :authenticated, :deny],
-    do: errors
+  defp do_validate(rule, _catalog, errors)
+       when rule in [:public, :authenticated, :deny, :covered, :session],
+       do: errors
+
+  defp do_validate({:tenant_role, role, opts}, catalog, errors) when is_list(opts) do
+    errors = validate_tenant_source(role, opts, errors)
+    validate_tenant_role(role, catalog, errors)
+  end
+
+  defp do_validate({:kind, [_ | _] = kinds}, catalog, errors) do
+    Enum.reduce(kinds, errors, &validate_kind(&1, catalog, &2))
+  end
+
+  defp do_validate({:credential_scope, scope}, catalog, errors) when is_binary(scope) do
+    scopes = catalog && Map.get(catalog, :credential_scopes)
+
+    if scopes == nil or MapSet.member?(scopes, scope),
+      do: errors,
+      else: [
+        "credential scope #{inspect(scope)} is not in the authorizer's `credential_scopes:`"
+        | errors
+      ]
+  end
 
   defp do_validate({:role, role}, catalog, errors), do: validate_role(role, catalog, errors)
 
@@ -167,6 +238,77 @@ defmodule Warden.Rule do
     Catalog.check_options_errors(name, opts, spec)
   end
 
+  defp validate_tenant_source(role, opts, errors) do
+    cond do
+      not Keyword.keyword?(opts) or Keyword.keys(opts) -- [:tenant] != [] ->
+        ["tenant_role(#{inspect(role)}) only takes the option `tenant:`" | errors]
+
+      valid_tenant_source?(Keyword.get(opts, :tenant, :value)) ->
+        errors
+
+      true ->
+        message = """
+        tenant_role(#{inspect(role)}) `tenant:` must be :value or {:arg, path}, got: \
+        #{inspect(opts[:tenant])}\
+        """
+
+        [message | errors]
+    end
+  end
+
+  defp valid_tenant_source?(:value), do: true
+  defp valid_tenant_source?({:arg, path}), do: valid_path?(path)
+  defp valid_tenant_source?(_source), do: false
+
+  @doc false
+  # An argument path: a non-empty list of atoms and list indexes.
+  @spec valid_path?(term) :: boolean
+  def valid_path?([_ | _] = path),
+    do: Enum.all?(path, &((is_atom(&1) and not is_nil(&1)) or (is_integer(&1) and &1 >= 0)))
+
+  def valid_path?(_path), do: false
+
+  defp validate_tenant_role(role, _catalog, errors) when not is_atom(role) or is_nil(role),
+    do: ["tenant roles must be atoms, got: #{inspect(role)}" | errors]
+
+  defp validate_tenant_role(_role, nil, errors), do: errors
+
+  defp validate_tenant_role(role, catalog, errors) do
+    case Map.get(catalog, :tenant_roles) do
+      nil ->
+        ["tenant_role(#{inspect(role)}) needs `tenant_roles:` in the authorizer" | errors]
+
+      tenant_roles ->
+        if MapSet.member?(tenant_roles, role),
+          do: errors,
+          else: [unknown_tenant_role(role, tenant_roles) | errors]
+    end
+  end
+
+  defp unknown_tenant_role(role, tenant_roles) do
+    """
+    tenant role #{inspect(role)} is not in the authorizer's tenant role catalog \
+    (declared: #{inspect(Enum.sort(tenant_roles))})\
+    """
+  end
+
+  defp validate_kind(kind, _catalog, errors) when not is_atom(kind) or is_nil(kind),
+    do: ["kinds must be atoms, got: #{inspect(kind)}" | errors]
+
+  defp validate_kind(:anonymous, _catalog, errors), do: errors
+  defp validate_kind(_kind, nil, errors), do: errors
+
+  defp validate_kind(kind, catalog, errors) do
+    kinds = Map.get(catalog, :kinds, MapSet.new([:user]))
+
+    if MapSet.member?(kinds, kind),
+      do: errors,
+      else: [
+        "kind #{inspect(kind)} is not in the authorizer's `kinds:` (declared: #{inspect(Enum.sort(kinds))})"
+        | errors
+      ]
+  end
+
   defp validate_role(role, nil, errors) when is_atom(role) and not is_nil(role), do: errors
 
   defp validate_role(role, catalog, errors) when is_atom(role) and not is_nil(role) do
@@ -199,8 +341,6 @@ defmodule Warden.Rule do
     end
   end
 
-  ## Evaluation
-
   @doc """
   Evaluates `rule` for the check context `check` (a `%Warden.Check{}` with at least
   `actor` set). `authorizer` handles `check(...)` rules.
@@ -209,92 +349,7 @@ defmodule Warden.Rule do
   """
   @spec evaluate(t, Check.t(), module) :: :ok | {:deny, failure}
   def evaluate(rule, %Check{} = check, authorizer) do
-    case eval(rule, check, authorizer) do
-      :ok -> :ok
-      {:deny, failed, roles, perms} -> {:deny, failure(failed, roles, perms)}
-    end
-  end
-
-  defp failure(failed, roles, perms) do
-    %{
-      failed_rule: failed,
-      missing_roles: Enum.uniq(roles),
-      missing_permissions: Enum.uniq(perms)
-    }
-  end
-
-  defp eval(:public, _check, _authz), do: :ok
-  defp eval(:deny, _check, _authz), do: {:deny, :deny, [], []}
-
-  defp eval(:authenticated, %Check{actor: actor}, _authz) do
-    if Actor.anonymous?(actor), do: {:deny, :authenticated, [], []}, else: :ok
-  end
-
-  defp eval({:role, role} = rule, %Check{actor: actor}, _authz) do
-    if MapSet.member?(actor.roles, role), do: :ok, else: {:deny, rule, [role], []}
-  end
-
-  defp eval({:any_role, roles} = rule, %Check{actor: actor}, _authz) do
-    if Enum.any?(roles, &MapSet.member?(actor.roles, &1)),
-      do: :ok,
-      else: {:deny, rule, roles, []}
-  end
-
-  defp eval({:permission, perm} = rule, %Check{actor: actor}, _authz) do
-    if has_permission?(actor, perm), do: :ok, else: {:deny, rule, [], [perm]}
-  end
-
-  defp eval({:all_permissions, perms} = rule, %Check{actor: actor}, _authz) do
-    case Enum.reject(perms, &has_permission?(actor, &1)) do
-      [] -> :ok
-      missing -> {:deny, rule, [], missing}
-    end
-  end
-
-  defp eval({:any_permission, perms} = rule, %Check{actor: actor}, _authz) do
-    if Enum.any?(perms, &has_permission?(actor, &1)),
-      do: :ok,
-      else: {:deny, rule, [], perms}
-  end
-
-  defp eval({:check, name, opts} = rule, %Check{} = check, authz) do
-    case Callbacks.check(authz, name, %{check | name: name, opts: opts}) do
-      true ->
-        :ok
-
-      false ->
-        {:deny, rule, [], []}
-
-      other ->
-        raise Warden.PolicyError,
-              "#{inspect(authz)}.check(#{inspect(name)}, ...) must return true or false, " <>
-                "got: #{inspect(other)}"
-    end
-  end
-
-  defp eval({:all, rules}, check, authz) do
-    Enum.reduce_while(rules, :ok, fn rule, :ok ->
-      case eval(rule, check, authz) do
-        :ok -> {:cont, :ok}
-        denial -> {:halt, denial}
-      end
-    end)
-  end
-
-  defp eval({:any, rules} = rule, check, authz) do
-    Enum.reduce_while(rules, {:deny, rule, [], []}, fn sub, {:deny, _, roles, perms} ->
-      case eval(sub, check, authz) do
-        :ok -> {:halt, :ok}
-        {:deny, _, r, p} -> {:cont, {:deny, rule, roles ++ r, perms ++ p}}
-      end
-    end)
-  end
-
-  defp eval(other, _check, _authz) do
-    raise Warden.PolicyError, "invalid rule: #{inspect(other)}"
-  end
-
-  defp has_permission?(%Actor{permissions: perms}, perm) do
-    MapSet.member?(perms, :all) or MapSet.member?(perms, perm)
+    {result, _actor, _tenant} = Evaluator.one(rule, check, authorizer)
+    result
   end
 end
