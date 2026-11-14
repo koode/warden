@@ -57,7 +57,9 @@
   `allowed?/3,4`, `authorize/3,4` and `filter/3,4` on loaded structs and `{schema, id}`,
   `allowed_actors/3,4`, `explain/3,4`, `dataloader_query/2`, `to_sql/4` (needs
   `ecto_sql`), and `update_all/4` and `delete_all/3`, which refuse a query that was not
-  scoped for a write action. Telemetry with `layer: :ecto`.
+  scoped for a write action, a shadowing CTE, and updates of the tenant field or a
+  `through:` field. `scope/4` refuses unions and preloads; checks decide loaded structs
+  against their own query prefix. Telemetry with `layer: :ecto`.
 - `can/2` with a `Warden.Ecto.Policy` decides a list with one query per tenant
   (`WHERE id = ANY($1) AND scope`); loaded structs are decided in memory where the
   clauses allow it.

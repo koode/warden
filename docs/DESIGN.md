@@ -1048,17 +1048,31 @@ Paths are relative to `lib/warden/`.
   `:persistent_term`). A `through` to the schema itself is known in the module and fails
   compilation.
 - **In memory.** `Memory` returns `true`, `false` or `:unknown` with three-valued AND
-  and OR; unknown structs go to one query per tenant. `through_any:` is only trusted
-  when a loaded child is allowed and `none:` never, because a preload may be filtered.
+  and OR; unknown structs go to one query per tenant and query prefix
+  (`__meta__.prefix`, also in `allowed_actors`, `explain` and batched `can/2`).
+  `through_any:` over a `has_many` is only trusted when a loaded child whose foreign key
+  points at the row is allowed; over a `many_to_many`, and `none:`, never, because a
+  preload may be filtered or assembled by hand. `within:` drops `nil` from the bounds,
+  so a `NULL` column never matches.
   An association with a `where:` or `join_where:` filter fails compilation in
   `through:`, `through_any:` and `none:`: the subquery would leave the filter out.
 - **`grant:` expiry** compares with the current time as a parameter of the
   `expires_at` field's type, not the database's `now()`, so session time zones do not
-  matter.
+  matter. That needs the type, so `grant:` with `expires_at:` through a table name
+  fails compilation.
 - **Guarded writes.** `scope/4` marks the `where` it adds (its `file` field holds
   `warden:scope:<policy>:<action>`). `update_all/4` and `delete_all/3` accept a query
   only with a mark for one of the policy's `write_actions:` on its root schema, no
-  `or_where` after it, and no combinations.
+  `or_where` after it, and no combinations; `update_all/4` also refuses `set`, `inc`,
+  `push` and `pull` on the tenant field and on the `through:` and `through_type:`
+  fields of the write action's clauses. Other fields are checked before the write only.
+- **Query guards** (`ecto/guard.ex`). `scope/4` raises for combinations (each arm needs
+  its own scope) and preloads (scoped preloads instead), and both `scope/4` and the
+  write guard raise for a CTE named like the root's table or any table in the subqueries
+  of a Warden-marked `where`, since Postgres resolves an unqualified name to the CTE.
+  `dataloader_query/2` raises for a subquery or fragment root and for a bare table name
+  a policy covers. Error messages describe a bad value's shape (`Info.shape/1`), never
+  the value.
 - **Telemetry.** `scope/4` (and `to_sql/4`, `dataloader_query/2`) emit `kind: :scope`,
   denied when the scope is `false`; `allowed?`, `authorize` and `filter` go through the
   core decision code with `layer: :ecto`; `allowed_actors/4` emits one event per actor
