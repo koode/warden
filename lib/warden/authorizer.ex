@@ -119,6 +119,33 @@ defmodule Warden.Authorizer do
   @callback check_many(name :: atom, checks :: [Check.t()]) :: [check_result]
 
   @doc """
+  Returns the subject's kind: a kind from the `:kinds` catalog (`:user` is always
+  declared). Default: `:user`. Any other value raises `Warden.PolicyError`. Not called for
+  an anonymous actor, whose kind is `:anonymous`.
+  """
+  @callback kind(subject :: term, context :: map) :: atom
+
+  @doc """
+  Returns how the actor authenticated, a `Warden.Credential`, or `nil` for a full
+  session (the default). Unknown scopes are dropped with a warning when the authorizer
+  declares `credential_scopes:`. Not called for an anonymous actor.
+  """
+  @callback credential(context :: map) :: Warden.Credential.t() | nil
+
+  @doc """
+  Returns the tenant of a value, or `nil`. A `nil` tenant denies every tenant-role rule.
+  Default: the `:tenant` field of the policy registered for the value's struct, else the
+  value's `:tenant_id` key, else `nil`.
+  """
+  @callback tenant_of(value :: term) :: term
+
+  @doc """
+  Returns every tenant the actor may act in, for scopes across tenants. Default: `[]`. A
+  bound credential narrows the result to its tenant (see `Warden.Actor.tenants/2`).
+  """
+  @callback tenants(Actor.t(), context :: map) :: [term]
+
+  @doc """
   Returns the subject's roles in one tenant, as tenant roles from the `:tenant_roles`
   catalog (unknown ones are dropped with a warning). Required when `:tenant_roles` is
   set.
@@ -171,6 +198,10 @@ defmodule Warden.Authorizer do
                       check: 2,
                       check_many: 2,
                       tenant_roles: 3,
+                      kind: 2,
+                      credential: 1,
+                      tenant_of: 1,
+                      tenants: 2,
                       deny: 1,
                       actor_key: 2,
                       conn_context: 1,
@@ -280,18 +311,52 @@ defmodule Warden.Authorizer do
     end
   end
 
-  @doc "The default actor key: a SHA-256 over subject identity, roles and permissions."
+  @doc """
+  The default actor key: a SHA-256 over subject identity, roles and permissions, and for
+  actors that have them, the kind, the credential (method, scopes, tenant and bounds),
+  whether it is a system actor, its bounds and the delegator's key. Two actors with
+  different access never get the same key.
+  """
   @spec default_actor_key(Actor.t()) :: String.t()
   def default_actor_key(%Actor{} = actor) do
+    actor
+    |> actor_key_term()
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
+
+  # A plain user (or anonymous) actor keeps the 0.1 term, so its key does not change.
+  defp actor_key_term(%Actor{} = actor) do
     identity =
       case actor.subject do
         %{id: id} -> {:id, id}
         other -> {:subject, other}
       end
 
-    {identity, Enum.sort(actor.roles), Enum.sort(actor.permissions)}
-    |> :erlang.term_to_binary([:deterministic])
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.url_encode64(padding: false)
+    base = {identity, Enum.sort(actor.roles), Enum.sort(actor.permissions)}
+
+    if plain_actor?(actor) do
+      base
+    else
+      credential = credential_key_term(actor.credential)
+      delegator = if actor.delegator, do: actor_key_term(actor.delegator), else: nil
+      extra = {Actor.kind(actor), actor.system?, credential, actor.bounds, delegator}
+      {base, extra}
+    end
+  end
+
+  defp plain_actor?(%Actor{credential: nil, system?: false, delegator: nil} = actor),
+    do: Actor.kind(actor) in [:user, :anonymous] and actor.bounds == %{}
+
+  defp plain_actor?(%Actor{}), do: false
+
+  defp credential_key_term(nil), do: nil
+
+  defp credential_key_term(credential) do
+    scopes =
+      if is_list(credential.scopes), do: Enum.sort(credential.scopes), else: credential.scopes
+
+    {credential.method, scopes, credential.tenant, credential.bounds}
   end
 end

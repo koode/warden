@@ -246,7 +246,46 @@ defmodule Warden do
     Enum.filter(values, &(evaluate(rule, actor, context, authorizer, &1) == :ok))
   end
 
-  ## Helpers
+  @doc """
+  Builds a system actor: a webhook, a job, an unfurl. It is never anonymous and never a
+  user: it has no subject, roles or permissions, and passes no role, tenant role,
+  permission, `authenticated()` or check rule that does not name its kind (see the
+  `system_kinds:` check option and the `kind/1` rule).
+
+      Warden.system_actor(MyApp.Authz, kind: :webhook, tenant: workspace.id, bounds: %{team_ids: ids})
+      Warden.system_actor(nil, kind: :system, reason: :unfurl)   # the configured default
+
+  Options:
+
+    * `:kind` (required) - a kind from the authorizer's `kinds:` other than `:user`.
+    * `:tenant` - binds the actor to one tenant, like a bound credential.
+    * `:bounds` - a map for policies to read. Default `%{}`.
+    * `:reason` - an atom saying why the actor exists, kept in its credential.
+
+  The actor's credential has `method: :system` and no scopes, so `session()` and
+  `credential_scope/1` deny it.
+  """
+  @spec system_actor(module | nil, keyword) :: Actor.t()
+  def system_actor(authorizer, opts) when is_list(opts) do
+    authorizer = resolve_authorizer!(authorizer, nil)
+    Actor.system(authorizer, opts)
+  end
+
+  @doc """
+  Returns `actor` acting on behalf of `delegator` (an agent acting for a user). Every
+  rule, check and policy decision is evaluated for both actors and ANDed, so the result is
+  never wider than either actor's own.
+
+      agent = Warden.actor(agent_context)
+      user = Warden.actor(user_context)
+      actor = Warden.on_behalf_of(agent, user, bounds: %{issue_ids: [issue.id]})
+
+  Both actors must come from the same authorizer, neither may be anonymous, and neither
+  may already act on behalf of another (`ArgumentError`). `bounds:` is merged into the
+  actor's `bounds` for policies to read.
+  """
+  @spec on_behalf_of(Actor.t(), Actor.t(), keyword) :: Actor.t()
+  def on_behalf_of(actor, delegator, opts \\ []), do: Actor.delegate(actor, delegator, opts)
 
   defp setup(%Actor{} = actor, opts) do
     authorizer = resolve_authorizer!(opts[:authorizer], actor)
