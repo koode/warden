@@ -1123,6 +1123,10 @@ Paths are relative to `lib/warden/`.
 - **Once per call.** One `Scope` state per call memoizes the verdict per policy, action,
   tenant and actor, each `rule:` part, and `tenants/2`, so callbacks and checks run at
   most once per actor, tenant and action, and a `through` parent's dynamic is reused.
+  `through: {assoc, action, resolve: :ids}` runs the parent's scope as a query when the
+  child's scope is built and inlines the ids; those ids belong to one query prefix, so
+  the state carries the prefix and the memo keys on it (`decide.ex` sets it per group
+  of loaded structs).
 - **Errors across policies.** A policy only names other policies at runtime (through
   the authorizer's `policies:`), so a `through` target without a policy, a cycle over
   several policies, a parent of another authorizer or without the action, and mixed
@@ -1136,7 +1140,12 @@ Paths are relative to `lib/warden/`.
   `through_any:` over a `has_many` is only trusted when a loaded child whose foreign key
   points at the row is allowed; over a `many_to_many`, and `none:`, never, because a
   preload may be filtered or assembled by hand. `within:` drops `nil` from the bounds,
-  so a `NULL` column never matches.
+  so a `NULL` column never matches. A match on `nil` never grants in memory
+  (`where: [field: nil]`, a `nil` foreign key under `if_nil: :tenant`): a column a
+  partial `select` did not load is `nil` in the struct, so the database decides. A `nil`
+  can still deny in memory. `within:` bounds and `actor_in:` subject ids are cast
+  through the field's Ecto type on both paths; a value that does not cast matches
+  nothing, so memory and SQL agree and a bad bound never crashes the query.
   An association with a `where:` or `join_where:` filter fails compilation in
   `through:`, `through_any:` and `none:`: the subquery would leave the filter out.
 - **`grant:` expiry** compares with the current time as a parameter of the
@@ -1153,6 +1162,8 @@ Paths are relative to `lib/warden/`.
   its own scope) and preloads (scoped preloads instead), and both `scope/4` and the
   write guard raise for a CTE named like the root's table or any table in the subqueries
   of a Warden-marked `where`, since Postgres resolves an unqualified name to the CTE.
+  CTE names are collected from every level of the query, so an outer query that wraps
+  a scoped subquery cannot shadow its tables either.
   `dataloader_query/2` raises for a subquery or fragment root and for a bare table name
   a policy covers. Error messages describe a bad value's shape (`Info.shape/1`), never
   the value.
