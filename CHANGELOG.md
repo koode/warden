@@ -4,12 +4,6 @@
 
 ### Added
 
-- `Warden.Ecto.preload_ids/4` reads the parent ids of `through: {assoc, action,
-  resolve: :ids}` once and caches them in the actor, so later scopes of the request
-  with the same actor, tenant and prefix run no extra query.
-- `Warden.Ecto.to_sql/4` takes `bind:` (`%{host_placeholder => value}`): a value the
-  scope needs that the host statement already binds uses the host's placeholder instead
-  of a new parameter.
 - `Warden.Ecto.all/4,5`: runs a query scoped by `scope/4` and marks the rows it returns,
   so a later `can/2` decision (a GraphQL object rule, `Warden.Ecto.allowed?/4`,
   `Warden.Ecto.filter/4`, `Warden.filter/4`) by the same actor instance for the same
@@ -18,6 +12,21 @@
   `{:admitted_by_scope, action}`.
 - `Warden.Absinthe.actor/1`: the actor of the document execution, for resolvers (for
   example to load rows with `Warden.Ecto.all/5` that the object rules then trust).
+- `Warden.Ecto.preload_ids/4` reads the parent ids of `through: {assoc, action,
+  resolve: :ids}` once and caches them in the actor, so later scopes of the request
+  with the same actor, tenant and prefix run no extra query.
+- `Warden.Ecto.to_sql/4` takes `bind:` (`%{host_placeholder => value}`): a value the
+  scope needs that the host statement already binds uses the host's placeholder instead
+  of a new parameter.
+- `Warden.Absinthe.Subscription.run_docset/3`, a publish loop for the pubsub's optional
+  `run_docset/3` callback (`defdelegate run_docset(pubsub, docs, mutation_result), to:
+  Warden.Absinthe.Subscription` in the endpoint). A subscriber whose subscription root
+  field Warden denies at publish time (the payload's object rule, or the field's rules
+  after a revocation) gets no push for that event, instead of a `null` payload that
+  tells the event happened. Other subscribers on the topic get their own payload;
+  partial denials inside the payload keep their nulls and redaction. A pubsub that does
+  not delegate keeps the 0.2 behaviour and logs a warning once, at its first publish of
+  a subscription field.
 
 ### Changed
 
@@ -32,20 +41,14 @@
   `plugin_callbacks: false` still build it at the first field rule.
 - `Warden.Test.assert_policy_consistent/4` removes the marks of `Warden.Ecto.all/5`
   from the rows before asking the policy.
-- `Warden.Absinthe.Subscription.run_docset/3`, a publish loop for the pubsub's optional
-  `run_docset/3` callback (`defdelegate run_docset(pubsub, docs, mutation_result), to:
-  Warden.Absinthe.Subscription` in the endpoint). A subscriber whose subscription root
-  field Warden denies at publish time (the payload's object rule, or the field's rules
-  after a revocation) gets no push for that event, instead of a `null` payload that
-  tells the event happened. Other subscribers on the topic get their own payload;
-  partial denials inside the payload keep their nulls and redaction.
-- A warning, logged once per pubsub module at the first publish of a subscription field,
-  when the pubsub does not delegate `run_docset/3` to Warden.
-
-### Changed
-
 - The compile-time warning for a subscription guarded only by a value-dependent object
   rule names the `run_docset/3` delegate as well as the field rule.
+
+### Fixed
+
+- `through: ..., resolve: :ids` kept the parent ids per policy, action, tenant and
+  actor, not per parent column, so two `through:` clauses to one parent schema over
+  different columns could share the ids of the other within one call.
 
 ## 0.2.0 (2026-11-14)
 
