@@ -134,7 +134,7 @@ defmodule Warden.Actor do
       # A failed lookup is a bug in subject/1 (or an unhandled error), not a user.
       failed when failed == :error or (is_tuple(failed) and elem(failed, 0) == :error) ->
         raise Warden.PolicyError,
-              "#{inspect(authorizer)}.subject/1 returned #{inspect(failed)}; return the " <>
+              "#{inspect(authorizer)}.subject/1 returned #{failure_shape(failed)}; return the " <>
                 "subject, or nil (or false) for an anonymous actor"
 
       subject ->
@@ -407,6 +407,12 @@ defmodule Warden.Actor do
         undeclared_kind!(authorizer, other)
     end
   end
+
+  # A failed lookup is printed only as far as it carries no data: `:error` and an error
+  # with an atom reason as they are, anything else by its shape.
+  defp failure_shape(:error), do: ":error"
+  defp failure_shape({:error, reason} = failed) when is_atom(reason), do: inspect(failed)
+  defp failure_shape(failed), do: Shape.describe(failed)
 
   defp kind_shape(kind) when is_atom(kind), do: inspect(kind)
   defp kind_shape(kind), do: Shape.describe(kind)
