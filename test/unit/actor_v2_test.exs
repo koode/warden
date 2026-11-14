@@ -241,6 +241,47 @@ defmodule Warden.ActorV2Test do
     end
   end
 
+  describe "instance" do
+    test "is new for every built, system and delegated actor" do
+      user = actor(abby())
+      agent = actor(olivia())
+      system = Warden.system_actor(Authz, kind: :webhook)
+      delegated = Warden.on_behalf_of(agent, user)
+
+      instances = [
+        user.instance,
+        actor(abby()).instance,
+        Warden.actor(%{}, authorizer: Authz).instance,
+        agent.instance,
+        system.instance,
+        delegated.instance,
+        delegated.delegator.instance
+      ]
+
+      assert Enum.all?(instances, &is_reference/1)
+      assert instances == Enum.uniq(instances)
+      assert delegated.delegator.subject == user.subject
+    end
+
+    test "is kept by the cache updates of the same actor" do
+      user = actor(abby())
+      {_roles, cached} = Actor.tenant_roles(user, "t1", context(abby()))
+      {_tenants, listed} = Actor.cached_tenants(cached, context(abby()))
+      assert listed.instance == user.instance
+
+      delegated = Warden.on_behalf_of(actor(olivia()), user)
+      {_tenants, both} = Actor.cached_tenants(delegated, context(abby()))
+      assert both.instance == delegated.instance
+      assert both.delegator.instance == delegated.delegator.instance
+    end
+
+    test "is not in inspect output or the actor key" do
+      user = actor(abby())
+      refute inspect(user) =~ "#Reference"
+      assert Authorizer.default_actor_key(user) == Authorizer.default_actor_key(actor(abby()))
+    end
+  end
+
   describe "inspect" do
     test "shows kind, credential method and scopes and the delegator's kind, never a subject or bounds" do
       credential = %Credential{

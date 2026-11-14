@@ -134,9 +134,11 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     # The actor without its cache (tenant roles, tenants and preloaded parent ids), which
-    # changes while the actor is used.
+    # changes while the actor is used, and without its instance reference: two actors
+    # that differ only in instance decide alike, so they share memoized verdicts and
+    # cached ids. Row marks check the instance themselves (`Warden.Ecto.Mark`).
     @spec identity(Actor.t()) :: Actor.t()
-    def identity(%Actor{} = actor), do: %{actor | cache: %{}}
+    def identity(%Actor{} = actor), do: %{actor | cache: %{}, instance: nil}
 
     defp decide(info, action, actor, tenant, state) do
       case gate(info, actor, tenant, state) do

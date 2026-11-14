@@ -201,7 +201,9 @@ defmodule Warden.PlugTest do
       conn = conn_as(viewer(), test_pid: self())
       actor = Warden.Plug.actor(conn, authorizer: ConnAuthz)
       assert %Actor{authorizer: ConnAuthz} = actor
-      assert Warden.Plug.actor(conn, authorizer: ConnAuthz) == actor
+      rebuilt = Warden.Plug.actor(conn, authorizer: ConnAuthz)
+      assert rebuilt.instance != actor.instance
+      assert %{rebuilt | instance: nil} == %{actor | instance: nil}
       assert_received {:roles_called, "u2"}
       assert_received {:roles_called, "u2"}
 

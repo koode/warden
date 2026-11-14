@@ -38,6 +38,10 @@ defmodule Warden.Actor do
     * `context` - private. The context the actor was built from. The core API, the Ecto
       layer and every other function given an actor without `context:` give checks and
       policies this context. Never shown by `inspect/1`.
+    * `instance` - private. A reference unique to this actor, made when it is built
+      (`Warden.actor/2`, `Warden.system_actor/2`, `Warden.on_behalf_of/3`) and kept by
+      the cache updates of the same actor. Rows loaded with `Warden.Ecto.all/5` are
+      trusted for this instance only. Never shown by `inspect/1`.
   """
 
   alias Warden.Authorizer.Callbacks
@@ -56,7 +60,8 @@ defmodule Warden.Actor do
           delegator: t | nil,
           bounds: map,
           cache: map,
-          context: map | nil
+          context: map | nil,
+          instance: reference | nil
         }
 
   @anonymous_kind :anonymous
@@ -76,7 +81,8 @@ defmodule Warden.Actor do
             delegator: nil,
             bounds: %{},
             cache: %{},
-            context: nil
+            context: nil,
+            instance: nil
 
   @doc "Returns true when the actor has no subject and is not a system actor."
   @spec anonymous?(t) :: boolean
@@ -129,7 +135,12 @@ defmodule Warden.Actor do
     case authorizer.subject(context) do
       # `false` is a common "no user" value; it is anonymous, never a subject.
       anonymous when anonymous in [nil, false] ->
-        %__MODULE__{authorizer: authorizer, kind: @anonymous_kind, context: context}
+        %__MODULE__{
+          authorizer: authorizer,
+          kind: @anonymous_kind,
+          context: context,
+          instance: make_ref()
+        }
 
       # A failed lookup is a bug in subject/1 (or an unhandled error), not a user.
       failed when failed == :error or (is_tuple(failed) and elem(failed, 0) == :error) ->
@@ -163,7 +174,8 @@ defmodule Warden.Actor do
           kind: kind,
           credential: credential,
           bounds: credential_bounds(credential),
-          context: context
+          context: context,
+          instance: make_ref()
         }
     end
   end
@@ -207,7 +219,8 @@ defmodule Warden.Actor do
       kind: kind,
       system?: true,
       credential: credential,
-      bounds: bounds
+      bounds: bounds,
+      instance: make_ref()
     }
   end
 
@@ -219,7 +232,7 @@ defmodule Warden.Actor do
     bounds = Keyword.get(opts, :bounds, %{})
 
     case delegation_error(actor, delegator, opts, bounds) do
-      nil -> %{actor | delegator: delegator, bounds: narrow_bounds(actor.bounds, bounds)}
+      nil -> delegated(actor, delegator, bounds)
       message -> raise ArgumentError, "Warden.on_behalf_of/3 " <> message
     end
   end
@@ -229,6 +242,15 @@ defmodule Warden.Actor do
     Warden.on_behalf_of/3 needs two %Warden.Actor{}s, got: #{Shape.describe(actor)} and \
     #{Shape.describe(delegator)}\
     """
+  end
+
+  # A delegated actor is a new actor, and so is the delegator it carries: neither reuses
+  # what was trusted for the agent or the delegator alone (rows loaded with
+  # `Warden.Ecto.all/5`).
+  defp delegated(actor, delegator, bounds) do
+    carried = %{delegator | instance: make_ref()}
+    narrowed = narrow_bounds(actor.bounds, bounds)
+    %{actor | delegator: carried, bounds: narrowed, instance: make_ref()}
   end
 
   # Delegation bounds only narrow the actor's own bounds (its credential's included): for
