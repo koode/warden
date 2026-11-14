@@ -65,7 +65,7 @@ if Code.ensure_loaded?(Ecto) do
     |---|---|
     | `rule: r` | the actor passes the Warden rule `r` in the row's tenant (no row) |
     | `where: [field: value]` | the field equals a literal (`nil` means `IS NULL`) |
-    | `through: assoc` / `{assoc, action}` | the `belongs_to` parent is allowed under its own policy (default: the same action), in the same tenant |
+    | `through: assoc` / `{assoc, action}` / `{assoc, action, opts}` | the `belongs_to` parent is allowed under its own policy (default: the same action), in the same tenant; opts `resolve: :ids` (compare the foreign key with the parent's ids) and `system: :inherit` (the parent decides system actors) |
     | `if_nil: :deny \\| :tenant` | with `through:`, a `nil` foreign key denies (default) or admits members of the tenant |
     | `through_any: assoc` / `{assoc, action}` | at least one row of a `has_many` or `many_to_many` association is allowed under its policy |
     | `none: assoc` | the association has no rows |

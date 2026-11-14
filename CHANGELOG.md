@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- `through: {assoc, action, resolve: :ids}`: the parent scope runs once per actor,
+  tenant and call and the clause compares the foreign key with the ids
+  (`fk = ANY($ids)`); `through: {assoc, action, system: :inherit}` lets the parent policy
+  decide system actors for that clause.
+- `within: {bounds_key, field, if_missing: :allow}` for optional limits.
+- `Warden.Ecto.to_sql/4` takes `param_offset:`, and `scope/4` takes `prefix:`.
+- Policy options and clause values may read module attributes.
+
+### Changed
+
+- `none:` over a `many_to_many` reads the join table only.
+- A `Warden.Test.Matrix` fixture that fails names the fixture and its line.
+
 ## 0.2.0 (2026-11-14)
 
 ### Added
