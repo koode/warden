@@ -10,7 +10,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Blueprint
     alias Absinthe.Type
-    alias Warden.Absinthe.{Config, Middleware, Plan, Subscription}
+    alias Warden.Absinthe.{Config, Middleware, Plan, SubscriptionConfig}
 
     # Pipeline modifier entry point (`@pipeline_modifier Warden.Absinthe.Phase.Attach`).
     def pipeline(pipeline) do
@@ -179,7 +179,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     def wrap_config(field, spec) do
       original = Map.get(field, :config)
-      %{field | config: Subscription.config_ref(field.identifier, original, spec)}
+      %{field | config: SubscriptionConfig.config_ref(field.identifier, original, spec)}
     end
   end
 end

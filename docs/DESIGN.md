@@ -309,7 +309,7 @@ possible type has a rule.
 **(e) Subscription `config` and `context_id`.** `SubscribeSelf` reads `config` through
 `Absinthe.Type.function/2` (`phase/subscription/subscribe_self.ex:57-58`), which resolves
 `{:ref, module, identifier}` by calling `module.__absinthe_function__(identifier, :config)`
-(`type.ex:45`). Warden sets `config` to `{:ref, Warden.Absinthe.Subscription, {...}}` (escapable,
+(`type.ex:45`). Warden sets `config` to `{:ref, Warden.Absinthe.SubscriptionConfig, {...}}` (escapable,
 so it survives `Compile`), whose function runs the subscribe-time checks and then the
 user's original `config` (or Absinthe's default topic). The subscription id is
 `"__absinthe__:doc:#{context_id}:#{document_id}"` with a unique integer when no
@@ -427,11 +427,11 @@ Three red-team agents attacked the first version (`test/redteam/`,
    exists.
 7. **`:filter` error paths use the output index** (`middleware.ex:426`).
 8. **Opt-in subscription sharing** (`authorizer.ex:81`, `authorizer.ex:177`,
-   `subscription.ex:171`). Without `actor_key/2` Warden removes the user's `context_id`;
+   `absinthe/subscription_config.ex:171`). Without `actor_key/2` Warden removes the user's `context_id`;
    with it, the returned key (or `nil` to opt out) is appended. The old `actor_key/1`
    fails compilation instead of being ignored.
 9. **Value-independent return-type rules at subscribe time** (`plan.ex:489`,
-   `subscription.ex:74`): rules without `check(...)` are evaluated with no
+   `absinthe/subscription_config.ex:74`): rules without `check(...)` are evaluated with no
    value; the subscription is refused when the return type's rule, or every possible
    concrete type's rule, denies.
 10. **`subject/1` contract** (`actor.ex:45`, `actor.ex:49`).

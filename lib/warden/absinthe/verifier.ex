@@ -98,7 +98,7 @@ if Code.ensure_loaded?(Absinthe) do
               Map.has_key?(plan.subscriptions, ident),
               expected = Map.fetch!(plan.subscriptions, ident),
               not match?(
-                {:ref, Warden.Absinthe.Subscription, {:config, ^ident, _, ^expected}},
+                {:ref, Warden.Absinthe.SubscriptionConfig, {:config, ^ident, _, ^expected}},
                 field.config
               ) do
             "Subscription.#{field.name}: config is not wrapped by Warden"

@@ -1,6 +1,6 @@
 # Compiled only when the optional `absinthe` dependency is present.
 if Code.ensure_loaded?(Absinthe) do
-  defmodule Warden.Absinthe.Subscription do
+  defmodule Warden.Absinthe.SubscriptionConfig do
     @moduledoc false
     # Wraps every subscription field's `config` function.
     #
@@ -18,7 +18,7 @@ if Code.ensure_loaded?(Absinthe) do
       {:ref, __MODULE__, {:config, field_ident, original, spec}}
     end
 
-    # Called by `Absinthe.Type.function/2` for `{:ref, Warden.Absinthe.Subscription, identifier}`.
+    # Called by `Absinthe.Type.function/2` for `{:ref, Warden.Absinthe.SubscriptionConfig, identifier}`.
     def __absinthe_function__({:config, field_ident, original, spec}, :config) do
       fn args, info -> config(field_ident, original, spec, args, info) end
     end
