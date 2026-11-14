@@ -34,7 +34,8 @@ if Code.ensure_loaded?(Absinthe) do
 
       errors =
         validate_meta(types, catalog) ++
-          covered_errors(types, object_rules) ++ redact_errors(types, config)
+          covered_errors(types, object_rules) ++
+          redact_errors(types, config) ++ argument_leaf_errors(types)
 
       inputs = input_plans(types)
 
@@ -813,6 +814,22 @@ if Code.ensure_loaded?(Absinthe) do
 
         true ->
           []
+      end
+    end
+
+    # An object rule decides a value, wherever it is returned; the arguments of the field
+    # that returned it are the client's choice and say nothing about the value. So the
+    # leaves that read field arguments (`tenant_role(r, tenant: {:arg, path})` and
+    # `can(policy, action, arg: path)`) are only allowed in field and argument rules.
+    defp argument_leaf_errors(types) do
+      for {_ident, %type_mod{} = type} <- Enum.sort_by(types, &elem(&1, 0)),
+          type_mod in [Type.Object, Type.Interface, Type.Union],
+          Warden.Rule.reads_arguments?(meta(type, :warden_rule)) do
+        """
+        #{type.name}: an object rule cannot read field arguments \
+        (tenant_role(_, tenant: {:arg, _}) or can(_, _, arg: _)); use them in a field or \
+        argument rule\
+        """
       end
     end
 

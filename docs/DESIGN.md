@@ -748,7 +748,9 @@ Authorizer options and callbacks:
 | `can(policy, action)` / `can(policy, action, arg: path)` | `{:can, policy, action, opts}` | the policy allows `action` on the value; with `arg:`, on `{schema, id}` from that argument path, before the resolver |
 
 Unknown tenant roles, kinds, credential scopes, policies and policy actions in a rule fail
-compilation (catalog validation, as for roles). System actors fail every
+compilation (catalog validation, as for roles). The leaves that read field arguments
+(`tenant: {:arg, path}`, `arg: path`) are allowed in field and argument rules only. System
+actors fail every
 `authenticated()`, `role`, `tenant_role`, permission and check rule (see checks below).
 
 ### Checks: options, reasons, batching
@@ -811,8 +813,13 @@ compilation (catalog validation, as for roles). System actors fail every
   on a non-null field fails compilation.
 * `covered()` (above). Under `strict_mode: :all`, a field with `covered()` counts as
   declared.
-* `can/2,3` as object, field and argument rules. Object rules with `can/2` over a list are
-  batched per policy and tenant (one query per list for Ecto policies).
+* `can/2` as object, field and argument rules; `can/3` with `arg:` as field and argument
+  rules only. Object rules with `can/2` over a list are batched per policy and tenant (one
+  query per list for Ecto policies).
+* Object rules (of objects, interfaces and unions, and `default_object_rule`) cannot read
+  field arguments: `tenant_role(r, tenant: {:arg, path})` and `can(policy, action,
+  arg: path)` in one fail compilation. An object rule decides a value wherever it is
+  returned, and the arguments of the field that returned it are the client's choice.
 * `redact_with Policy.Fields` on an object type (below).
 * Verifier option `require_can_for: [Schema, ...]` (with `strict_mode: :all`): an object
   type whose rule does not use `can/2` for those schemas' policies fails compilation. The

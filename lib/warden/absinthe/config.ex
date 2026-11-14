@@ -33,6 +33,7 @@ if Code.ensure_loaded?(Absinthe) do
           authorizer_errors(authorizer) ++
           strict_mode_errors(strict) ++
           rule_option_errors(:default_object_rule, default_rule) ++
+          default_rule_argument_errors(default_rule) ++
           rule_option_errors(:introspection, introspection) ++
           list_policy_errors(policy) ++
           batch_across_parents_errors(across_parents) ++
@@ -70,6 +71,12 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp strict_mode_errors(strict),
       do: ["`:strict_mode` must be false, :root or :all, got: #{inspect(strict)}"]
+
+    defp default_rule_argument_errors(rule) do
+      if Rule.reads_arguments?(rule),
+        do: ["`:default_object_rule` is an object rule and cannot read field arguments"],
+        else: []
+    end
 
     defp rule_option_errors(_key, nil), do: []
 

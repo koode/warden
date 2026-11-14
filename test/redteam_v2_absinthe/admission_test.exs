@@ -4,6 +4,7 @@ defmodule Warden.RedteamV2Absinthe.AdmissionTest do
   # Tests marked HOLE fail while the hole exists; the others document defended attacks.
   use ExUnit.Case, async: true
 
+  import Warden.Test.CompileHelpers
   import Warden.Test.RedteamV2.People
 
   alias Warden.Test.RedteamV2.{Card, Schema, Ticket}
@@ -65,21 +66,46 @@ defmodule Warden.RedteamV2Absinthe.AdmissionTest do
              "#{div(small_us, 1000)} ms on a small one"
   end
 
-  # HOLE (low): object rules may read the arguments of the field that returned the value
-  # (`tenant_role(r, tenant: {:arg, path})`). The client chooses that argument. In 0.1 the
-  # pre middleware decided the rule again on every child field, with the child's
-  # arguments, so such a rule could never let a value through to its fields; with a
-  # batched leaf the value is now admitted and its fields resolve.
-  test "an object rule that reads an argument cannot let another tenant's value through" do
-    entries = [
-      %Ticket{id: 1, workspace_id: "t1", secret: "t1 secret"},
-      %Ticket{id: 2, workspace_id: "t2", secret: "t2 secret"}
-    ]
+  # Changed to match the decision: an object rule may not read the arguments of the
+  # field that returned the value (the client chooses them), so the schema that tried
+  # it no longer compiles.
+  test "an object rule that reads an argument fails compilation" do
+    for rule <- [
+          "all_of([tenant_role(:member, tenant: {:arg, [:workspace]}), check(:live)])",
+          "any_of([can(Warden.Test.RedteamV2.Cards, :read, arg: [:id]), check(:live)])"
+        ] do
+      assert_raise CompileError,
+                   ~r/ScopedTicket: an object rule cannot read field arguments/,
+                   fn ->
+                     compile_schema(
+                       """
+                         object :scoped_ticket do
+                           authorize #{rule}
+                           field :id, :integer
+                         end
 
-    document = ~s|{ scopedTickets(workspace: "t1") { id secret } }|
-    result = run(Schema, document, abby(), %{entries: entries})
+                         query do
+                           field :scoped_tickets, list_of(:scoped_ticket) do
+                             arg :workspace, non_null(:string)
+                             arg :id, :integer
+                           end
+                         end
+                       """,
+                       "authorizer: Warden.Test.RedteamV2.Authz"
+                     )
+                   end
+    end
 
-    refute inspect(result) =~ "t2 secret"
+    assert_raise CompileError, ~r/`:default_object_rule` is an object rule/, fn ->
+      compile_schema(
+        """
+          query do
+            field :ok, :string
+          end
+        """,
+        "authorizer: Warden.Test.RedteamV2.Authz, default_object_rule: tenant_role(:member, tenant: {:arg, [:workspace]})"
+      )
+    end
   end
 
   test "an admitted value is decided again under another object type" do

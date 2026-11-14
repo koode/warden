@@ -116,6 +116,10 @@ field :invite, :invitation do
 end
 ```
 
+`tenant: {:arg, path}` reads the client's arguments, so it is allowed in field and
+argument rules only; in an object rule it fails compilation. The same holds for
+`can(policy, action, arg: path)`.
+
 The tenant of a value comes from `tenant_of/1` when the authorizer defines it, else the
 `tenant:` field of the policy registered for the value's struct, else a `:tenant_id`
 key. A value without a tenant denies every tenant-role rule.

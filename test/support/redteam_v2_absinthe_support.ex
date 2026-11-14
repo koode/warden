@@ -165,9 +165,9 @@ end
 defmodule Warden.Test.RedteamV2.Schema do
   @moduledoc false
   # The schema the 0.2 Absinthe red-team attacks: a policy object rule with redaction,
-  # a batched check object rule behind an interface, an object rule that reads a field
-  # argument, a discriminated interface whose discriminator is redacted, a second type
-  # over a redacted struct, `can/3` with `arg:` and `on_deny: {:replace, value}`.
+  # a batched check object rule behind an interface, a discriminated interface whose
+  # discriminator is redacted, a second type over a redacted struct, `can/3` with `arg:`
+  # and `on_deny: {:replace, value}`.
   use Absinthe.Schema
   use Warden.Absinthe, authorizer: Warden.Test.RedteamV2.Authz
 
@@ -226,13 +226,6 @@ defmodule Warden.Test.RedteamV2.Schema do
     field :secret, :string
   end
 
-  object :scoped_ticket do
-    authorize all_of([tenant_role(:member, tenant: {:arg, [:workspace]}), check(:live)])
-
-    field :id, :integer
-    field :secret, :string
-  end
-
   object :secret_listing do
     interface :listing
     authorize authenticated()
@@ -274,11 +267,6 @@ defmodule Warden.Test.RedteamV2.Schema do
 
     field :guarded_ticket, :guarded_ticket do
       resolve fn _args, resolution -> {:ok, resolution.context.ticket} end
-    end
-
-    field :scoped_tickets, list_of(:scoped_ticket) do
-      arg :workspace, non_null(:string)
-      resolve fn _args, resolution -> {:ok, resolution.context.entries} end
     end
 
     field :listings, list_of(:listing) do

@@ -341,6 +341,23 @@ defmodule Warden.Rule do
   defp valid_tenant_source?({:arg, path}), do: valid_path?(path)
   defp valid_tenant_source?(_source), do: false
 
+  @doc """
+  Returns true when `rule` has a leaf that reads the field arguments:
+  `tenant_role(r, tenant: {:arg, path})` or `can(policy, action, arg: path)`. Such
+  leaves belong in field and argument rules, never in object rules.
+  """
+  @spec reads_arguments?(term) :: boolean
+  def reads_arguments?({tag, rules}) when tag in [:all, :any] and is_list(rules),
+    do: Enum.any?(rules, &reads_arguments?/1)
+
+  def reads_arguments?({:tenant_role, _role, opts}) when is_list(opts),
+    do: match?({:arg, _path}, Keyword.get(opts, :tenant))
+
+  def reads_arguments?({:can, _policy, _action, opts}) when is_list(opts),
+    do: Keyword.has_key?(opts, :arg)
+
+  def reads_arguments?(_rule), do: false
+
   @doc false
   # An argument path: a non-empty list of atoms and list indexes.
   @spec valid_path?(term) :: boolean
