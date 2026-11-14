@@ -1007,3 +1007,63 @@ Paths are relative to `lib/warden/`.
   adds the kind, `system?`, the credential (method, sorted scopes, tenant, bounds), the
   actor's bounds and the delegator's key otherwise. Bounds are included because policies
   read them: two actors with different bounds must not share a subscription payload.
+
+### Implementation notes: `Warden.Ecto`
+
+Paths are relative to `lib/warden/`.
+
+- **Layout.** `ecto/policy.ex` (the `use` macro, `allow` and `requires`),
+  `ecto/policy/compiler.ex` (compile-time validation and the per-action plan),
+  `ecto/policy/graph.ex` (checks across policies), `ecto/scope.ex` (dynamics),
+  `ecto/memory.ex` (in-memory decisions), `ecto/decide.ex` (`__warden_decide__/4`),
+  `ecto/audience.ex`, `ecto/explain.ex` and `ecto.ex` (the public functions). All of it
+  compiles only when `Ecto` is loaded; `to_sql/4` only when `Ecto.Adapters.SQL` is.
+- **`requires`, not `require`.** `require` is an Elixir special form and cannot be
+  imported as a macro, so the ANDed clause is `requires action, clauses`.
+- **Every `allow` names the actor.** An `allow` clause needs a key about the actor
+  (all but `where:`, `none:`, `if_nil:`), else compilation fails: a clause about rows
+  alone would admit every actor, anonymous ones included. `rule: public()` says it on
+  purpose.
+- **Gates before the policy** (`Scope.gate/4`): a system actor of a kind not in
+  `system_kinds:`, a `NULL` tenant without `null_tenant: true`, a tenant other than the
+  bound one (an untenanted row has no tenant, so a bound actor gets none), and a tenant
+  that is not in `Warden.Actor.tenants/2`. The last gate makes single checks, filters
+  and scopes over every tenant give the same answer for a clause that does not check
+  membership itself; as a consequence an anonymous actor (no tenants) sees no rows of a
+  tenanted schema.
+- **System actors** pass only `allow` clauses whose `rule:` contains `kind/1` with their
+  kind (goal 9); `requires` clauses apply to everyone.
+- **Delegation.** `Warden.Ecto` ANDs both sides itself (scopes, `allowed_actors`,
+  `explain`), over the tenants both actors are in. `__warden_decide__/4` decides the
+  actor it is given as one side, because the evaluator already asks the delegator
+  separately and ANDs the results.
+- **Once per call.** One `Scope` state per call memoizes the verdict per policy, action,
+  tenant and actor, each `rule:` part, and `tenants/2`, so callbacks and checks run at
+  most once per actor, tenant and action, and a `through` parent's dynamic is reused.
+- **Errors across policies.** A policy only names other policies at runtime (through
+  the authorizer's `policies:`), so a `through` target without a policy, a cycle over
+  several policies, a parent of another authorizer or without the action, and mixed
+  tenancy are found by `Graph.validate/1`: from `@after_verify` as compiler warnings,
+  and on first use as `Warden.PolicyError` (a valid result is cached in
+  `:persistent_term`). A `through` to the schema itself is known in the module and fails
+  compilation.
+- **In memory.** `Memory` returns `true`, `false` or `:unknown` with three-valued AND
+  and OR; unknown structs go to one query per tenant. `through_any:` is only trusted
+  when a loaded child is allowed and `none:` never, because a preload may be filtered.
+  An association with a `where:` or `join_where:` filter fails compilation in
+  `through:`, `through_any:` and `none:`: the subquery would leave the filter out.
+- **`grant:` expiry** compares with the current time as a parameter of the
+  `expires_at` field's type, not the database's `now()`, so session time zones do not
+  matter.
+- **Guarded writes.** `scope/4` marks the `where` it adds (its `file` field holds
+  `warden:scope:<policy>:<action>`). `update_all/4` and `delete_all/3` accept a query
+  only with a mark for one of the policy's `write_actions:` on its root schema, no
+  `or_where` after it, and no combinations.
+- **Telemetry.** `scope/4` (and `to_sql/4`, `dataloader_query/2`) emit `kind: :scope`,
+  denied when the scope is `false`; `allowed?`, `authorize` and `filter` go through the
+  core decision code with `layer: :ecto`; `allowed_actors/4` emits one event per actor
+  (each is a decision about a different actor). `explain/4`, `update_all/4` and
+  `delete_all/3` emit none, like `Warden.explain/3`.
+- **`repo:`.** The policy option names the repo for the queries Warden runs itself; the
+  design's option list did not have one, but a `can/2` decision inside GraphQL has no
+  other way to reach a repo.

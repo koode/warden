@@ -46,6 +46,24 @@
   than the object's `can/2` policy fail compilation. `Warden.Absinthe.Hydrate.meta/2`
   takes `redact_with:`.
 - `guides/actors.md`, `guides/channels.md` and `guides/fields.md`.
+- `Warden.Ecto.Policy` (needs `ecto`): one policy per schema and action, as a
+  hand-written `scope/4` or as declarative `allow` and `requires` clauses (`rule:`,
+  `where:`, `through:` with `if_nil:`, `through_any:`, `none:`, `actor_in:`,
+  `member_of:`, `grant:`, `through_type:`, `within:`, `when:`), with options `schema:`,
+  `as:`, `tenant:`, `null_tenant:`, `repo:`, `system_kinds:`, `subject_id:` and
+  `write_actions:`. Clause errors fail compilation; errors across policies (a `through`
+  to a schema without a policy, a cycle) warn after compiling and raise on first use.
+- `Warden.Ecto`: `scope/3,4` (one tenant, or every tenant of the actor ORed),
+  `allowed?/3,4`, `authorize/3,4` and `filter/3,4` on loaded structs and `{schema, id}`,
+  `allowed_actors/3,4`, `explain/3,4`, `dataloader_query/2`, `to_sql/4` (needs
+  `ecto_sql`), and `update_all/4` and `delete_all/3`, which refuse a query that was not
+  scoped for a write action. Telemetry with `layer: :ecto`.
+- `can/2` with a `Warden.Ecto.Policy` decides a list with one query per tenant
+  (`WHERE id = ANY($1) AND scope`); loaded structs are decided in memory where the
+  clauses allow it.
+- Absinthe: `require_can_for: [Schema, ...]` (with `strict_mode: :all`) and the
+  `warden_schema Schema` notation on object types.
+- `guides/policies-and-ecto.md`.
 
 ### Changed
 

@@ -5,11 +5,12 @@ defmodule Warden.Telemetry do
     * Measurements: `%{count: n, denied: d}`, the number of values decided and how many of
       them were denied. A list (`Warden.filter/4`, a GraphQL list) is one event.
     * Metadata: `%{layer, kind, rule, result, reason, actor_kind, tenant}`.
-      * `layer` - `:core`, `:plug`, `:absinthe`, `:channel` or `:fields` (later
+      * `layer` - `:core`, `:plug`, `:absinthe`, `:channel`, `:fields` or `:ecto` (later
         layers add their own). Redaction (`Warden.redact/3`, `redact_with`) reports `:fields`, one event
-        per redaction rule and group of structs.
+        per redaction rule and group of structs. `Warden.Ecto` reports `:ecto`.
       * `kind` - the denial kind: `:call`, `:field`, `:object`, `:argument`, `:subscribe`
-        or `:introspection`. Redaction reports `:field`.
+        or `:introspection`. Redaction reports `:field`; `Warden.Ecto.scope/4` reports
+        `:scope` (denied when the scope is `false`).
       * `rule` - the rule term.
       * `result` - `:ok` when every value passed, else `:deny`.
       * `reason` - the reason of the (first) denial, reduced to atoms: `{atom, map}`
