@@ -64,6 +64,15 @@
 - Absinthe: `require_can_for: [Schema, ...]` (with `strict_mode: :all`) and the
   `warden_schema Schema` notation on object types.
 - `guides/policies-and-ecto.md`.
+- Test helpers: `Warden.Test.assert_policy_consistent/4` (every way Warden answers a
+  policy agrees, per actor, row and action), `Warden.Test.Matrix` (needs `ecto`: actor
+  and resource fixtures, every policy needs a resource, a sorted snapshot of fixture
+  names whose differences name the changed cells only),
+  `Warden.Test.Absinthe.assert_matrix_matches/2` (needs `absinthe`: object rules and
+  `redact_with` agree with the policies) and `mix warden.matrix [--update]`.
+- The formatter exports `allow/2`, `requires/2`, `warden_schema/1`, `actor/2` and
+  `resource/2` without parentheses.
+- `guides/testing.md`.
 
 ### Changed
 

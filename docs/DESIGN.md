@@ -1067,3 +1067,23 @@ Paths are relative to `lib/warden/`.
 - **`repo:`.** The policy option names the repo for the queries Warden runs itself; the
   design's option list did not have one, but a `can/2` decision inside GraphQL has no
   other way to reach a repo.
+
+### Implementation notes: policy matrix
+
+- **Layout.** `test.ex` (`assert_policy_consistent/4`, core), `test/cells.ex` (names and
+  messages), `test/matrix.ex` (needs `ecto`), `test/matrix/snapshot.ex` (render, parse,
+  diff), `test/absinthe.ex` (needs `absinthe`) and `lib/mix/tasks/warden.matrix.ex`.
+- **ExUnit only when called.** Failures raise `ExUnit.AssertionError`; nothing references
+  ExUnit at load time, and the `:no_optional_deps` suite checks that neither the module
+  nor the application is loaded after Warden runs. `Warden.Test.Matrix` uses
+  `ExUnit.Case` only in the test modules that `use` it.
+- **Ordering.** `use Warden.Test.Matrix` registers its `@before_compile` before
+  `use ExUnit.Case`, so the generated setup (fixtures, after the module's own `setup`
+  blocks) and test exist when ExUnit collects them; the sandbox checkout is a setup
+  registered before the module's own.
+- **Snapshot comparison** parses both files into cells and compares those, so a change
+  in column widths is not a difference. `run!/2` takes the mode from `WARDEN_MATRIX`
+  (`print`, `update`), which `mix warden.matrix` sets when it runs
+  `mix test --only warden_matrix` in a child process.
+- **Redacted fields** are the fields whose value `Warden.redact/3` changes, recorded
+  only where the actor may take an action on the resource.
