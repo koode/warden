@@ -389,7 +389,8 @@ Before a policy is asked about a tenant, Warden denies:
 
 The last one keeps every answer the same: a single check never admits a row that the
 scope over every tenant of the actor would leave out. So `tenants/2` must list every
-tenant the actor may act in. An anonymous actor has no tenants, so it sees no rows of a
+tenant the actor may act in, and it runs (once per actor and call) even when you pass
+`tenant:` or check a single row; keep it cheap, or cache it in the context. An anonymous actor has no tenants, so it sees no rows of a
 tenanted schema; serve public pages from an untenanted schema or with a system actor.
 
 ## System actors and webhooks

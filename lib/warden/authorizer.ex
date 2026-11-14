@@ -156,6 +156,10 @@ defmodule Warden.Authorizer do
   @doc """
   Returns every tenant the actor may act in, for scopes across tenants. Default: `[]`. A
   bound credential narrows the result to its tenant (see `Warden.Actor.tenants/2`).
+
+  `Warden.Ecto` calls it once per actor and call, even when a `tenant:` is given or a
+  single row is checked: a row in a tenant this list does not hold is denied, so a
+  single check never admits what the scope over every tenant leaves out.
   """
   @callback tenants(Actor.t(), context :: map) :: [term]
 

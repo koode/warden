@@ -107,6 +107,9 @@ The module is an `ExUnit.Case` with one test, `"policy matrix"`, tagged
    action and the struct has a field policy;
 6. compares the matrix with the snapshot.
 
+A fixture that raises, or returns the wrong thing, fails with its name and the line that
+declares it.
+
 An actor fixture returns an actor (`Warden.actor/2`, `Warden.system_actor/2`,
 `Warden.on_behalf_of/3`) or a context map; system actors and delegated actors are
 columns like any other. A resource fixture returns a persisted struct. Actions are
@@ -203,5 +206,11 @@ GraphQL disagrees with the policies in 1 cell(s):
 ```
 
 GraphQL builds its actor from the context, so `%Warden.Actor{}` fixtures (system and
-delegated actors) are left out. Without a matrix, pass `:authorizer`, `:actors` and
+delegated actors) are left out.
+
+The check proves only what the schema's own resolvers do not already filter. A resolver
+that loads through `Warden.Ecto.scope/4` returns `null` for a denied row whatever the
+object rule says, so a weak object rule passes unnoticed. To prove the object rule
+itself, point `query_for:` at a field whose resolver loads the row by id without
+scoping (a test-only field, or a node lookup), so the object rule is the only guard. Without a matrix, pass `:authorizer`, `:actors` and
 `:resources` as for `assert_policy_consistent/4`.
