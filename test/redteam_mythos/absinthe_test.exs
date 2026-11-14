@@ -1,0 +1,177 @@
+defmodule Warden.RedteamMythos.FeedSchema do
+  @moduledoc false
+  use Absinthe.Schema
+  use Warden.Absinthe, authorizer: Warden.Test.RedteamV2.Authz
+
+  alias Warden.Test.RedteamV2.{Card, CardFields, Cards}
+
+  object :card do
+    authorize can(Cards, :read)
+    redact_with CardFields
+    field :id, non_null(:integer)
+    field :note, :string
+  end
+
+  query do
+    field :card, :card do
+      arg :id, non_null(:integer)
+      resolve fn args, _resolution -> {:ok, Card.get(args.id)} end
+    end
+  end
+
+  subscription do
+    field :card_changed, :card do
+      arg :id, non_null(:integer)
+      config fn args, _info -> {:ok, topic: "card:#{args.id}"} end
+      resolve fn card, _args, _resolution -> {:ok, card} end
+    end
+  end
+end
+
+defmodule Warden.RedteamMythos.AbsintheTest do
+  # Red-team of the Absinthe layer. Every test asserts the secure behaviour, so a failing
+  # test is an open hole. Not async: subscriptions share the test Pubsub registry.
+  use ExUnit.Case, async: false
+
+  import Warden.Test.CompileHelpers
+
+  alias Warden.RedteamMythos.FeedSchema
+  alias Warden.Test.Pubsub
+  alias Warden.Test.RedteamV2.{Card, People}
+
+  @interface_schema """
+    alias Warden.Test.RedteamV2.{Card, Cards}
+
+    interface :entry do
+      authorize can(Cards, :read)
+      field :id, non_null(:integer)
+      resolve_type fn _value, _resolution -> :card end
+    end
+
+    object :card do
+      interface :entry
+      field :id, non_null(:integer)
+      field :note, :string
+    end
+
+    query do
+      field :cards, list_of(:card) do
+        resolve fn _args, _resolution -> {:ok, Card.all()} end
+      end
+    end
+  """
+
+  @own_rule_schema """
+    alias Warden.Test.RedteamV2.{Card, Cards}
+
+    object :card do
+      authorize can(Cards, :read)
+      field :id, non_null(:integer)
+      field :note, :string
+    end
+
+    query do
+      field :cards, list_of(:card) do
+        resolve fn _args, _resolution -> {:ok, Card.all()} end
+      end
+    end
+  """
+
+  @authorizer "authorizer: Warden.Test.RedteamV2.Authz"
+
+  defp compile_outcome(body) do
+    {:ok, compile_schema(body, @authorizer)}
+  rescue
+    error in CompileError -> {:refused, Exception.message(error)}
+  end
+
+  defp subscribe(document, user) do
+    context = People.context(user, %{pubsub: Pubsub})
+
+    case Absinthe.run(document, FeedSchema, context: context) do
+      {:ok, %{"subscribed" => topic}} ->
+        :ok = Pubsub.subscribe(topic)
+        {:ok, topic}
+
+      {:ok, %{errors: errors}} ->
+        {:error, errors}
+    end
+  end
+
+  defp pushes(topic, collected) do
+    receive do
+      {:subscription_data, ^topic, data} -> pushes(topic, [data | collected])
+    after
+      200 -> Enum.reverse(collected)
+    end
+  end
+
+  describe "HOLE: redact_with is only required when the can/2 rule is the type's own" do
+    test "baseline: a type whose own rule is can/2 must declare redact_with" do
+      assert {:refused, message} = compile_outcome(@own_rule_schema)
+      assert message =~ "redact_with"
+    end
+
+    test "a type that gets its can/2 rule from an interface must declare it too" do
+      case compile_outcome(@interface_schema) do
+        {:refused, message} ->
+          assert message =~ "redact_with"
+
+        {:ok, schema} ->
+          result = People.run(schema, "{ cards { id note } }", People.abby())
+          notes = for %{"note" => note} <- result.data["cards"] || [], do: note
+
+          flunk("""
+          the schema compiled without `redact_with`, and a reader who is not staff got the \
+          notes that the field policy redacts: #{inspect(notes)}\
+          """)
+      end
+    end
+  end
+
+  describe "HOLE: a subscriber is pushed an event for a payload it may not see" do
+    test "an event about a hidden card looks like no event at all" do
+      hidden = Card.get(2)
+      refute hidden.visible
+
+      result = People.run(FeedSchema, "{ card(id: 2) { id } }", People.abby())
+      assert result.data == %{"card" => nil}
+
+      case subscribe("subscription { cardChanged(id: 2) { id note } }", People.abby()) do
+        {:error, _errors} ->
+          :ok
+
+        {:ok, topic} ->
+          :ok = Absinthe.Subscription.publish(Pubsub, hidden, card_changed: "card:2")
+          received = pushes(topic, [])
+
+          assert received == [], """
+          the subscriber may not read card 2, yet every change of it is pushed as \
+          #{inspect(received)}: the push itself tells that the card exists and when it \
+          changes, which the query (`null`, as for a missing card) hides\
+          """
+      end
+    end
+  end
+
+  describe "held: subscriptions over a redacted type" do
+    test "a visible card is pushed with its note redacted for a reader who is not staff" do
+      {:ok, topic} = subscribe("subscription { cardChanged(id: 1) { id note } }", People.abby())
+      :ok = Absinthe.Subscription.publish(Pubsub, Card.get(1), card_changed: "card:1")
+
+      assert [%{data: %{"cardChanged" => %{"id" => 1, "note" => "[hidden]"}}}] = pushes(topic, [])
+    end
+
+    test "staff and a reader subscribed to one topic each get their own payload" do
+      document = "subscription { cardChanged(id: 1) { note } }"
+      {:ok, reader_topic} = subscribe(document, People.abby())
+      {:ok, staff_topic} = subscribe(document, People.staff())
+      assert reader_topic != staff_topic
+
+      :ok = Absinthe.Subscription.publish(Pubsub, Card.get(1), card_changed: "card:1")
+
+      assert [%{data: %{"cardChanged" => %{"note" => "[hidden]"}}}] = pushes(reader_topic, [])
+      assert [%{data: %{"cardChanged" => %{"note" => "note 1"}}}] = pushes(staff_topic, [])
+    end
+  end
+end
