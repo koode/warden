@@ -135,17 +135,61 @@ defmodule Warden.Policy do
   @doc """
   Returns the policy registered for a struct (or a struct module) in `authorizer`'s
   `policies:`, or `nil`.
+
+  Raises `Warden.PolicyError` when `policies:` lists two policies for the same struct:
+  which one decides (and which `tenant:` field the binding reads) must not depend on
+  their order. The registry is built once per compiled authorizer and kept in
+  `:persistent_term`, so a lookup costs a map access.
   """
   @spec policy_for(module, struct | module) :: module | nil
   def policy_for(authorizer, %module{}), do: policy_for(authorizer, module)
 
   def policy_for(authorizer, module) when is_atom(module) do
-    authorizer.__warden_catalog__()
-    |> Map.get(:policies, [])
-    |> Enum.find(&(Dispatch.info!(&1).for == module))
+    case registry(authorizer) do
+      {:ok, registry} -> Map.get(registry, module)
+      {:error, message} -> raise Warden.PolicyError, message
+    end
   end
 
   def policy_for(_authorizer, _value), do: nil
+
+  # The struct => policy map of an authorizer, cached per compiled version of it.
+  defp registry(authorizer) do
+    key = {__MODULE__, :registry, authorizer, authorizer.module_info(:md5)}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        registry = build_registry(authorizer)
+        :persistent_term.put(key, registry)
+        registry
+
+      registry ->
+        registry
+    end
+  end
+
+  defp build_registry(authorizer) do
+    authorizer.__warden_catalog__()
+    |> Map.get(:policies, [])
+    |> Enum.reduce_while({:ok, %{}}, fn policy, {:ok, registry} ->
+      struct_module = Dispatch.info!(policy).for
+
+      case Map.fetch(registry, struct_module) do
+        {:ok, first} ->
+          {:halt, {:error, duplicate_message(authorizer, struct_module, first, policy)}}
+
+        :error ->
+          {:cont, {:ok, Map.put(registry, struct_module, policy)}}
+      end
+    end)
+  end
+
+  defp duplicate_message(authorizer, struct_module, first, second) do
+    """
+    #{inspect(authorizer)} lists two policies for #{inspect(struct_module)}: \
+    #{inspect(first)} and #{inspect(second)}; list one policy per struct\
+    """
+  end
 
   # Shared with `Warden.Ecto.Policy`, which validates the same core options.
   # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
