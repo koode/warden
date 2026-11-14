@@ -561,9 +561,28 @@ field when any inner list becomes `null`; Warden keeps every item error on the f
   subscription is refused, because the subscriber could never see an event.
 - **Publish time.** Every published event resolves with the subscriber's context; the
   actor is rebuilt for every event and all rules run again.
-- **Objects the subscriber may not see.** A value-dependent object rule (`can/2`, a
-  check, a tenant role) nulls the payload of a denied publish, but the subscriber still
-  gets an event, which tells that the object exists and when it changes. Refuse the
+- **Denied events are not pushed.** When Warden denies the subscription field itself at
+  publish time (the object rule of the payload, such as `can/2`, a check or a tenant
+  role, or the field's own rules after a revocation), the subscriber gets no push for
+  that event, so it cannot learn that the event happened. Denials deeper in the payload
+  keep their nulls and redaction. Absinthe gives a document no way to cancel its own
+  push, so your pubsub delegates Absinthe's `run_docset/3` callback to Warden. With
+  Absinthe.Phoenix, in the endpoint:
+
+  ```elixir
+  defmodule MyAppWeb.Endpoint do
+    use Phoenix.Endpoint, otp_app: :my_app
+    use Absinthe.Phoenix.Endpoint
+
+    defdelegate run_docset(pubsub, docs, mutation_result), to: Warden.Absinthe.Subscription
+  end
+  ```
+
+  Without it, Absinthe's own loop pushes a denied payload as `null`, as in Warden 0.2,
+  and Warden logs a warning once per pubsub module at the first publish of a subscription
+  field.
+- **Objects the subscriber may not see.** Even with the delegate, a subscription whose
+  only guard is a value-dependent object rule lets anyone subscribe to any id. Refuse the
   subscribe instead with a field rule on the argument that names the object:
 
   ```elixir
@@ -575,7 +594,9 @@ field when any inner list becomes `null`; Warden keeps every item error on the f
   ```
 
   Compilation warns about a subscription field whose return type has such a rule while
-  the field has no field or argument rule (`authorize public()` acknowledges it).
+  the field has no field or argument rule (`authorize public()` acknowledges it). The
+  warning stays when your pubsub delegates `run_docset/3`, because the schema cannot see
+  which pubsub publishes it.
 - **`context_id`: sharing is off by default.** Absinthe resolves an event once per
   `context_id` and document and sends the result to every subscriber that shares them.
   Warden removes any `context_id` your `config` sets, so every subscription resolves on
@@ -662,8 +683,11 @@ It does not protect against the following:
   users.
 - **Batched subscription publishing.** A custom Pubsub `run_docset/3` that runs documents
   through `Absinthe.Pipeline.BatchResolver` shares `acc` and merges contexts across
-  subscribers; per-subscriber identity cannot hold there. Absinthe's own publisher runs
-  every document separately.
+  subscribers; per-subscriber identity cannot hold there. Absinthe's own publisher and
+  `Warden.Absinthe.Subscription.run_docset/3` run every document separately.
+- **The publish loop follows Absinthe 1.12.** `Warden.Absinthe.Subscription.run_docset/3`
+  mirrors the private loop of `Absinthe.Subscription.Local` in Absinthe 1.12; a later
+  Absinthe release needs the two compared again.
 - **Non-goals for v1:** permission wildcards, rate limiting, `@defer`/`@stream`.
 
 ## Development

@@ -32,6 +32,20 @@
   `plugin_callbacks: false` still build it at the first field rule.
 - `Warden.Test.assert_policy_consistent/4` removes the marks of `Warden.Ecto.all/5`
   from the rows before asking the policy.
+- `Warden.Absinthe.Subscription.run_docset/3`, a publish loop for the pubsub's optional
+  `run_docset/3` callback (`defdelegate run_docset(pubsub, docs, mutation_result), to:
+  Warden.Absinthe.Subscription` in the endpoint). A subscriber whose subscription root
+  field Warden denies at publish time (the payload's object rule, or the field's rules
+  after a revocation) gets no push for that event, instead of a `null` payload that
+  tells the event happened. Other subscribers on the topic get their own payload;
+  partial denials inside the payload keep their nulls and redaction.
+- A warning, logged once per pubsub module at the first publish of a subscription field,
+  when the pubsub does not delegate `run_docset/3` to Warden.
+
+### Changed
+
+- The compile-time warning for a subscription guarded only by a value-dependent object
+  rule names the `run_docset/3` delegate as well as the field rule.
 
 ## 0.2.0 (2026-11-14)
 

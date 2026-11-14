@@ -188,6 +188,13 @@ schema option `introspection: rule` (default `public()`) guards `__schema` and `
   `{:error, denial_error}` so the client cannot subscribe at all.
 - **Publish time.** Pre and post middleware run as for queries, with the subscriber's
   context, rebuilding the actor per publish.
+- **No push for a denied root.** When Warden denies the subscription root field at
+  publish time (its object rule, root type rule, field rule or argument rules) and the
+  denial nulls the field, the subscriber gets no push for that event: a `null` push still
+  tells that the event happened. Denials deeper in the payload keep their nulls and
+  redaction, and a `{:replace, value}` field denial is pushed. This needs the app's
+  pubsub to delegate `run_docset/3` to `Warden.Absinthe.Subscription` (see (e2) below);
+  without it Absinthe's loop pushes the `null` and Warden warns once per pubsub.
 - **`context_id` dedup.** Absinthe shares one resolution between subscribers with the same
   `context_id`. If the user's `config` sets `context_id`, Warden appends an actor
   fingerprint (`Authorizer.actor_key/1`, default: hash of subject identity, roles and
@@ -318,6 +325,46 @@ the first registered document per id is resolved (`subscription.ex:195`,
 `subscription.ex:206`) and the result goes to every subscriber of that id. Warden removes
 a user-set `context_id` unless the authorizer opts in with `actor_key/2` (see "Red-team
 fix round" below).
+
+**(e2) Skipping the push of a denied root.** Absinthe has no documented way for one
+subscriber's document to cancel its push. On publish, `Absinthe.Subscription.Local`
+calls the pubsub's optional `run_docset/3` when it is exported
+(`subscription/local.ex:30-31`, callback at `subscription/pubsub.ex:81-83`), else its own
+private loop (`subscription/local.ex:40-60`), which matches `{:ok, %{result: data}, _}`
+and always calls `publish_subscription/2` (`subscription/local.ex:45`, `:54`). The only
+other way out of that call is an exception, which the loop catches and logs as an error
+(`subscription/local.ex:55-57`, `pipeline/batch_resolver.ex:104-113`); a phase result
+(`pipeline.ex:402-437`), a swapped result phase (`subscription/local.ex:103-118`),
+`config`, `trigger` and `context` cannot stop it. Warden therefore ships the loop
+(`Warden.Absinthe.Subscription.run_docset/3`, `absinthe/subscription.ex:56`), which apps
+delegate to from their pubsub:
+
+- It runs each document through Absinthe's public `Local.pipeline/2`
+  (`subscription/local.ex:62`), flattened, with `Warden.Absinthe.Phase.Publish`
+  inserted before the resolution phase (`absinthe/subscription.ex:82`). That phase marks
+  `execution.acc` as published by Warden (`phase/publish.ex:14`); `acc` is carried through
+  every resolution pass (`phase/document/execution/resolution.ex:63`, `:348-353`).
+- The pre and post middleware mark `acc` when a denial nulls a field whose parent is
+  the subscription root (`middleware.ex:889`, called at `middleware.ex:307`, `:312`,
+  `:595`, `:606`, `:611`). The loop skips `publish_subscription/2` when the mark is set
+  (`absinthe/subscription.ex:75`). `acc` is not part of the pushed result, so nothing is
+  stripped. Each document runs on its own, so the mark never crosses subscribers.
+- The subscribe-time `config` wrapper moved to the internal
+  `Warden.Absinthe.SubscriptionConfig`, so `Warden.Absinthe.Subscription` holds only the
+  public loop.
+- Everything else follows Absinthe's loop: the debug log, the per-document rescue and
+  its error log (`absinthe/subscription.ex:64`).
+- A root field resolves only on publish, so the root middleware checks the published
+  mark (`middleware.ex:907`, called at `middleware.ex:75` and `:394`) and logs a warning
+  once per pubsub module when it is missing (`middleware.ex:917`, deduplicated in
+  `:persistent_term`). Boot time cannot know the pubsub, and a pubsub exporting
+  `run_docset/3` may not delegate to Warden, so the first publish is the reliable point.
+- The loop is a copy of Absinthe 1.12's. The requirement `~> 1.12` admits later 1.x
+  releases; a test fails on any Absinthe other than 1.12.x until the loops are compared
+  again (`test/redteam_mythos/absinthe_test.exs`).
+
+The 0.2 compile-time warning for subscriptions guarded only by a value-dependent object
+rule (`phase/attach.ex:87`) stays: the schema cannot see which pubsub publishes it.
 
 **(f) `hydrate/2` and meta.** Supported: `{:meta, keyword}`
 (`phase/schema/hydrate.ex:71`). It *replaces* the node's meta
