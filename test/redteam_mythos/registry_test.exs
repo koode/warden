@@ -98,6 +98,8 @@ defmodule Warden.RedteamMythos.RegistryTest do
     end
   end
 
+  # Changed to match the decision: a bare id has no tenant Warden can read, so the
+  # documented join check passes the topic id as `tenant:` too, which binds it.
   describe "HOLE goal 11: a bound credential joins another tenant's channel" do
     test "the documented join check with the topic id as value is not bound" do
       socket = %Socket{assigns: bound_context(), topic: "workspace:t2"}
@@ -105,8 +107,18 @@ defmodule Warden.RedteamMythos.RegistryTest do
       joined =
         Channel.authorize_join(socket, check(:workspace_member),
           value: "t2",
+          tenant: "t2",
           authorizer: RegistryAuthz
         )
+
+      own = %Socket{assigns: bound_context(), topic: "workspace:t1"}
+
+      assert {:ok, _socket} =
+               Channel.authorize_join(own, check(:workspace_member),
+                 value: "t1",
+                 tenant: "t1",
+                 authorizer: RegistryAuthz
+               )
 
       assert {:error, _reply} = joined, """
       an API key bound to workspace t1 joined workspace:t2: the value is the bare id from \

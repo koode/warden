@@ -8,6 +8,9 @@ defmodule Warden.Check do
       object (`resolution.source`). For an object rule it is the object itself. For a
       root type rule it is the root value. At subscribe time it is `nil`.
     * `args` holds the field arguments (after variables and defaults).
+    * `tenant` is the tenant given with the `tenant:` option of the core API,
+      `Warden.Plug` or `Warden.Phoenix.Channel` (for a value whose tenant Warden cannot
+      read, such as a bare id), else `nil`.
     * `argument` is the argument or input field path for argument rules, else `nil`.
     * `context` is the Absinthe context, the conn context (`Warden.Plug`) or the context
       given to the core API.
@@ -27,7 +30,8 @@ defmodule Warden.Check do
           field: atom | nil,
           parent_type: atom | nil,
           type: atom | nil,
-          resolution: struct() | nil
+          resolution: struct() | nil,
+          tenant: term
         }
 
   # A check is handed to user code, which may log it. The guarded value, the arguments,
@@ -45,6 +49,7 @@ defmodule Warden.Check do
     :parent_type,
     :type,
     :resolution,
+    :tenant,
     opts: [],
     args: %{},
     context: %{}

@@ -85,8 +85,14 @@ defmodule Warden do
       argument is an actor (with a context map, that map is the context).
     * `:args` - a map given to checks as `Warden.Check.args`, read by
       `tenant_role(r, tenant: {:arg, path})` and `can(policy, action, arg: path)`.
+    * `:tenant` - the tenant the call is about, for a value whose tenant Warden cannot
+      read (a bare id from a URL or a channel topic). A bound actor (a credential or
+      system actor bound to a tenant) is denied with reason `:tenant_binding` before the
+      rule runs when it differs from the binding, and `tenant_role/1` uses it when the
+      value has no tenant. Without it, such a value is decided as for an unbound actor
+      (except by `tenant_role` and `can`, which deny it), so pass it to bind bare ids.
   """
-  @type opts :: [authorizer: module, value: term, context: map, args: map]
+  @type opts :: [authorizer: module, value: term, context: map, args: map, tenant: term]
 
   ## Authorizer resolution
 

@@ -47,7 +47,29 @@ defmodule Warden.Evaluator do
   # One rule for one check. Returns the result, the updated actor and the first tenant
   # the evaluation resolved (for telemetry).
   @spec one(term, Check.t(), module) :: {:ok | {:deny, failure}, Actor.t(), term}
-  def one(rule, %Check{actor: %Actor{}} = check, authorizer) do
+  def one(rule, %Check{actor: %Actor{} = actor} = check, authorizer) do
+    if explicit_tenant_foreign?(check),
+      do: {result(binding_denial(rule), []), actor, check.tenant},
+      else: one_checked(rule, check, authorizer)
+  end
+
+  # The `tenant:` of a call binds before any rule: a bound actor (or a bound delegator)
+  # asked about another tenant is denied, whatever the rule (`public()` included).
+  defp explicit_tenant_foreign?(%Check{actor: actor, tenant: tenant}) do
+    case scalar(tenant) do
+      nil -> false
+      tenant -> Enum.any?([actor, actor.delegator], &bound_elsewhere?(&1, tenant))
+    end
+  end
+
+  defp bound_elsewhere?(nil, _tenant), do: false
+
+  defp bound_elsewhere?(%Actor{} = actor, tenant),
+    do: Actor.bound_tenant(actor) not in [nil, tenant]
+
+  defp binding_denial(rule), do: {:deny, rule, [], [], @tenant_binding}
+
+  defp one_checked(rule, check, authorizer) do
     {outcome, state} = run(rule, check, authorizer, %{})
     actor = state.check.actor
     trace = Enum.reverse(state.trace)
@@ -77,7 +99,13 @@ defmodule Warden.Evaluator do
   @spec many(term, [Check.t()], module) :: {[:ok | {:deny, failure}], Actor.t() | nil}
   def many(_rule, [], _authorizer), do: {[], nil}
 
-  def many(rule, [%Check{actor: %Actor{} = actor} | _rest] = checks, authorizer) do
+  def many(rule, [%Check{actor: %Actor{} = actor} = first | _rest] = checks, authorizer) do
+    if explicit_tenant_foreign?(first),
+      do: {Enum.map(checks, fn _check -> result(binding_denial(rule), []) end), actor},
+      else: many_checked(rule, checks, actor, authorizer)
+  end
+
+  defp many_checked(rule, checks, actor, authorizer) do
     {results, actor, timed_out} = many_pass(rule, checks, actor, authorizer, %{})
 
     case actor.delegator do
@@ -253,7 +281,16 @@ defmodule Warden.Evaluator do
   # Evaluates every sub-rule (no short-circuiting) and returns the full tree. The result
   # always equals the result of `one/3`: both reduce the same outcomes.
   @spec explain(term, Check.t(), module) :: {Explanation.t(), Actor.t()}
-  def explain(rule, %Check{actor: %Actor{}} = check, authorizer) do
+  def explain(rule, %Check{actor: %Actor{} = actor} = check, authorizer) do
+    if explicit_tenant_foreign?(check) do
+      explanation = %Explanation{result: :deny, reason: @tenant_binding, steps: []}
+      {explanation, actor}
+    else
+      explain_checked(rule, check, authorizer)
+    end
+  end
+
+  defp explain_checked(rule, check, authorizer) do
     {outcome, step, state} = check |> new_state(authorizer, %{}, true) |> eval_step(rule)
     actor = state.check.actor
 
@@ -399,10 +436,15 @@ defmodule Warden.Evaluator do
 
   # True when the actor is bound and the value's tenant is known and another one.
   @spec foreign_tenant?(Check.t(), module) :: boolean
-  def foreign_tenant?(%Check{actor: actor, value: value}, authorizer) do
+  # An explicit tenant (the `tenant:` option) counts like the value's own: a bound actor
+  # denies when either is known and is another tenant than its binding.
+  def foreign_tenant?(%Check{actor: actor, value: value, tenant: tenant}, authorizer) do
     case Actor.bound_tenant(actor) do
-      nil -> false
-      bound -> value_tenant(value, authorizer) not in [nil, bound]
+      nil ->
+        false
+
+      bound ->
+        scalar(tenant) not in [nil, bound] or value_tenant(value, authorizer) not in [nil, bound]
     end
   end
 
@@ -579,7 +621,9 @@ defmodule Warden.Evaluator do
 
   # The tenant a tenant-role rule asks about.
   @spec rule_tenant(term, Check.t(), module) :: term
-  def rule_tenant(:value, %Check{value: value}, authorizer), do: value_tenant(value, authorizer)
+  # The tenant of the value, else the explicit `tenant:` of the call.
+  def rule_tenant(:value, %Check{value: value, tenant: tenant}, authorizer),
+    do: value_tenant(value, authorizer) || scalar(tenant)
 
   def rule_tenant({:arg, path}, %Check{args: args}, _authorizer),
     do: args |> get_path(path) |> scalar()

@@ -16,6 +16,10 @@ if Code.ensure_loaded?(Plug) do
       * `:rule` (required) - the rule every request must pass.
       * `:authorizer` - the authorizer module. Resolution order: this option, then the
         configured default (`config :warden, authorizer: MyApp.Authz`).
+      * `:tenant` - a function of the conn (`&MyAppWeb.tenant_id/1`) that returns the
+        tenant the request is about, for a credential bound to a tenant: when it returns
+        another tenant than the binding, the request is denied with reason
+        `:tenant_binding` before the rule runs. It also feeds `tenant_role/1`.
       * `:on_deny` - `{module, function}` called as `function(conn, denial)` on denial.
         Overrides the authorizer's `c:Warden.Authorizer.deny_conn/2`. `init/1` checks that
         `module.function/2` exists (except for a module that is still being compiled,
@@ -71,10 +75,15 @@ if Code.ensure_loaded?(Plug) do
 
     alias Warden.{Actor, Decision, Denial, Rule, Shape}
 
-    @option_keys [:rule, :authorizer, :on_deny]
+    @option_keys [:rule, :authorizer, :on_deny, :tenant]
 
     @typedoc "The compiled plug options."
-    @type config :: %{rule: Rule.t(), authorizer: module, on_deny: nil | {module, atom}}
+    @type config :: %{
+            rule: Rule.t(),
+            authorizer: module,
+            on_deny: nil | {module, atom},
+            tenant: nil | (Plug.Conn.t() -> term)
+          }
 
     @impl Plug
     @spec init(keyword) :: config
@@ -84,8 +93,22 @@ if Code.ensure_loaded?(Plug) do
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
       validate_rule!(rule, authorizer)
       on_deny = fetch_on_deny!(opts)
+      tenant = fetch_tenant!(opts)
 
-      %{rule: rule, authorizer: authorizer, on_deny: on_deny}
+      %{rule: rule, authorizer: authorizer, on_deny: on_deny, tenant: tenant}
+    end
+
+    defp fetch_tenant!(opts) do
+      case Keyword.get(opts, :tenant) do
+        nil ->
+          nil
+
+        tenant when is_function(tenant, 1) ->
+          tenant
+
+        _other ->
+          raise ArgumentError, "Warden.Plug `tenant:` must be a function of the conn"
+      end
     end
 
     defp reject_unknown_options!(opts) do
@@ -151,7 +174,10 @@ if Code.ensure_loaded?(Plug) do
     def call(conn, %{rule: rule, authorizer: authorizer} = config) do
       {actor, context} = build_actor(conn, authorizer)
 
-      case Decision.authorize(actor, rule, [authorizer: authorizer, context: context], :plug) do
+      tenant = if config[:tenant], do: config.tenant.(conn), else: nil
+      decision_opts = [authorizer: authorizer, context: context, tenant: tenant]
+
+      case Decision.authorize(actor, rule, decision_opts, :plug) do
         :ok -> conn
         {:error, denial} -> deny(conn, denial, config)
       end
@@ -183,8 +209,9 @@ if Code.ensure_loaded?(Plug) do
         Warden.Plug.authorize(conn, check(:owner), value: post)
         Warden.Plug.authorize(conn, check(:owner), value: post, authorizer: MyApp.Authz)
 
-    Options: `:value`; `:authorizer` (explicit option, then the configured default). An
-    unknown role, permission or check raises `Warden.PolicyError`.
+    Options: `:value`; `:tenant` (the tenant the request is about, see `Warden.authorize/3`);
+    `:authorizer` (explicit option, then the configured default). An unknown role,
+    permission or check raises `Warden.PolicyError`.
     """
     @spec authorize(Plug.Conn.t(), Rule.t(), keyword) ::
             {:ok, Plug.Conn.t()} | {:error, Denial.t()}
@@ -192,7 +219,12 @@ if Code.ensure_loaded?(Plug) do
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
       {actor, context} = build_actor(conn, authorizer)
 
-      decision_opts = [authorizer: authorizer, context: context, value: Keyword.get(opts, :value)]
+      decision_opts = [
+        authorizer: authorizer,
+        context: context,
+        value: Keyword.get(opts, :value),
+        tenant: Keyword.get(opts, :tenant)
+      ]
 
       case Decision.authorize(actor, rule, decision_opts, :plug) do
         :ok -> {:ok, conn}

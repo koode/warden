@@ -104,7 +104,8 @@ defmodule Warden.Decision do
     if not is_map(args),
       do: raise(ArgumentError, "`args:` must be a map, got: #{Shape.describe(args)}")
 
-    %Check{actor: actor, value: value, args: args, context: context}
+    tenant = Keyword.get(opts, :tenant)
+    %Check{actor: actor, value: value, args: args, context: context, tenant: tenant}
   end
 
   @spec denial(:ok | {:deny, map}, Rule.t(), Actor.t()) :: Denial.t() | nil

@@ -14,6 +14,7 @@ if Code.ensure_loaded?(Phoenix.Channel) do
           use Warden.Phoenix.Channel,
             rule: check(:workspace_member),
             value: &workspace_id/1,
+            tenant: &workspace_id/1,
             recheck: [:every_push, {:every, :timer.minutes(1)}]
 
           @impl true
@@ -30,6 +31,11 @@ if Code.ensure_loaded?(Phoenix.Channel) do
         of the topic (`fn topic -> ... end`) or of the topic and the join params
         (`fn topic, params -> ... end`). Default: no value (`nil`). It runs on every
         check, so a rule always sees the value as it is now; keep it cheap.
+      * `:tenant` - the tenant the channel is about, a function like `:value`. A
+        credential (or system actor) bound to another tenant is denied with reason
+        `:tenant_binding` before the rule runs, and `tenant_role/1` uses it when the value
+        has no tenant. Pass it whenever the value is a bare id from the topic: Warden
+        cannot read a tenant from a bare id.
       * `:recheck` - when to check the rule again after the join: `:every_push`,
         `{:every, milliseconds}`, a list of both, or `[]` for the join only. Default:
         `:every_push`.
@@ -113,7 +119,7 @@ if Code.ensure_loaded?(Phoenix.Channel) do
 
     require Logger
 
-    @option_keys [:rule, :value, :recheck, :authorizer, :on_deny]
+    @option_keys [:rule, :value, :tenant, :recheck, :authorizer, :on_deny]
     @default_recheck [:every_push]
     @denied_event "warden:denied"
     @stop_reason {:shutdown, :forbidden}
@@ -141,7 +147,8 @@ if Code.ensure_loaded?(Phoenix.Channel) do
       end
 
       config = build_config!(opts, env)
-      value_function = value_function!(Keyword.get(opts, :value))
+      value_function = topic_function!(:__warden_value__, :value, Keyword.get(opts, :value))
+      tenant_function = topic_function!(:__warden_tenant__, :tenant, Keyword.get(opts, :tenant))
 
       quote do
         Warden.Phoenix.Channel.__ensure_channel__!(__MODULE__)
@@ -150,6 +157,7 @@ if Code.ensure_loaded?(Phoenix.Channel) do
         def __warden_channel__, do: @warden_channel_config
 
         unquote(value_function)
+        unquote(tenant_function)
       end
     end
 
@@ -278,29 +286,30 @@ if Code.ensure_loaded?(Phoenix.Channel) do
       end
     end
 
-    # The value function is written into the channel as code (not evaluated here), so it
-    # may call the channel's own private functions. Its arity is read from the code.
-    defp value_function!(nil) do
+    # The value and tenant functions are written into the channel as code (not evaluated
+    # here), so they may call the channel's own private functions. Their arity is read
+    # from the code.
+    defp topic_function!(name, _option, nil) do
       quote do
-        def __warden_value__(_topic, _params), do: nil
+        def unquote(name)(_topic, _params), do: nil
       end
     end
 
-    defp value_function!(quoted) do
+    defp topic_function!(name, option, quoted) do
       case value_arity(quoted) do
         1 ->
           quote do
-            def __warden_value__(topic, _params), do: unquote(quoted).(topic)
+            def unquote(name)(topic, _params), do: unquote(quoted).(topic)
           end
 
         2 ->
           quote do
-            def __warden_value__(topic, params), do: unquote(quoted).(topic, params)
+            def unquote(name)(topic, params), do: unquote(quoted).(topic, params)
           end
 
         _other ->
           raise ArgumentError, """
-          Warden.Phoenix.Channel `value:` must be nil or a function of the topic \
+          Warden.Phoenix.Channel `#{option}:` must be nil or a function of the topic \
           (arity 1) or of the topic and the join params (arity 2), got: \
           #{Macro.to_string(quoted)}\
           """
@@ -499,12 +508,14 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     `%{reason: "forbidden"}` otherwise).
 
         def join("workspace:" <> id, _params, socket) do
-          Warden.Phoenix.Channel.authorize_join(socket, check(:member), value: id)
+          Warden.Phoenix.Channel.authorize_join(socket, check(:member), value: id, tenant: id)
         end
 
-        Warden.Phoenix.Channel.authorize_join(socket, check(:member), value: id, authorizer: MyApp.Authz)
+        Warden.Phoenix.Channel.authorize_join(socket, check(:member), value: id, tenant: id, authorizer: MyApp.Authz)
 
-    Options: `:value`; `:authorizer` (explicit option, then the configured default). It
+    Options: `:value`; `:tenant` (the tenant the channel is about: pass it when the value
+    is a bare id, so a credential bound to another tenant is refused with reason
+    `:tenant_binding`); `:authorizer` (explicit option, then the configured default). It
     checks once and starts no rechecks; use `use Warden.Phoenix.Channel` for those. An
     unknown role, permission or check raises `Warden.PolicyError`.
     """
@@ -528,14 +539,17 @@ if Code.ensure_loaded?(Phoenix.Channel) do
         Warden.Phoenix.Channel.authorize(socket, check(:owner), value: message)
         Warden.Phoenix.Channel.authorize(socket, check(:owner), value: message, authorizer: MyApp.Authz)
 
-    Options: `:value`; `:authorizer` (explicit option, then the configured default). An
-    unknown role, permission or check raises `Warden.PolicyError`.
+    Options: `:value`; `:tenant` (see `authorize_join/3`); `:authorizer` (explicit option,
+    then the configured default). An unknown role, permission or check raises
+    `Warden.PolicyError`.
     """
     @spec authorize(Socket.t(), Rule.t(), keyword) :: {:ok, Socket.t()} | {:error, Denial.t()}
     def authorize(%Socket{} = socket, rule, opts \\ []) do
       authorizer = Warden.resolve_authorizer!(Keyword.get(opts, :authorizer))
 
-      with :ok <- check(socket, rule, authorizer, Keyword.get(opts, :value)) do
+      target = {Keyword.get(opts, :value), Keyword.get(opts, :tenant)}
+
+      with :ok <- check(socket, rule, authorizer, target) do
         {:ok, socket}
       end
     end
@@ -558,9 +572,9 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     end
 
     # No cache: the actor always reflects the socket as it is now.
-    defp check(socket, rule, authorizer, value) do
+    defp check(socket, rule, authorizer, {value, tenant}) do
       context = Callbacks.socket_context(authorizer, socket)
-      decision_opts = [authorizer: authorizer, value: value]
+      decision_opts = [authorizer: authorizer, value: value, tenant: tenant]
       Decision.authorize(context, rule, decision_opts, :channel)
     end
 
@@ -584,7 +598,8 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     defp guarded_check(module, socket, topic, params) do
       %{rule: rule, authorizer: authorizer} = module.__warden_channel__()
       value = module.__warden_value__(topic, params)
-      check(socket, rule, authorizer, value)
+      tenant = module.__warden_tenant__(topic, params)
+      check(socket, rule, authorizer, {value, tenant})
     end
 
     defp state!(module, %Socket{private: private}) do

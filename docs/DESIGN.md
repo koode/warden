@@ -659,7 +659,11 @@ output that never shows a subject or a guarded value; the optional dependencies.
     called for it, and the batched pre-pass leaves such values out, so `check_many/2` and
     `allowed_many/4` never receive them. A value whose tenant is unknown (`nil`, such as a
     GraphQL root value) is decided as for an unbound actor, except by `tenant_role` and
-    `can`, which deny it. Every policy and scope for another tenant is `false`.
+    `can`, which deny it. Every policy and scope for another tenant is `false`. A bare id
+    is bound with the `tenant:` option (core API, `Warden.Plug`,
+    `Warden.Phoenix.Channel`): a bound actor asked about another tenant is denied with
+    `:tenant_binding` before the rule runs, `public()` included, and `tenant_role/1` uses
+    that tenant when the value has none.
 12. **Fail closed everywhere new.** A batch callback with a wrong length, a bad value, a
     raise or a timeout denies. A scope callback that returns anything but a dynamic,
     `true` or `false` raises `Warden.PolicyError`. A timeout never grants.

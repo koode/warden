@@ -107,6 +107,14 @@ A **bound** credential (`tenant:` set) stays in its tenant:
   and `can`, which deny it;
 - `Warden.Actor.tenants/2` lists only its tenant.
 
+A bare id (from a URL or a channel topic) has no tenant Warden can read. Pass the tenant
+with the `tenant:` option of `Warden.authorize/3` and friends, `Warden.Plug` (a
+function of the conn in `plug Warden.Plug`, a value in `Warden.Plug.authorize/3`) and
+`Warden.Phoenix.Channel` (a function of the topic, or a value in `authorize_join/3`). A
+bound actor asked about another tenant is then denied with `:tenant_binding` before the
+rule runs, `public()` included, and `tenant_role/1` uses that tenant when the value has
+none.
+
 A system actor built with `tenant:` is bound the same way.
 
 ## Tenant roles

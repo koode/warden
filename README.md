@@ -350,10 +350,17 @@ defmodule MyAppWeb.WorkspaceChannel do
   use Phoenix.Channel
   use Warden.Phoenix.Channel,
     rule: tenant_role(:guest),
-    value: fn "workspace:" <> id -> %{tenant_id: id} end,
+    value: &workspace_id/1,
+    tenant: &workspace_id/1,
     recheck: [:every_push, {:every, :timer.minutes(1)}]
+
+  defp workspace_id("workspace:" <> id), do: id
 end
 ```
+
+`tenant:` names the tenant the channel is about. Warden cannot read a tenant from a bare
+id, so pass it whenever the value is one: an API key bound to another workspace is then
+refused before the rule runs.
 
 The timer recheck stops a channel that receives nothing. See the
 [channels guide](guides/channels.md).

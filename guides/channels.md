@@ -16,6 +16,7 @@ defmodule MyAppWeb.WorkspaceChannel do
   use Warden.Phoenix.Channel,
     rule: check(:workspace_member),
     value: &workspace_id/1,
+    tenant: &workspace_id/1,
     recheck: [:every_push, {:every, :timer.minutes(1)}]
 
   @impl true
@@ -31,6 +32,7 @@ Put `use Warden.Phoenix.Channel` after `use Phoenix.Channel`.
 |---|---|
 | `rule:` (required) | The rule the socket's actor must pass to join and to stay joined. |
 | `value:` | The guarded value for the rule (`Warden.Check.value`): `fn topic -> ... end` or `fn topic, params -> ... end`, where `params` are the join params. Default: `nil`. |
+| `tenant:` | The tenant the channel is about, a function like `value:`. A credential or system actor bound to another tenant is refused with reason `:tenant_binding` before the rule runs; `tenant_role/1` uses it when the value has no tenant. Default: `nil`. |
 | `recheck:` | `:every_push`, `{:every, ms}`, a list of both, or `[]` for the join only. Default: `:every_push`. |
 | `authorizer:` | The authorizer module. Default: `config :warden, authorizer: MyApp.Authz`. |
 | `on_deny:` | `{module, function}`, called as `function(socket, denial)`. Returns the map the client receives. |
@@ -41,6 +43,11 @@ arity 1 or 2, or an `on_deny:` function that does not exist fails compilation.
 
 `value:` runs on every check, so the rule always sees the value as it is now. Keep it
 cheap: compute it from the topic and the params.
+
+Warden cannot read a tenant from a bare id such as the one in a topic. Without
+`tenant:`, a credential bound to one workspace is decided on such a value as an unbound
+actor would be, so a check that only asks "is this user a member" lets an API key for
+workspace A join workspace B. Pass the same id as `tenant:` to bind it.
 
 ## When the rule is checked
 
@@ -129,7 +136,7 @@ For a channel without `use Warden.Phoenix.Channel`, or for an extra rule on one 
 
 ```elixir
 def join("workspace:" <> id, _params, socket) do
-  Warden.Phoenix.Channel.authorize_join(socket, check(:workspace_member), value: id)
+  Warden.Phoenix.Channel.authorize_join(socket, check(:workspace_member), value: id, tenant: id)
 end
 
 def handle_in("rename", params, socket) do
