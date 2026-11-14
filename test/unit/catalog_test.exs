@@ -81,6 +81,24 @@ defmodule Warden.CatalogTest do
       assert message =~ ~s|`:checks` entry "string"|
     end
 
+    test "single: true needs batch: true and routes single values to check/2" do
+      assert errors(checks: [lonely: [single: true]]) =~
+               "check :lonely: `single: true` needs `batch: true`"
+
+      assert errors(checks: [odd: [batch: true, single: :yes]]) =~
+               "check :odd: `single:` must be a boolean"
+
+      assert {:ok, catalog} = build(checks: [both: [batch: true, single: true]])
+      assert catalog.check_specs.both.single
+
+      assert_raise CompileError, ~r/declares checks \[:both\] but does not define check\/2/, fn ->
+        compile_authorizer(
+          "roles: [:a], checks: [both: [batch: true, single: true]]",
+          "def check_many(_name, checks), do: Enum.map(checks, fn _check -> true end)"
+        )
+      end
+    end
+
     test "a name declared twice with different options fails" do
       assert errors(checks: [:self, self: [batch: true]]) =~ "`:checks` declares :self twice"
       assert {:ok, _catalog} = build(checks: [:self, :self])

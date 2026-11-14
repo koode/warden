@@ -19,8 +19,15 @@ defmodule Warden.Authorizer.Catalog do
     :spec_compliant_errors
   ]
 
-  @check_spec_keys [:batch, :timeout, :opts, :required, :system_kinds]
-  @default_check_spec %{batch: false, timeout: nil, opts: nil, required: [], system_kinds: []}
+  @check_spec_keys [:batch, :single, :timeout, :opts, :required, :system_kinds]
+  @default_check_spec %{
+    batch: false,
+    single: false,
+    timeout: nil,
+    opts: nil,
+    required: [],
+    system_kinds: []
+  }
   @scalar_opt_types [:atom, :string, :integer, :boolean, :any]
 
   # `:user` is always declared; `:anonymous` is the kind of an actor without a subject and
@@ -222,6 +229,7 @@ defmodule Warden.Authorizer.Catalog do
 
     unknown ++
       batch_errors(name, Keyword.get(spec, :batch, false)) ++
+      single_errors(name, Keyword.get(spec, :single, false), Keyword.get(spec, :batch, false)) ++
       timeout_errors(name, Keyword.get(spec, :timeout)) ++
       opts_schema_errors(name, Keyword.get(spec, :opts)) ++
       required_errors(name, Keyword.get(spec, :required, []), Keyword.get(spec, :opts)) ++
@@ -230,6 +238,17 @@ defmodule Warden.Authorizer.Catalog do
 
   defp batch_errors(_name, batch) when is_boolean(batch), do: []
   defp batch_errors(name, _batch), do: ["check #{inspect(name)}: `batch:` must be a boolean"]
+
+  # `single: true` routes the single values of a batched check to check/2; without
+  # `batch: true` every value goes there anyway, so the option would mean nothing.
+  defp single_errors(_name, false, _batch), do: []
+  defp single_errors(_name, true, true), do: []
+
+  defp single_errors(name, true, _batch),
+    do: ["check #{inspect(name)}: `single: true` needs `batch: true`"]
+
+  defp single_errors(name, _single, _batch),
+    do: ["check #{inspect(name)}: `single:` must be a boolean"]
 
   defp timeout_errors(_name, nil), do: []
   defp timeout_errors(_name, timeout) when is_integer(timeout) and timeout > 0, do: []
@@ -356,6 +375,7 @@ defmodule Warden.Authorizer.Catalog do
 
       check_spec = %{
         batch: Keyword.get(spec, :batch, false),
+        single: Keyword.get(spec, :single, false),
         timeout: Keyword.get(spec, :timeout),
         opts: Keyword.get(spec, :opts),
         required: Keyword.get(spec, :required, []),

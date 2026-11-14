@@ -777,9 +777,10 @@ actors fail every
 * `batch: true`: the authorizer must define `check_many(name, [Check.t()])`, returning a
   list of the same length and order with `true | false | {:deny, reason}`. Warden calls it
   for list items in GraphQL, `Warden.filter/4`, `Warden.redact/3` over lists, and the
-  Ecto layer. Wrong length, a bad element or a raise: `Warden.PolicyError`. A
-  `check/2` call for a batched check (a single value) goes to `check_many/2` with one
-  element when `check/2` is not defined for it.
+  Ecto layer. Wrong length, a bad element or a raise: `Warden.PolicyError`. A single
+  value of a batched check goes to `check_many/2` as a one-element list, unless the check
+  declares `single: true` (only valid with `batch: true`), which routes single values to
+  `check/2`.
 * `timeout:` (ms) runs the check (single or batch) in a task. On timeout every value
   denies with reason `:unavailable`. Never grants.
 * Inside `all_of`/`any_of` over a list, Warden evaluates the batched checks for all values
@@ -931,9 +932,9 @@ Paths are relative to `lib/warden/`.
   them too, and the binding code is the same as for bound credentials. An anonymous
   actor also fails `session()` and `credential_scope/1`. An unbound system actor has no
   tenants (`Warden.Actor.tenants/2`).
-- **Checks.** A batched check's single value goes to `check/2` when it has a clause for
-  the name (a `FunctionClauseError` raised by the authorizer's own `check/2` falls back to
-  `check_many/2` with one element). `timeout:` runs the call in a process started with
+- **Checks.** A batched check's single value goes to `check_many/2` as a one-element list,
+  or to `check/2` with `single: true`, so a catch-all `check/2` clause never answers a
+  batched check by accident. `timeout:` runs the call in a process started with
   `spawn_monitor/1` that gets a copy of the caller's process dictionary (except keys that
   are atoms starting with `$`) and `$callers`; on timeout it is killed, Warden waits for
   its `:DOWN`, then flushes any reply it sent, so none arrives late. A raise inside `check_many/2` (with or without a timeout) becomes a

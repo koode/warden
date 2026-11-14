@@ -2,6 +2,7 @@ defmodule Warden.BatchTest do
   use ExUnit.Case, async: true
 
   import Warden.Rule
+  import Warden.Test.CompileHelpers
   import Warden.Test.V2.People
 
   alias Warden.Test.V2.Authz
@@ -38,7 +39,24 @@ defmodule Warden.BatchTest do
     assert checks == [:plain, :plain, :plain]
   end
 
-  test "a single value goes to check/2 when it handles the name, else to check_many/2" do
+  test "a catch-all check/2 never answers a batched check" do
+    [{authorizer, _bytecode} | _rest] =
+      compile!("""
+      defmodule #{unique("Warden.Test.Compiled.CatchAll")} do
+        use Warden.Authorizer, roles: [:a], checks: [:plain, many: [batch: true]]
+        def subject(context), do: context[:user]
+        def roles(_user, _context), do: []
+        def check(_name, _check), do: true
+        def check_many(:many, checks), do: Enum.map(checks, fn _check -> false end)
+      end
+      """)
+
+    context = %{user: %{id: "u"}}
+    assert Warden.allowed?(context, check(:plain), authorizer: authorizer)
+    refute Warden.allowed?(context, check(:many), authorizer: authorizer)
+  end
+
+  test "a single value goes to check_many/2, or to check/2 with single: true" do
     context = context(abby())
     refute Warden.allowed?(context, check(:visible), authorizer: Authz, value: %{visible: false})
     assert batch_calls() == [{:visible, 1}]

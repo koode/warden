@@ -585,22 +585,10 @@ defmodule Warden.Evaluator do
     end
   end
 
-  # A batched check answers single values through check/2 when that handles the name,
-  # else through check_many/2 with one element.
-  defp single_check(authorizer, name, check, %{batch: true}) do
-    if function_exported?(authorizer, :check, 2) do
-      try do
-        authorizer.check(name, check)
-      rescue
-        error in FunctionClauseError ->
-          if error.module == authorizer and error.function == :check and error.arity == 2,
-            do: single_from_many(authorizer, name, check),
-            else: reraise(error, __STACKTRACE__)
-      end
-    else
-      single_from_many(authorizer, name, check)
-    end
-  end
+  # A batched check answers a single value through check_many/2 with one element, unless
+  # it declares `single: true`, which routes single values to check/2.
+  defp single_check(authorizer, name, check, %{batch: true, single: false}),
+    do: single_from_many(authorizer, name, check)
 
   defp single_check(authorizer, name, check, _spec), do: Callbacks.check(authorizer, name, check)
 

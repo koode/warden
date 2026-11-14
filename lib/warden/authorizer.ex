@@ -31,9 +31,12 @@ defmodule Warden.Authorizer do
       permission.
     * `:checks` - the names handled by `c:check/2`: atoms, or `name: options` entries. A
       rule that names an undeclared check fails compilation. If any check that is not
-      batched is declared, `c:check/2` must be defined. Entry options:
-      * `batch: true` - `c:check_many/2` answers the check for a list of values at once
-        (it must then be defined).
+      batched (or declares `single: true`) is declared, `c:check/2` must be defined.
+      Entry options:
+      * `batch: true` - `c:check_many/2` answers the check, for a list of values at once
+        and for a single value as a one-element list (it must then be defined).
+      * `single: true` - with `batch: true`, single values go to `c:check/2` instead.
+        Without `batch: true` it fails compilation.
       * `timeout: ms` - run the check in a separate process; when it takes longer, every
         value it was asked about is denied with reason `:unavailable`. The process gets
         a copy of the caller's process dictionary, except keys that are atoms starting
@@ -123,8 +126,9 @@ defmodule Warden.Authorizer do
   the same length and order as `checks`, with `true`, `false` or `{:deny, reason}` per
   check. A wrong length, a bad element or a raise is a `Warden.PolicyError`, and denies.
 
-  Warden calls it for list items in GraphQL and for `Warden.filter/4`. A single value goes
-  to `c:check/2` when that handles the name, else to `check_many/2` with one element.
+  Warden calls it for list items in GraphQL and for `Warden.filter/4`, and for a single
+  value with a one-element list, unless the check declares `single: true`, which sends
+  single values to `c:check/2`.
   """
   @callback check_many(name :: atom, checks :: [Check.t()]) :: [check_result]
 
@@ -279,10 +283,12 @@ defmodule Warden.Authorizer do
     end
   end
 
-  # Callbacks the catalog makes required: check/2 for checks that are not batched,
-  # check_many/2 for batched ones, tenant_roles/3 when tenant roles are declared.
+  # Callbacks the catalog makes required: check/2 for checks that are not batched or
+  # that declare `single: true`, check_many/2 for batched ones, tenant_roles/3 when
+  # tenant roles are declared.
   defp missing_callback_errors(module, catalog, defines?) do
-    {batched, single} = Enum.split_with(catalog.checks, &catalog.check_specs[&1].batch)
+    batched = Enum.filter(catalog.checks, &catalog.check_specs[&1].batch)
+    single = Enum.filter(catalog.checks, &single_check?(catalog.check_specs[&1]))
 
     [
       single != [] and not defines?.({:check, 2}) and
@@ -297,6 +303,10 @@ defmodule Warden.Authorizer do
     ]
     |> Enum.filter(&is_binary/1)
   end
+
+  defp single_check?(%{batch: false}), do: true
+  defp single_check?(%{single: true}), do: true
+  defp single_check?(_spec), do: false
 
   @doc """
   The default denial handler. Returns `"Forbidden"` with `code: "FORBIDDEN"` and,

@@ -22,7 +22,7 @@ defmodule Warden.Test.V2.Authz do
       visible: [batch: true],
       slow_many: [batch: true, timeout: 200],
       configured_many: [batch: true],
-      single_or_many: [batch: true]
+      single_or_many: [batch: true, single: true]
     ]
 
   @impl true

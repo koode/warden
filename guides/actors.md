@@ -231,8 +231,13 @@ It returns one `true | false | {:deny, reason}` per check, in order. A wrong len
 bad element or a raise is a `Warden.PolicyError`; nothing is granted. Warden calls it
 once per list for `Warden.filter/4` and for GraphQL lists, also inside
 `all_of`/`any_of` (the batched checks are decided for every value first, then the rule
-per value). A single value goes to `check/2` when that has a clause for the name, else
-to `check_many/2` with one element.
+per value). A single value goes to `check_many/2` too, as a one-element list, so a
+catch-all `check/2` clause never sees a batched check. To answer single values with
+`check/2` instead, declare `single: true` next to `batch: true`:
+
+```elixir
+checks: [email_visible: [batch: true, single: true]]
+```
 
 In GraphQL, an object rule on a single object under a list (each issue's `assignee`) is
 decided per parent by default. `use Warden.Absinthe, batch_across_parents: true`
