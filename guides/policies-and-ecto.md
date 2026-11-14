@@ -407,10 +407,12 @@ Otherwise Warden decides from the clauses in memory where that is exact, and ask
 database for the rest:
 
 * exact in memory: `rule:`; `where:`, `actor_in:` and `within:` on ids, integers,
-  booleans, strings and enums; `through:` with the parent preloaded; `through_any:`
-  when a preloaded child is allowed; `through_type:` with a type outside the map;
-* always the database: `none:`, `member_of:`, `grant:`, `when:` and `scope/4`
-  (a preload may have been filtered, and link rows are not loaded).
+  booleans, strings and enums; `through:` with the parent preloaded; `through_any:` over
+  a `has_many` when a preloaded child that points at the row is allowed; `through_type:`
+  with a type outside the map;
+* always the database: `none:`, `member_of:`, `grant:`, `when:`, `scope/4` and
+  `through_any:` over a `many_to_many` (a preload may have been filtered, and link rows
+  are not loaded).
 
 The database part is one query per tenant: `WHERE id = ANY($1) AND workspace_id = $2
 AND scope`. `{schema, id}` values are one query inside the scope of every tenant of the

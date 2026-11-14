@@ -10,15 +10,17 @@ if Code.ensure_loaded?(Ecto) do
     #   * `where:`, `actor_in:` and `within:` compare fields whose Elixir equality is the
     #     database's (ids, integers, booleans, strings, enums, `nil`);
     #   * `through:` uses the loaded parent when its key matches the foreign key;
-    #   * `through_any:` is `true` when a loaded child is allowed, else unknown (a preload
-    #     may have been filtered);
+    #   * `through_any:` over a has_many is `true` when a loaded child whose foreign key
+    #     points at this row is allowed, else unknown (a preload may have been filtered, or
+    #     assembled by hand); over a many_to_many it is unknown, because the join rows are
+    #     not loaded;
     #   * `through_type:` is `false` for a type not in the map, else unknown;
     #   * `none:`, `member_of:`, `grant:`, `when:` and a hand-written `scope/4` are unknown.
     #
     # Three-valued logic: AND is `false` if any part is, `true` if all are; OR is `true` if
     # any is, `false` if all are; otherwise `:unknown`.
 
-    alias Ecto.Association.NotLoaded
+    alias Ecto.Association.{Has, NotLoaded}
     alias Warden.Actor
     alias Warden.Ecto.{Info, Scope}
     alias Warden.Ecto.Policy.Compiler
@@ -159,11 +161,13 @@ if Code.ensure_loaded?(Ecto) do
       association = info.schema.__schema__(:association, assoc)
       action = through_action || clause.action
 
-      case Map.get(struct, association.field) do
-        children when is_list(children) ->
-          any_child(info, association.related, action, actor, tenant, children, state)
+      case {association, Map.get(struct, association.field)} do
+        {%Has{}, children} when is_list(children) ->
+          owner_key = Map.get(struct, association.owner_key)
+          mine = Enum.filter(children, &(Map.get(&1, association.related_key) == owner_key))
+          any_child(info, association.related, action, actor, tenant, mine, state)
 
-        _not_loaded ->
+        _not_loaded_or_many_to_many ->
           {:unknown, actor, state}
       end
     end
