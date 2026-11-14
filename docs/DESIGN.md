@@ -947,7 +947,12 @@ Paths are relative to `lib/warden/`.
     actions: [atom], tenant: atom | nil, system_kinds: [atom],
     enforces_binding: boolean}`;
   - `__warden_decide__(action, actor, values, context)` returning one
-    `true | false | {:deny, reason}` per value, in order.
+    `true | false | {:deny, reason}` per value, in order, or `{answers, actor}` to hand
+    back what it cached in the actor while deciding (tenant roles, tenants). Dispatch
+    keeps only that actor's cache, never its identity, and the evaluator threads it on,
+    so GraphQL writes it back to `resolution.acc`. `Warden.Ecto.Policy` returns the
+    actor and fills its tenant list (`Warden.Actor.cached_tenants/2`) once, so
+    `tenant_roles/3` runs once per tenant and `tenants/2` once per actor per execution.
 
   `use Warden.Policy` generates both (`__warden_decide__/4` is overridable and calls
   `allowed_many/4` or `allowed?/4`); `Warden.Ecto.Policy` implements them too.

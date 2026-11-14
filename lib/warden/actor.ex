@@ -312,30 +312,58 @@ defmodule Warden.Actor do
 
   @doc """
   Returns the tenants the actor may act in, from `c:Warden.Authorizer.tenants/2`
-  (default: none). A bound credential narrows the list to its tenant. An anonymous actor
-  has none; a system actor has only the tenant it is bound to.
+  (default: none). A bound credential narrows the list to its tenant; a delegated actor
+  acts only in tenants both actors have. An anonymous actor has none; a system actor has
+  only the tenant it is bound to. Reads the actor's cache when `cached_tenants/2` filled
+  it; see that function to keep the result.
   """
   @spec tenants(t, map) :: [term]
-  def tenants(%__MODULE__{authorizer: authorizer} = actor, context) do
-    cond do
-      anonymous?(actor) ->
-        []
+  def tenants(%__MODULE__{} = actor, context) do
+    {tenants, _actor} = cached_tenants(actor, context)
+    tenants
+  end
 
-      actor.system? ->
-        List.wrap(bound_tenant(actor))
+  @doc """
+  Like `tenants/2`, but returns the actor with its own tenant list cached, so
+  `c:Warden.Authorizer.tenants/2` runs at most once per actor (and once for its
+  delegator).
+  """
+  @spec cached_tenants(t, map) :: {[term], t}
+  def cached_tenants(%__MODULE__{} = actor, context) do
+    {own, actor} = own_tenants(actor, context)
 
-      true ->
-        listed = Callbacks.tenants(authorizer, actor, context)
-        listed |> narrow_to_bound(bound_tenant(actor)) |> narrow_to_delegator(actor, context)
+    case actor.delegator do
+      nil ->
+        {own, actor}
+
+      %__MODULE__{} = delegator ->
+        {shared, delegator} = cached_tenants(delegator, context)
+        both = Enum.filter(own, &(&1 in shared))
+        {both, %{actor | delegator: delegator}}
     end
   end
 
-  # A delegated actor acts only in tenants both actors have.
-  defp narrow_to_delegator(listed, %__MODULE__{delegator: nil}, _context), do: listed
+  # The actor's own tenants, before the delegator narrows them: what the callback lists
+  # for its subject, narrowed to a bound credential's tenant. Cached under :tenants.
+  defp own_tenants(%__MODULE__{cache: %{tenants: tenants}} = actor, _context),
+    do: {tenants, actor}
 
-  defp narrow_to_delegator(listed, %__MODULE__{delegator: delegator}, context) do
-    shared = tenants(delegator, context)
-    Enum.filter(listed, &(&1 in shared))
+  defp own_tenants(%__MODULE__{authorizer: authorizer} = actor, context) do
+    tenants =
+      cond do
+        anonymous?(actor) ->
+          []
+
+        actor.system? ->
+          List.wrap(bound_tenant(actor))
+
+        true ->
+          authorizer
+          |> Callbacks.tenants(%{actor | delegator: nil}, context)
+          |> narrow_to_bound(bound_tenant(actor))
+      end
+
+    {tenants, %{actor | cache: Map.put(actor.cache, :tenants, tenants)}}
   end
 
   defp narrow_to_bound(listed, nil), do: listed

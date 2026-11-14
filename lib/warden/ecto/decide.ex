@@ -21,16 +21,18 @@ if Code.ensure_loaded?(Ecto) do
     alias Warden.Ecto.{Info, Memory, Scope}
     alias Warden.Ecto.Policy.Graph
 
-    @spec decide(module, atom, Actor.t(), [term], map) :: [Warden.Policy.result()]
+    # Returns `{answers, actor}`: the actor carries what the decision cached (tenant roles,
+    # tenants), so the caller keeps it and `tenant_roles/3` and `tenants/2` run once.
+    @spec decide(module, atom, Actor.t(), [term], map) :: {[Warden.Policy.result()], Actor.t()}
     def decide(policy, action, %Actor{} = actor, values, context) do
       info = Info.fetch!(policy)
       Info.ensure_action!(info, action)
       Graph.ensure_valid!(policy)
 
-      side = %{actor | delegator: nil}
+      side = with_tenants(info, %{actor | delegator: nil}, values, context)
       state = Scope.new(context)
 
-      {sorted, {_side, state}} =
+      {sorted, {side, state}} =
         Enum.map_reduce(values, {side, state}, &sort(info, action, &1, &2))
 
       custom = custom_answers(info, action, actor, sorted, context)
@@ -38,10 +40,22 @@ if Code.ensure_loaded?(Ecto) do
       {tenant_queries, side, state} =
         tenant_queries(info, action, side, tenant_groups(sorted), state)
 
-      {id_query, _side, _state} = id_query(info, action, side, id_values(sorted), state)
+      {id_query, side, _state} = id_query(info, action, side, id_values(sorted), state)
 
       {allowed_rows, allowed_ids} = run(info, tenant_queries, id_query)
-      answer(sorted, custom, allowed_rows, allowed_ids)
+      answers = answer(sorted, custom, allowed_rows, allowed_ids)
+      decided = %{actor | cache: Map.merge(actor.cache, side.cache)}
+      {answers, decided}
+    end
+
+    # The scope gates read the actor's tenants from its cache (`Warden.Actor.tenants/2`);
+    # filling it here makes `tenants/2` run once per actor, not once per decision.
+    defp with_tenants(%{tenant: nil}, side, _values, _context), do: side
+    defp with_tenants(_info, side, [], _context), do: side
+
+    defp with_tenants(_info, side, _values, context) do
+      {_tenants, side} = Actor.cached_tenants(side, context)
+      side
     end
 
     # `{:done, answer}`, `{:custom, struct}`, `{:row, {tenant, prefix}, key}` or

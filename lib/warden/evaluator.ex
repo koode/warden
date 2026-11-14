@@ -112,10 +112,17 @@ defmodule Warden.Evaluator do
     foreign = Enum.map(checks, &foreign_tenant?(%{&1 | actor: actor}, authorizer))
     asked = for {check, false} <- Enum.zip(checks, foreign), do: check
 
-    tables =
+    # Policies hand back the actor with what they cached (tenant roles, tenants).
+    leaves =
       for leaf <- batched_leaves(rule, catalog, []),
           not leaf_refused?(leaf, actor, catalog),
-          do: {leaf, leaf |> batch_verdicts(asked, actor, authorizer, catalog) |> spread(foreign)}
+          do: leaf
+
+    {tables, actor} =
+      Enum.map_reduce(leaves, actor, fn leaf, actor ->
+        {verdicts, actor} = batch_verdicts(leaf, asked, actor, authorizer, catalog)
+        {{leaf, spread(verdicts, foreign)}, actor}
+      end)
 
     checks
     |> Enum.with_index()
@@ -178,7 +185,7 @@ defmodule Warden.Evaluator do
 
   # Returns one verdict per check, in order. A policy is asked once about every value (it
   # splits by tenant itself); a batched check calls `check_many/2` once.
-  defp batch_verdicts(_leaf, [], _actor, _authorizer, _catalog), do: []
+  defp batch_verdicts(_leaf, [], actor, _authorizer, _catalog), do: {[], actor}
 
   defp batch_verdicts(
          {:can, policy, action, _opts},
@@ -196,11 +203,14 @@ defmodule Warden.Evaluator do
     batch = Enum.map(checks, &%{&1 | actor: actor, name: name, opts: opts})
     count = length(batch)
 
-    case caught(fn -> Callbacks.check_many(authorizer, name, batch) end, spec.timeout) do
-      {:ok, results} -> batch_results!(results, count, authorizer, name)
-      :timeout -> List.duplicate({:deny, @unavailable}, count)
-      {:raised, kind, reason, _stacktrace} -> batch_raised!(kind, reason, authorizer, name)
-    end
+    verdicts =
+      case caught(fn -> Callbacks.check_many(authorizer, name, batch) end, spec.timeout) do
+        {:ok, results} -> batch_results!(results, count, authorizer, name)
+        :timeout -> List.duplicate({:deny, @unavailable}, count)
+        {:raised, kind, reason, _stacktrace} -> batch_raised!(kind, reason, authorizer, name)
+      end
+
+    {verdicts, actor}
   end
 
   defp batch_results!(results, count, authorizer, name) when is_list(results) do
@@ -488,8 +498,8 @@ defmodule Warden.Evaluator do
     else
       check = state.check
       values = can_values(policy, opts, check)
-      verdict = can_verdict(policy, action, values, check, state.authorizer)
-      decided(verdict, rule, state)
+      {verdict, actor} = can_verdict(policy, action, values, check, state.authorizer)
+      decided(verdict, rule, put_actor(state, actor))
     end
   end
 
@@ -513,12 +523,14 @@ defmodule Warden.Evaluator do
     end
   end
 
-  defp can_verdict(_policy, _action, [], _check, _authorizer), do: {:deny, nil}
+  defp can_verdict(_policy, _action, [], check, _authorizer), do: {{:deny, nil}, check.actor}
 
   defp can_verdict(policy, action, values, check, authorizer) do
-    policy
-    |> Dispatch.decide(action, check.actor, values, check.context, authorizer)
-    |> Enum.find(:ok, &(&1 != :ok))
+    {verdicts, actor} =
+      Dispatch.decide(policy, action, check.actor, values, check.context, authorizer)
+
+    verdict = Enum.find(verdicts, :ok, &(&1 != :ok))
+    {verdict, actor}
   end
 
   # A verdict is `:ok` or `{:deny, reason}`.

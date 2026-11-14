@@ -2,7 +2,7 @@ defmodule Warden.Ecto.AbsintheTest do
   use Warden.Test.EctoCase, async: true
 
   alias Warden.Ecto, as: WardenEcto
-  alias Warden.Test.Ecto.{Authz, Issue, Issues, Team}
+  alias Warden.Test.Ecto.{Authz, Comment, Issue, Issues, Team}
 
   defp run(document, context),
     do: Absinthe.run(document, Warden.Test.Ecto.GraphQL, context: context)
@@ -96,5 +96,29 @@ defmodule Warden.Ecto.AbsintheTest do
 
     assert [%{message: "Forbidden"}] = result.errors
     refute_received {:resolved, :rename_issue, _id}
+  end
+
+  test "a page of can/2 object rules reads tenants once and each tenant's roles once",
+       %{issues: [t1_issue, _second, t2_issue, _fourth]} do
+    comment = insert!(%Comment{workspace_id: "t1", issue_id: t1_issue.id, body: "b"})
+
+    document = """
+    {
+      issues { id title }
+      first: issue(id: "#{t1_issue.id}") { id }
+      second: issue(id: "#{t2_issue.id}") { id }
+      comment(id: "#{comment.id}") { id body }
+    }
+    """
+
+    {:ok, %{data: data}} = run(document, context(abby()))
+    assert [_first | _rest] = data["issues"]
+
+    {:messages, messages} = Process.info(self(), :messages)
+    tenant_reads = for {:tenants, "abby"} <- messages, do: :tenants
+    role_reads = for {:tenant_roles, "abby", tenant} <- messages, do: tenant
+
+    assert tenant_reads in [[], [:tenants]], "tenants/2 ran #{length(tenant_reads)} times"
+    assert role_reads == Enum.uniq(role_reads), "tenant_roles/3 ran twice for a tenant"
   end
 end

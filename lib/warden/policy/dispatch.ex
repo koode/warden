@@ -7,7 +7,8 @@ defmodule Warden.Policy.Dispatch do
   #     actions: [atom], tenant: atom | nil, system_kinds: [atom],
   #     enforces_binding: boolean}`;
   #   * `__warden_decide__(action, actor, values, context)` returns one
-  #     `true | false | {:deny, reason}` per value, in order.
+  #     `true | false | {:deny, reason}` per value, in order, or `{answers, actor}` to
+  #     hand back the actor with what it cached (only its cache is kept).
   #
   # `use Warden.Policy` generates both (deciding through `allowed_many/4` or
   # `allowed?/4`). Before calling `__warden_decide__/4`, Warden denies `nil` values,
@@ -40,16 +41,19 @@ defmodule Warden.Policy.Dispatch do
       else: Enum.map(values, &policy.allowed?(action, actor, &1, context))
   end
 
-  # Returns one verdict (`:ok | {:deny, reason}`) per value.
-  @spec decide(module, atom, Actor.t(), [term], map, module) :: [:ok | {:deny, term}]
+  # Returns one verdict (`:ok | {:deny, reason}`) per value, and the actor with what the
+  # policy cached in it (tenant roles, tenants).
+  @spec decide(module, atom, Actor.t(), [term], map, module) ::
+          {[:ok | {:deny, term}], Actor.t()}
   def decide(policy, action, %Actor{} = actor, values, context, authorizer) do
     info = info!(policy)
     ensure_usable!(policy, info, action, authorizer)
 
     screened = Enum.map(values, &screen(&1, actor, info, authorizer))
     asked = for {:ask, value} <- screened, do: value
-    answers = ask(policy, action, actor, asked, context)
-    merge(screened, answers, [])
+    {answers, actor} = ask(policy, action, actor, asked, context)
+    verdicts = merge(screened, answers, [])
+    {verdicts, actor}
   end
 
   defp ensure_usable!(policy, info, action, authorizer) do
@@ -101,12 +105,12 @@ defmodule Warden.Policy.Dispatch do
     end
   end
 
-  defp ask(_policy, _action, _actor, [], _context), do: []
+  defp ask(_policy, _action, actor, [], _context), do: {[], actor}
 
   defp ask(policy, action, actor, values, context) do
     count = length(values)
 
-    answers =
+    returned =
       try do
         policy.__warden_decide__(action, actor, values, context)
       rescue
@@ -117,8 +121,11 @@ defmodule Warden.Policy.Dispatch do
         kind, reason -> decide_failed!(policy, action, kind, reason)
       end
 
+    {answers, actor} = with_cache(returned, actor)
+
     if is_list(answers) and length(answers) == count do
-      Enum.map(answers, &verdict!(&1, policy, action))
+      verdicts = Enum.map(answers, &verdict!(&1, policy, action))
+      {verdicts, actor}
     else
       raise Warden.PolicyError, """
       #{inspect(policy)} must return one result per value for #{inspect(action)} \
@@ -126,6 +133,13 @@ defmodule Warden.Policy.Dispatch do
       """
     end
   end
+
+  # An implementation may return `{answers, actor}` to hand back what it cached while
+  # deciding. Only the cache is taken from that actor: who the actor is never changes.
+  defp with_cache({answers, %Actor{cache: cache}}, actor),
+    do: {answers, %{actor | cache: Map.merge(actor.cache, cache)}}
+
+  defp with_cache(answers, actor), do: {answers, actor}
 
   @spec decide_failed!(module, atom, atom, term) :: no_return()
   defp decide_failed!(policy, action, kind, reason) do
