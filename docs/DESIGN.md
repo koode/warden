@@ -1219,6 +1219,22 @@ Paths are relative to `lib/warden/`.
   trusted for both of its sides. A hand-built actor has none and marks nothing.
   `default_actor_key/1` and `inspect/1` leave it out. `Warden.Test.assert_policy_consistent/4`
   removes marks before it asks the policy.
+- **The execution's actor** (`absinthe/plugin.ex`). `Warden.Absinthe.Plugin`'s
+  `before_resolution/1` builds the actor from the execution's context and stores it in
+  `acc[Warden].actor` when it is not there yet, so every field rule and
+  `Warden.Absinthe.actor/1` use one instance and a field without rules sees it too. A
+  schema cannot add a phase to the document pipeline (the caller builds it, for example
+  Absinthe.Plug), and this callback is Absinthe's hook for setting `acc` before
+  resolution; it runs before every resolution pass, and later passes find the actor. A
+  subscription publish is a new execution with an empty `acc`, so it builds a new actor
+  from the subscriber's context (goal 5); the subscribe-time check keeps building its
+  own. The lazy build in `Middleware.actor/2` stays for the cases where the callback
+  cannot build it: `Absinthe.Pipeline.BatchResolver` calls plugins with an execution
+  that has no schema yet (so no authorizer), and a pipeline may run resolution with
+  `plugin_callbacks: false`. There the first field rule builds the actor, and
+  `Warden.Absinthe.actor/1` raises `Warden.PolicyError` when called before it. As a
+  consequence `subject/1`, `roles/2` and `permissions/2` now run once per execution
+  even for a document whose fields have no rules.
 
 ### Implementation notes: policy matrix
 

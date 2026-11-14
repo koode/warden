@@ -451,6 +451,13 @@ them from literals, module attributes or compile-time expressions.
 - **Input-field rule** (`authorize` in an `input_object` field): same rule as arguments,
   checked through nested input objects and lists of input objects.
 
+#### The actor in a resolver
+
+Warden builds one actor per document execution, before resolution, and decides every
+rule of that execution for it. `Warden.Absinthe.actor(resolution)` returns it, for a
+resolver that loads rows with `Warden.Ecto.all/5` (see the
+[actors guide](guides/actors.md#the-actor-in-a-graphql-resolver)).
+
 #### SDL schemas
 
 Use `Warden.Absinthe.Hydrate.meta/2` in `hydrate/2`:

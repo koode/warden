@@ -493,6 +493,19 @@ memory. Load them with `Warden.Ecto.all/5` instead, and the rule trusts them:
 issues = Warden.Ecto.all(Repo, query, actor, :read, tenant: workspace.id)
 ```
 
+In a GraphQL resolver, load with the actor of the document execution
+(`Warden.Absinthe.actor/1`), which the object rules decide with:
+
+```elixir
+field :issues, list_of(:issue) do
+  resolve fn _args, resolution ->
+    query = from(issue in MyApp.Issues.Issue, order_by: issue.id)
+    actor = Warden.Absinthe.actor(resolution)
+    {:ok, Warden.Ecto.all(MyApp.Repo, query, actor, :read)}
+  end
+end
+```
+
 `all/5` runs the scoped query and marks every row it returns as admitted by that scope,
 in the row's `__meta__.context`. A later decision about a marked row allows it without a
 query, after the gates that come before every policy: the actor's tenants, a bound
@@ -502,7 +515,7 @@ credential's tenant (`:tenant_binding`) and the system kinds. A mark counts only
   context, in another request, or by `Warden.on_behalf_of/3` decides the rows through
   the policy, so a struct cached across requests never carries authority with it. Pass
   the actor that the decisions use: a context map builds a new actor on every call. In
-  GraphQL the object rules use the actor of the document execution;
+  GraphQL that is `Warden.Absinthe.actor(resolution)`;
 * for the policy and action it was loaded for: rows loaded for `:read` are decided as
   usual for `:write`;
 * for the row as loaded: a struct whose persisted fields or prefix changed is decided as

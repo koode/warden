@@ -64,6 +64,31 @@ system actor has no context; its checks get `context:` or `%{}`. For a delegated
 the context is the request's (the agent's) in both passes, see below. `inspect/1` never
 shows the context.
 
+## The actor in a GraphQL resolver
+
+Warden builds the actor of a document execution once, from the execution's context,
+before the first field resolves, and decides every rule of that execution for it. Every
+subscription publish is a new execution and builds a new actor from the subscriber's
+context. A resolver gets that actor with `Warden.Absinthe.actor/1`:
+
+```elixir
+field :issues, list_of(:issue) do
+  resolve fn _args, resolution ->
+    actor = Warden.Absinthe.actor(resolution)
+    {:ok, Warden.Ecto.all(MyApp.Repo, MyApp.Issues.Issue, actor, :read)}
+  end
+end
+```
+
+Use it rather than building an actor from `resolution.context`: rows that
+`Warden.Ecto.all/5` loads are trusted by the object rules only for the actor instance
+that loaded them (see the policies guide). It raises `ArgumentError` for a schema
+without `use Warden.Absinthe`. Absinthe.Plug's batch mode
+(`Absinthe.Pipeline.BatchResolver`) and a pipeline that runs resolution with
+`plugin_callbacks: false` skip the step that builds the actor; there the first Warden
+rule of the execution builds it, and `actor/1` raises `Warden.PolicyError` when called
+before any rule ran.
+
 ## Kinds
 
 `kind/2` says what the subject is. It must return a kind from `kinds:` (`:user` is

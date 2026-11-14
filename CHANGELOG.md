@@ -16,6 +16,8 @@
   policy and action allows them without a query, after the tenant, binding and
   system-kind gates. `Warden.Ecto.explain/4` explains such a row as
   `{:admitted_by_scope, action}`.
+- `Warden.Absinthe.actor/1`: the actor of the document execution, for resolvers (for
+  example to load rows with `Warden.Ecto.all/5` that the object rules then trust).
 
 ### Changed
 
@@ -23,6 +25,11 @@
   `Warden.actor/2`, `Warden.system_actor/2` and `Warden.on_behalf_of/3` build, so two
   actors built from the same context are no longer `==`. `inspect/1` and
   `default_actor_key/1` leave it out.
+- GraphQL builds the actor of a document execution once, before resolution
+  (`Warden.Absinthe.Plugin`'s `before_resolution/1`), instead of at the first field
+  rule, so `subject/1`, `roles/2` and `permissions/2` also run for a document whose
+  fields have no rules. Absinthe.Plug's batch mode and pipelines with
+  `plugin_callbacks: false` still build it at the first field rule.
 - `Warden.Test.assert_policy_consistent/4` removes the marks of `Warden.Ecto.all/5`
   from the rows before asking the policy.
 
