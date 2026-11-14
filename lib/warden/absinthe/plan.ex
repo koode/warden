@@ -9,6 +9,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Type
     alias Warden.Absinthe.Rules
+    alias Warden.Fields.Redactor
     alias Warden.Rule
 
     @root_types [:query, :mutation, :subscription]
@@ -35,7 +36,8 @@ if Code.ensure_loaded?(Absinthe) do
       errors =
         validate_meta(types, catalog) ++
           covered_errors(types, object_rules) ++
-          redact_errors(types, config) ++ argument_leaf_errors(types)
+          redact_errors(types, config) ++
+          missing_redaction_errors(types, config) ++ argument_leaf_errors(types)
 
       inputs = input_plans(types)
 
@@ -541,6 +543,38 @@ if Code.ensure_loaded?(Absinthe) do
         end
 
       own ++ stray
+    end
+
+    # An object type over a struct (through a `can/2` policy's `for:` or its
+    # `warden_schema`) whose field policy in the authorizer's `fields:` redacts a field the
+    # type exposes under the same identifier must `redact_with` that field policy: without
+    # it the type serves the unredacted value. A type that exposes none of the redacted
+    # fields needs nothing.
+    defp missing_redaction_errors(types, config) do
+      registry = Redactor.registry(config.authorizer)
+
+      for {ident, %Type.Object{} = object} <- Enum.sort_by(types, &elem(&1, 0)),
+          not introspection_type?(object),
+          ident not in @root_types,
+          struct_module <- linked_structs(object),
+          module = Map.get(registry, struct_module),
+          module != nil,
+          meta(object, :warden_redact_with) != module,
+          exposed = exposed_redactions(object, module),
+          exposed != [] do
+        fields = Enum.map_join(exposed, ", ", &inspect/1)
+
+        """
+        #{object.name} exposes #{fields} of #{inspect(struct_module)}, which \
+        #{inspect(module)} redacts; add `redact_with #{inspect(module)}`\
+        """
+      end
+    end
+
+    defp exposed_redactions(object, module) do
+      for %{field: field} <- module.__warden_fields__(:info).redactions,
+          Map.has_key?(object.fields, field),
+          do: field
     end
 
     defp redact_type_errors(ident, %Type.Object{} = object, module, config) do

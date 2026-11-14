@@ -820,7 +820,11 @@ actors fail every
   field arguments: `tenant_role(r, tenant: {:arg, path})` and `can(policy, action,
   arg: path)` in one fail compilation. An object rule decides a value wherever it is
   returned, and the arguments of the field that returned it are the client's choice.
-* `redact_with Policy.Fields` on an object type (below).
+* `redact_with Policy.Fields` on an object type (below). An object type linked to a
+  struct (through a `can/2` policy's `for:` or `warden_schema`) whose field policy in the
+  authorizer's `fields:` redacts a field the type exposes under the same identifier must
+  declare `redact_with` for that field policy, else compilation fails. A type that
+  exposes none of the redacted fields needs nothing.
 * Verifier option `require_can_for: [Schema, ...]` (with `strict_mode: :all`): an object
   type whose rule does not use `can/2` for those schemas' policies fails compilation. The
   link from object type to schema is the policy's `schema:` and an explicit

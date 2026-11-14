@@ -237,7 +237,7 @@ defmodule Warden.Ecto.MatrixFailuresTest do
       )
     end
 
-    @comment "object :comment do\n  authorize can(Warden.Test.Ecto.Comments, :read)\n  field :id, :id\n  field :body, :string\nend"
+    @comment "object :comment do\n  authorize can(Warden.Test.Ecto.Comments, :read)\n  redact_with Warden.Test.Ecto.CommentFields\n  field :id, :id\n  field :body, :string\nend"
 
     test "catches an object rule that disagrees with the policy" do
       schema =
@@ -271,6 +271,8 @@ defmodule Warden.Ecto.MatrixFailuresTest do
       refute error.message =~ "actor member"
     end
 
+    # A type over a redacted struct must declare `redact_with` (a compile-time rule), so
+    # the field policy is bypassed here by a resolver that reloads the unredacted row.
     test "catches a field policy that GraphQL does not apply" do
       schema =
         graphql!("""
@@ -279,7 +281,17 @@ defmodule Warden.Ecto.MatrixFailuresTest do
           field :id, :id
         end
 
-        #{@comment}
+        object :comment do
+          authorize can(Warden.Test.Ecto.Comments, :read)
+          redact_with Warden.Test.Ecto.CommentFields
+          field :id, :id
+
+          field :body, :string do
+            resolve fn comment, _args, _resolution ->
+              {:ok, Warden.Test.Repo.get(Warden.Test.Ecto.Comment, comment.id).body}
+            end
+          end
+        end
         """)
 
       issue = insert!(%Issue{workspace_id: "t1"})

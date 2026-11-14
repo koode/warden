@@ -203,8 +203,10 @@ defmodule Warden.Test.RedteamV2.Schema do
     field :code, :string
   end
 
+  # A second type over the redacted struct must redact too (a compile-time rule).
   object :card_summary do
     authorize can(Cards, :read)
+    redact_with CardFields
 
     field :id, non_null(:integer)
     field :note, :string

@@ -4,6 +4,7 @@ defmodule Warden.RedteamV2Absinthe.RedactionTest do
   # hole exists; the others document defended attacks.
   use ExUnit.Case, async: true
 
+  import Warden.Test.CompileHelpers
   import Warden.Test.RedteamV2.People
 
   alias Warden.Test.RedteamV2.{Card, Listing, Schema, Ticket}
@@ -28,10 +29,53 @@ defmodule Warden.RedteamV2Absinthe.RedactionTest do
   # policy, linked to it by its `can/2` policy, has no `redact_with` and serves the
   # unredacted struct. `require_can_for` exists for object rules; nothing ties an object
   # type of a redacted struct to its field policy.
+  #
+  # Changed to match the decision: such a type must declare `redact_with`, else the
+  # schema fails compilation; the shared schema's `CardSummary` now declares it.
   test "a second object type over a redacted struct still redacts" do
     result = run(Schema, "{ cardSummaries { id note } }", abby())
 
     refute inspect(result.data) =~ "note 1"
+
+    assert_raise CompileError,
+                 ~r/Bare exposes :note .* add `redact_with Warden.Test.RedteamV2.CardFields`/,
+                 fn ->
+                   compile_schema(
+                     """
+                       object :bare do
+                         authorize can(Warden.Test.RedteamV2.Cards, :read)
+                         field :id, :integer
+                         field :note, :string
+                       end
+
+                       object :ids_only do
+                         authorize can(Warden.Test.RedteamV2.Cards, :read)
+                         field :id, :integer
+                       end
+
+                       query do
+                         field :bare, :bare
+                         field :ids_only, :ids_only
+                       end
+                     """,
+                     "authorizer: Warden.Test.RedteamV2.Authz"
+                   )
+                 end
+
+    # A type that exposes none of the redacted fields needs nothing.
+    assert compile_schema(
+             """
+               object :ids_only do
+                 authorize can(Warden.Test.RedteamV2.Cards, :read)
+                 field :id, :integer
+               end
+
+               query do
+                 field :ids_only, :ids_only
+               end
+             """,
+             "authorizer: Warden.Test.RedteamV2.Authz"
+           )
   end
 
   test "an on_deny replacement value is redacted and decided like a resolved value" do
