@@ -433,6 +433,7 @@ if Code.ensure_loaded?(Absinthe) do
       decided
       |> walk(spec.shape, %{ctx | res: res, actor: actor}, [])
       |> finish_post(res, spec)
+      |> mark_list_root_denied(spec, stats)
     end
 
     defp under_list?(res), do: res |> Resolution.path() |> Enum.any?(&is_integer/1)
@@ -914,6 +915,20 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     defp mark_root_denied(res), do: res
+
+    # A subscription list root whose resolver returned items, every one of which Warden
+    # denied, would be pushed as `[]` or `[null, ...]`: that tells the event happened as
+    # much as a `null` root does, so it is marked the same way. A list the resolver
+    # returned empty (no item decided) and a list with an allowed item are pushed.
+    defp mark_list_root_denied(res, spec, %{count: count, denied: count}) when count > 0 do
+      if list_shape?(spec.shape), do: mark_root_denied(res), else: res
+    end
+
+    defp mark_list_root_denied(res, _spec, _stats), do: res
+
+    defp list_shape?({:non_null, inner}), do: list_shape?(inner)
+    defp list_shape?({:list, _inner}), do: true
+    defp list_shape?(_named), do: false
 
     def root_denied?(%{@acc_key => %{root_denied: true}}), do: true
     def root_denied?(_acc), do: false

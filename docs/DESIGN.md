@@ -192,7 +192,10 @@ schema option `introspection: rule` (default `public()`) guards `__schema` and `
   publish time (its object rule, root type rule, field rule or argument rules) and the
   denial nulls the field, the subscriber gets no push for that event: a `null` push still
   tells that the event happened. Denials deeper in the payload keep their nulls and
-  redaction, and a `{:replace, value}` field denial is pushed. This needs the app's
+  redaction, and a `{:replace, value}` field denial is pushed. A list root that the
+  resolver returned with items, every one of which Warden denied (all filtered or all
+  nulled), is not pushed either: `[]` or `[null]` tells the same. A list the resolver
+  returned empty, and a list with an allowed item, are pushed. This needs the app's
   pubsub to delegate `run_docset/3` to `Warden.Absinthe.Subscription` (see (e2) below);
   without it Absinthe's loop pushes the `null` and Warden warns once per pubsub.
 - **`context_id` dedup.** Absinthe shares one resolution between subscribers with the same
@@ -346,7 +349,8 @@ delegate to from their pubsub:
   every resolution pass (`phase/document/execution/resolution.ex:63`, `:348-353`).
 - The pre and post middleware mark `acc` when a denial nulls a field whose parent is
   the subscription root (`middleware.ex:889`, called at `middleware.ex:307`, `:312`,
-  `:595`, `:606`, `:611`). The loop skips `publish_subscription/2` when the mark is set
+  `:595`, `:606`, `:611`), and when every item of a subscription list root is denied
+  (`mark_list_root_denied/3`, from the post middleware's decision counts). The loop skips `publish_subscription/2` when the mark is set
   (`absinthe/subscription.ex:75`). `acc` is not part of the pushed result, so nothing is
   stripped. Each document runs on its own, so the mark never crosses subscribers.
 - The subscribe-time `config` wrapper moved to the internal

@@ -25,7 +25,9 @@
   Warden.Absinthe.Subscription` in the endpoint). A subscriber whose subscription root
   field Warden denies at publish time (the payload's object rule, or the field's rules
   after a revocation) gets no push for that event, instead of a `null` payload that
-  tells the event happened. Other subscribers on the topic get their own payload;
+  tells the event happened; so does a list root whose every item Warden denies (all
+  filtered or all nulled), while an empty list from the resolver is pushed. Other
+  subscribers on the topic get their own payload;
   partial denials inside the payload keep their nulls and redaction. A pubsub that does
   not delegate keeps the 0.2 behaviour and logs a warning once, at its first publish of
   a subscription field.

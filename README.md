@@ -564,7 +564,9 @@ field when any inner list becomes `null`; Warden keeps every item error on the f
 - **Denied events are not pushed.** When Warden denies the subscription field itself at
   publish time (the object rule of the payload, such as `can/2`, a check or a tenant
   role, or the field's own rules after a revocation), the subscriber gets no push for
-  that event, so it cannot learn that the event happened. Denials deeper in the payload
+  that event, so it cannot learn that the event happened. The same holds for a list
+  root whose every item Warden denies (all filtered or all nulled); an empty list from
+  the resolver, or a list with an allowed item, is pushed. Denials deeper in the payload
   keep their nulls and redaction. Absinthe gives a document no way to cancel its own
   push, so your pubsub delegates Absinthe's `run_docset/3` callback to Warden. With
   Absinthe.Phoenix, in the endpoint:

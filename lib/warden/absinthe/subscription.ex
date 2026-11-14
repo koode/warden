@@ -7,8 +7,11 @@ if Code.ensure_loaded?(Absinthe) do
     When Warden denies a subscription's root field at publish time (the object rule of
     the payload, or the field's own rule, for example after a revocation), the subscriber
     gets no push at all for that event. Without this, Absinthe pushes the payload as
-    `null`, which still tells the subscriber that the event happened. Partial denials
-    inside the payload keep their nulls and redaction, as for queries.
+    `null`, which still tells the subscriber that the event happened. A list root whose
+    resolver returned items, every one of which Warden denies (all filtered or all
+    nulled), is not pushed either; an empty list from the resolver, or a list with an
+    allowed item, is. Partial denials inside the payload keep their nulls and redaction,
+    as for queries.
 
     Absinthe offers no way for a document to cancel its own push, so the app's pubsub
     delegates Absinthe's optional `run_docset/3` callback here. With Absinthe.Phoenix,

@@ -140,6 +140,28 @@ defmodule Warden.RedteamV03.SubscriptionTest do
     end
   end
 
+  describe "a list root that is not fully denied is pushed" do
+    test "an empty list from the resolver", %{schemas: schemas} do
+      for policy <- [:null_item, :filter] do
+        topic = subscribe(schemas[policy], "subscription { memberCards { id } }", @abby)
+        publish([], member_cards: "member_cards")
+        assert [%{data: %{"memberCards" => []}}] = pushes(topic)
+      end
+    end
+
+    test "null_item: an allowed item, the denied one nulled", %{schemas: schemas} do
+      topic = subscribe(schemas.null_item, "subscription { memberCards { id } }", @abby)
+      publish([Card.get(1), Card.get(3)], member_cards: "member_cards")
+      assert [%{data: %{"memberCards" => [%{"id" => 1}, nil]}}] = pushes(topic)
+    end
+
+    test "filter: an allowed item, the denied one filtered", %{schemas: schemas} do
+      topic = subscribe(schemas.filter, "subscription { memberCards { id } }", @abby)
+      publish([Card.get(3), Card.get(1)], member_cards: "member_cards")
+      assert [%{data: %{"memberCards" => [%{"id" => 1}]}}] = pushes(topic)
+    end
+  end
+
   describe "a root field denied at publish time" do
     test "a role revoked after subscribe: no push, a new actor per publish", %{schemas: schemas} do
       {:ok, roles} = Agent.start_link(fn -> [:staff] end)
