@@ -2,8 +2,9 @@ defmodule Warden.Adversarial.FieldsCostTest do
   @moduledoc """
   Denial-of-service guard for redaction: the cost of `Warden.redact/3` (shallow and deep)
   and of `redact_with` over a GraphQL list must grow about linearly with the number of
-  structs. Compares 1,000 against 8,000 (8x the work); linear growth gives a ratio near
-  8, quadratic growth near 64.
+  structs. Compares 2,000 against 16,000 (8x the work); linear growth gives a ratio near
+  8, quadratic growth near 64. Each timed run starts after a garbage collection, so a
+  collection inside the short baseline run does not skew the ratio.
   """
   use ExUnit.Case, async: false
 
@@ -26,14 +27,17 @@ defmodule Warden.Adversarial.FieldsCostTest do
     fun.()
 
     1..5
-    |> Enum.map(fn _attempt -> fun |> :timer.tc() |> elem(0) end)
+    |> Enum.map(fn _attempt ->
+      :erlang.garbage_collect()
+      fun |> :timer.tc() |> elem(0)
+    end)
     |> Enum.min()
   end
 
   defp ratio(make_fun) do
     Enum.reduce_while(1..@ratio_attempts, nil, fn _attempt, lowest ->
-      small = best_time(make_fun.(1_000))
-      large = best_time(make_fun.(8_000))
+      small = best_time(make_fun.(2_000))
+      large = best_time(make_fun.(16_000))
       measured = large / max(small, 1)
       lowest = if lowest == nil, do: measured, else: min(lowest, measured)
       if lowest < @ratio_bound, do: {:halt, lowest}, else: {:cont, lowest}
