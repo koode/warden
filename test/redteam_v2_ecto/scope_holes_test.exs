@@ -114,7 +114,8 @@ defmodule Warden.RedteamV2Ecto.ScopeHolesTest do
       statements = [
         "CREATE SCHEMA rt_prefix_b",
         "CREATE TABLE rt_prefix_b.teams (LIKE public.teams INCLUDING ALL)",
-        "CREATE TABLE rt_prefix_b.team_memberships (LIKE public.team_memberships INCLUDING ALL)"
+        "CREATE TABLE rt_prefix_b.team_memberships (LIKE public.team_memberships INCLUDING ALL)",
+        "CREATE TABLE rt_prefix_b.issues (LIKE public.issues INCLUDING ALL)"
       ]
 
       Enum.each(statements, &Repo.query!/1)
@@ -134,6 +135,18 @@ defmodule Warden.RedteamV2Ecto.ScopeHolesTest do
 
       refute WardenEcto.allowed?(actor(guest), :read, loaded)
       assert WardenEcto.filter(actor(guest), :read, [loaded]) == []
+    end
+
+    test "resolve: :ids reads the parent ids of the struct's own prefix", %{guest: guest} do
+      issue = %Issue{id: 990_002, workspace_id: "t1", team_id: 990_001, title: "T"}
+      insert!(issue)
+      Repo.insert!(issue, prefix: "rt_prefix_b")
+      public = Repo.get!(Issue, 990_002)
+      other = Repo.get!(Issue, 990_002, prefix: "rt_prefix_b")
+
+      assert WardenEcto.allowed?(actor(guest), :read_ids, public)
+      refute WardenEcto.allowed?(actor(guest), :read_ids, other)
+      assert WardenEcto.filter(actor(guest), :read_ids, [public, other]) == [public]
     end
 
     test "scope/4 run with a prefix checks the link rows of that prefix", %{guest: guest} do

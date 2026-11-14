@@ -136,6 +136,9 @@ if Code.ensure_loaded?(Ecto) do
     defp tenant_queries(info, action, side, by_tenant, state) do
       Enum.reduce(by_tenant, {[], side, state}, fn
         {{tenant, prefix}, keys}, {queries, side, state} ->
+          # `through: ..., resolve: :ids` reads the parent ids from the tables of the
+          # group's own prefix; the memo keys on the prefix, so groups never share ids.
+          state = %{state | prefix: prefix}
           {verdict, side, state} = Scope.verdict(info, action, side, tenant, state)
           condition = Scope.tenant_condition(info, tenant)
 
@@ -152,6 +155,7 @@ if Code.ensure_loaded?(Ecto) do
     defp id_query(_info, _action, side, [], state), do: {nil, side, state}
 
     defp id_query(info, action, side, keys, state) do
+      state = %{state | prefix: nil}
       {verdict, side, state} = Scope.scope(info, action, side, :all, state)
 
       query =

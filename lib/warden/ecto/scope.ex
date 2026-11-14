@@ -119,7 +119,8 @@ if Code.ensure_loaded?(Ecto) do
     # One side of an actor, one tenant: the gates, then the policy.
     @spec verdict(map, atom, Actor.t(), term, t) :: {verdict, Actor.t(), t}
     def verdict(info, action, %Actor{} = actor, tenant, state) do
-      key = {info.policy, action, tenant, identity(actor)}
+      # A verdict with `resolve: :ids` holds the parent ids of one prefix.
+      key = {info.policy, action, tenant, identity(actor), state.prefix}
 
       case Map.fetch(state.memo, key) do
         {:ok, verdict} ->
