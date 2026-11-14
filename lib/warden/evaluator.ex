@@ -639,9 +639,11 @@ defmodule Warden.Evaluator do
     parent = self()
     ref = make_ref()
     callers = [parent | Process.get(:"$callers", [])]
+    dictionary = inherited_dictionary()
 
     {pid, monitor} =
       spawn_monitor(fn ->
+        Enum.each(dictionary, fn {key, value} -> Process.put(key, value) end)
         Process.put(:"$callers", callers)
         send(parent, {ref, run_caught(fun)})
       end)
@@ -656,7 +658,7 @@ defmodule Warden.Evaluator do
     after
       timeout ->
         Process.exit(pid, :kill)
-        Process.demonitor(monitor, [:flush])
+        await_down(monitor, pid)
         flush_reply(ref)
         :timeout
     end
@@ -670,6 +672,26 @@ defmodule Warden.Evaluator do
     {:ok, fun.()}
   catch
     kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+  end
+
+  # The caller's process dictionary, so a check reads the same process state (a tenant
+  # prefix, a dynamic repo) with or without a timeout. Keys that are atoms starting with
+  # `$` belong to the runtime and are not copied; `$callers` is set separately.
+  defp inherited_dictionary do
+    for {key, value} <- Process.get(), not runtime_key?(key), do: {key, value}
+  end
+
+  defp runtime_key?(key) when is_atom(key),
+    do: key |> Atom.to_string() |> String.starts_with?("$")
+
+  defp runtime_key?(_key), do: false
+
+  # After the kill the process is gone only once `:DOWN` arrives; a reply it sent before
+  # that is flushed next, so none can arrive late.
+  defp await_down(monitor, pid) do
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    end
   end
 
   defp flush_reply(ref) do
