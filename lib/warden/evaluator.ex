@@ -127,6 +127,20 @@ defmodule Warden.Evaluator do
     end)
   end
 
+  # The `timeout:` of every check in the rule.
+  @spec check_timeouts(term, map) :: [pos_integer]
+  def check_timeouts({tag, rules}, catalog) when tag in [:all, :any] and is_list(rules),
+    do: Enum.flat_map(rules, &check_timeouts(&1, catalog))
+
+  def check_timeouts({:check, name, _opts}, catalog) do
+    case check_spec(catalog, name).timeout do
+      nil -> []
+      timeout -> [timeout]
+    end
+  end
+
+  def check_timeouts(_rule, _catalog), do: []
+
   # True when the rule has a leaf that is decided for many values at once.
   @spec batched?(term, map) :: boolean
   def batched?(rule, catalog), do: batched_leaves(rule, catalog, []) != []

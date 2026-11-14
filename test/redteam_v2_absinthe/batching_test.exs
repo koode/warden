@@ -43,6 +43,9 @@ defmodule Warden.RedteamV2Absinthe.BatchingTest do
     refute metadata =~ "abby"
   end
 
+  # Changed to match the decided semantics: the check sleeps past its own `timeout:`
+  # (6 s), so it denies with :unavailable; a check that answers within its timeout is
+  # decided by its answer.
   # HOLE (low): a check's `timeout:` promises that on timeout every value denies with
   # reason `:unavailable`. Under `batch_across_parents: true` the check runs inside
   # Absinthe's batch task, which Absinthe gives 5 s by default; a longer `timeout:` makes
@@ -60,7 +63,7 @@ defmodule Warden.RedteamV2Absinthe.BatchingTest do
           {:ok,
            run(AcrossSchema, "{ holders { slowTicket { id } } }", abby(), %{
              holders: holders,
-             sleep: 5_500,
+             sleep: 6_500,
              test_pid: test_pid
            })}
         catch

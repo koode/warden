@@ -446,8 +446,22 @@ if Code.ensure_loaded?(Absinthe) do
       Batch.call(
         waiting,
         {batch_key, {ref, execution, base}, &{:ok, {:__warden_outcome__, Map.fetch!(&1, ref)}},
-         []}
+         batch_options(rule, spec.authorizer)}
       )
+    end
+
+    # Absinthe gives a batch function 5 s and then exits the document. A check with a
+    # longer `timeout:` must deny with :unavailable instead, so the batch gets that
+    # timeout plus a margin for the rest of the decision.
+    @batch_margin 1_000
+    @absinthe_batch_timeout 5_000
+
+    defp batch_options(rule, authorizer) do
+      longest =
+        rule |> Evaluator.check_timeouts(authorizer.__warden_catalog__()) |> Enum.max(fn -> 0 end)
+
+      timeout = max(@absinthe_batch_timeout, longest + @batch_margin)
+      [timeout: timeout]
     end
 
     # Called by `Absinthe.Middleware.Batch` with the deferred checks of one level. Checks
