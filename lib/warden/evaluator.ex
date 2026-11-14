@@ -112,6 +112,10 @@ defmodule Warden.Evaluator do
     end)
   end
 
+  # True when the rule has a leaf that is decided for many values at once.
+  @spec batched?(term, map) :: boolean
+  def batched?(rule, catalog), do: batched_leaves(rule, catalog, []) != []
+
   # The distinct batched leaves of a rule, in rule order.
   defp batched_leaves({tag, rules}, catalog, acc) when tag in [:all, :any] and is_list(rules),
     do: Enum.reduce(rules, acc, &batched_leaves(&1, catalog, &2))

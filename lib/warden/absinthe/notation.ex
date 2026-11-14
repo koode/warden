@@ -11,6 +11,8 @@ if Code.ensure_loaded?(Absinthe) do
 
       * `authorize rule` - inside `field` (an object field or an input object field),
         `object`, `interface` or `union`.
+      * `authorize rule, on_deny: :null | {:replace, value} | :error` - inside an object
+        `field`: what a denial of this field's rule becomes, for this field only.
       * `authorize_args name: rule, ...` - inside an object `field`.
       * `list_policy :null_item | :filter | :fail_list` - inside an object `field`.
 
@@ -37,10 +39,19 @@ if Code.ensure_loaded?(Absinthe) do
             check: 1,
             check: 2,
             all_of: 1,
-            any_of: 1
+            any_of: 1,
+            covered: 0,
+            tenant_role: 1,
+            tenant_role: 2,
+            kind: 1,
+            credential_scope: 1,
+            session: 0,
+            can: 2,
+            can: 3
           ]
 
-        import Warden.Absinthe.Notation, only: [authorize: 1, authorize_args: 1, list_policy: 1]
+        import Warden.Absinthe.Notation,
+          only: [authorize: 1, authorize: 2, authorize_args: 1, list_policy: 1]
       end
     end
 
@@ -53,12 +64,53 @@ if Code.ensure_loaded?(Absinthe) do
     that fail it become `null`.
 
     One `authorize` per definition; combine rules with `all_of/1` or `any_of/1`.
+
+    `covered()` marks a field that its object type's rule guards; it is accepted only on
+    fields of an object type (or interface) that has an object rule.
     """
     defmacro authorize(rule) do
       env = __CALLER__
       scope = current_scope(env, :authorize, [:field, :object, :interface, :union])
       rule = eval!(rule, env, "authorize")
+      validate_rule!(env, rule)
+      record!(env, scope, :warden_rule, rule)
+    end
 
+    @doc """
+    Attaches a field rule with its own denial result, `on_deny:`:
+
+      * `:error` (default) - the denial goes through the authorizer's `deny/1`;
+      * `:null` - the field becomes `null` without an error (not allowed on a non-null
+        field, which fails compilation);
+      * `{:replace, value}` - the field resolves to `value`; object rules still apply to it.
+
+    Only for object fields. `on_deny:` applies to a denial of the field rule itself, not to
+    argument or object rules.
+    """
+    defmacro authorize(rule, opts) do
+      env = __CALLER__
+      scope = current_scope(env, :authorize, [:field])
+      rule = eval!(rule, env, "authorize")
+      opts = eval!(opts, env, "authorize")
+      validate_rule!(env, rule)
+
+      on_deny =
+        case opts do
+          [on_deny: on_deny] -> on_deny
+          _other -> compile_error!(env, "`authorize rule, opts` only takes `on_deny:`")
+        end
+
+      if not Rules.valid_on_deny?(on_deny) do
+        compile_error!(env, """
+        `on_deny:` must be :null, {:replace, value} or :error, got: #{inspect(on_deny)}\
+        """)
+      end
+
+      record!(env, scope, :warden_rule, rule)
+      record!(env, scope, :warden_on_deny, on_deny)
+    end
+
+    defp validate_rule!(env, rule) do
       case Warden.Rule.validate(rule) do
         :ok ->
           :ok
@@ -66,8 +118,6 @@ if Code.ensure_loaded?(Absinthe) do
         {:error, errors} ->
           compile_error!(env, "invalid rule in `authorize`: " <> Enum.join(errors, "; "))
       end
-
-      record!(env, scope, :warden_rule, rule)
     end
 
     @doc """
@@ -185,6 +235,7 @@ if Code.ensure_loaded?(Absinthe) do
     defp macro_name(:warden_rule), do: "`authorize`"
     defp macro_name(:warden_args), do: "`authorize_args`"
     defp macro_name(:warden_list_policy), do: "`list_policy`"
+    defp macro_name(:warden_on_deny), do: "`on_deny:`"
 
     # Finds the reference of the definition that is currently open, by walking the
     # recorded blueprint attributes backwards and balancing `:close` markers.

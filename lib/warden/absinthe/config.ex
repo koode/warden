@@ -8,7 +8,14 @@ if Code.ensure_loaded?(Absinthe) do
     alias Warden.Absinthe.Rules
     alias Warden.Rule
 
-    @option_keys [:authorizer, :strict_mode, :default_object_rule, :introspection, :list_policy]
+    @option_keys [
+      :authorizer,
+      :strict_mode,
+      :default_object_rule,
+      :introspection,
+      :list_policy,
+      :batch_across_parents
+    ]
 
     @spec validate_options(keyword) :: {:ok, map} | {:error, [String.t()]}
     def validate_options(opts) do
@@ -17,6 +24,7 @@ if Code.ensure_loaded?(Absinthe) do
       default_rule = Keyword.get(opts, :default_object_rule)
       introspection = Keyword.get(opts, :introspection, :public)
       policy = Keyword.get(opts, :list_policy, :null_item)
+      across_parents = Keyword.get(opts, :batch_across_parents, false)
 
       errors =
         unknown_option_errors(opts) ++
@@ -24,7 +32,8 @@ if Code.ensure_loaded?(Absinthe) do
           strict_mode_errors(strict) ++
           rule_option_errors(:default_object_rule, default_rule) ++
           rule_option_errors(:introspection, introspection) ++
-          list_policy_errors(policy)
+          list_policy_errors(policy) ++
+          batch_across_parents_errors(across_parents)
 
       case errors do
         [] ->
@@ -34,7 +43,8 @@ if Code.ensure_loaded?(Absinthe) do
              strict_mode: strict,
              default_object_rule: default_rule,
              introspection: introspection,
-             list_policy: policy
+             list_policy: policy,
+             batch_across_parents: across_parents
            }}
 
         errors ->
@@ -65,6 +75,9 @@ if Code.ensure_loaded?(Absinthe) do
         {:error, errors} -> Enum.map(errors, &"`#{inspect(key)}`: #{&1}")
       end
     end
+
+    defp batch_across_parents_errors(value) when is_boolean(value), do: []
+    defp batch_across_parents_errors(_value), do: ["`:batch_across_parents` must be a boolean"]
 
     defp list_policy_errors(policy) do
       if policy in Rules.list_policies(),

@@ -11,6 +11,7 @@ if Code.ensure_loaded?(Absinthe) do
     #
     # Both are attached by `Warden.Absinthe.Phase.Attach` at schema compile time.
 
+    alias Absinthe.Middleware.Batch
     alias Absinthe.Resolution
     alias Absinthe.Type.{Interface, Union}
     alias Warden.Absinthe.Decide
@@ -59,7 +60,8 @@ if Code.ensure_loaded?(Absinthe) do
         resolution: res
       }
 
-      {verdict, actor} = run_checks(checks, base, authorizer)
+      run = skip_admitted(checks, res, actor)
+      {verdict, actor} = run_checks(run, base, authorizer)
       res = put_actor(res, actor)
 
       case verdict do
@@ -89,6 +91,43 @@ if Code.ensure_loaded?(Absinthe) do
           emit(kind, rule, actor, denial)
           apply_pre_denial(res, denial, authorizer, Map.get(spec, :on_deny, :error))
       end
+    end
+
+    # The parent object rule is decided again for every field (defense in depth), except
+    # for a value the post middleware of this execution already admitted under a batched
+    # rule: re-deciding it per field would undo the batching. Admissions are keyed by the
+    # type, the actor and the exact value, so another actor or a changed value is decided
+    # again.
+    defp skip_admitted([{:object, type, _rule} | rest] = checks, res, actor) do
+      if admitted?(res, type, actor, res.source), do: rest, else: checks
+    end
+
+    defp skip_admitted(checks, _res, _actor), do: checks
+
+    defp admitted?(%Resolution{acc: acc}, type, actor, value) do
+      key = admission_key(type, actor, value)
+
+      acc
+      |> Map.get(@acc_key, %{})
+      |> Map.get(:admitted, %{})
+      |> Map.get(:erlang.phash2(key), [])
+      |> Enum.member?(key)
+    end
+
+    defp admission_key(type, actor, value), do: {type, without_cache(actor), value}
+
+    defp put_admitted(res, [], _actor), do: res
+
+    defp put_admitted(%Resolution{acc: acc} = res, admitted, actor) do
+      state = Map.get(acc, @acc_key, %{})
+
+      table =
+        Enum.reduce(admitted, Map.get(state, :admitted, %{}), fn {type, value}, table ->
+          key = admission_key(type, actor, value)
+          Map.update(table, :erlang.phash2(key), [key], &[key | &1])
+        end)
+
+      %{res | acc: Map.put(acc, @acc_key, Map.put(state, :admitted, table))}
     end
 
     defp emit(kind, rule, actor, denial) do
@@ -312,7 +351,22 @@ if Code.ensure_loaded?(Absinthe) do
       %{res | middleware: rest ++ [post_spec(spec)]}
     end
 
-    def post(%Resolution{state: :resolved, errors: [], value: value} = res, spec) do
+    def post(
+          %Resolution{state: :resolved, errors: [], value: value} = res,
+          %{across_parents: true} = spec
+        )
+        when value != nil do
+      if under_list?(res),
+        do: defer_across_parents(res, spec),
+        else: decide_and_walk(res, spec)
+    end
+
+    def post(%Resolution{state: :resolved, errors: []} = res, spec),
+      do: decide_and_walk(res, spec)
+
+    def post(res, _spec), do: res
+
+    defp decide_and_walk(%Resolution{value: value} = res, spec) do
       {actor, res} = actor(res, spec.authorizer)
 
       base = %Check{
@@ -326,7 +380,7 @@ if Code.ensure_loaded?(Absinthe) do
 
       ctx = %{spec: spec, base: base, res: res, actor: actor}
       {decided, actor, stats} = Decide.decide(value, spec, ctx)
-      res = put_actor(res, actor)
+      res = res |> put_actor(actor) |> put_admitted(stats.admitted, actor)
       emit_post(spec, actor, stats)
 
       decided
@@ -334,7 +388,108 @@ if Code.ensure_loaded?(Absinthe) do
       |> finish_post(res, spec)
     end
 
-    def post(res, _spec), do: res
+    defp under_list?(res), do: res |> Resolution.path() |> Enum.any?(&is_integer/1)
+
+    # Cross-parent batching (`batch_across_parents: true`). The value's check is handed to
+    # `Absinthe.Middleware.Batch`, which collects the checks of every parent at this level
+    # and calls `decide_across_parents/2` once; `post_decided/2` then applies the outcome
+    # exactly as the synchronous path would. Checks deferred this way have no
+    # `resolution`, and tenant roles read in the batch are not kept in `resolution.acc`.
+    defp defer_across_parents(%Resolution{value: value} = res, spec) do
+      {actor, res} = actor(res, spec.authorizer)
+      rule = Map.fetch!(spec.rules, spec.named)
+
+      base = %Check{
+        actor: actor,
+        value: value,
+        args: res.arguments || %{},
+        context: res.context,
+        field: field_ident(res),
+        parent_type: parent_ident(res),
+        type: spec.named
+      }
+
+      ref = make_ref()
+      batch_key = {__MODULE__, :decide_across_parents, {rule, spec.authorizer}}
+      continuation = {{__MODULE__, :post_decided}, {spec, value}}
+
+      waiting = %{
+        res
+        | state: :unresolved,
+          value: nil,
+          middleware: [continuation | res.middleware]
+      }
+
+      Batch.call(
+        waiting,
+        {batch_key, {ref, base}, &{:ok, {:__warden_outcome__, Map.fetch!(&1, ref)}}, []}
+      )
+    end
+
+    # Called by `Absinthe.Middleware.Batch` with the deferred checks of one level. Checks
+    # are grouped by actor and context (a batch may span several documents) and each group
+    # is decided with one `Warden.Evaluator.many/3` call. Returns `%{ref => result}`.
+    def decide_across_parents({rule, authorizer}, items) do
+      items
+      |> Enum.group_by(fn {_ref, check} -> {without_cache(check.actor), check.context} end)
+      |> Enum.flat_map(fn {_group, members} -> decide_group(rule, authorizer, members) end)
+      |> Map.new()
+    end
+
+    defp decide_group(rule, authorizer, [{_ref, %Check{actor: actor}} | _rest] = members) do
+      {refs, checks} = Enum.unzip(members)
+      checks = Enum.map(checks, &%{&1 | actor: actor})
+      {results, actor} = Evaluator.many(rule, checks, authorizer)
+      denied = Enum.count(results, &(&1 != :ok))
+      reason = Enum.find_value(results, fn result -> deny_reason(result) end)
+
+      decision = %{
+        layer: :absinthe,
+        kind: :object,
+        rule: rule,
+        actor: actor,
+        count: length(results),
+        denied: denied,
+        reason: reason
+      }
+
+      Warden.Telemetry.decision(decision)
+      Enum.zip(refs, results)
+    end
+
+    defp deny_reason({:deny, %{reason: reason}}), do: reason
+    defp deny_reason(_result), do: nil
+
+    defp without_cache(%Actor{delegator: nil} = actor), do: %{actor | cache: %{}}
+
+    defp without_cache(%Actor{delegator: delegator} = actor),
+      do: %{actor | cache: %{}, delegator: without_cache(delegator)}
+
+    # Resumes a deferred check: rebuilds the decided value and walks it like `post/2`.
+    def post_decided(%Resolution{value: {:__warden_outcome__, result}} = res, {spec, value}) do
+      {actor, res} = actor(res, spec.authorizer)
+      res = %{res | value: value}
+
+      base = %Check{
+        actor: actor,
+        args: res.arguments || %{},
+        context: res.context,
+        field: field_ident(res),
+        parent_type: parent_ident(res),
+        resolution: res
+      }
+
+      ctx = %{spec: spec, base: base, res: res, actor: actor}
+      outcome = Decide.outcome(result, Map.fetch!(spec.rules, spec.named), spec.named, ctx)
+      res = if outcome == :ok, do: put_admitted(res, [{spec.named, value}], actor), else: res
+
+      {@decided, value, outcome}
+      |> walk(spec.shape, ctx, [])
+      |> finish_post(res, spec)
+    end
+
+    # Anything else (an error the batch put on the field) fails closed: no value.
+    def post_decided(%Resolution{} = res, _spec_and_value), do: %{res | value: nil}
 
     # One event per field resolution: a list is one decision over all its values.
     defp emit_post(_spec, _actor, %{count: 0}), do: :ok

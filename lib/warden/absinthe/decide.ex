@@ -34,11 +34,27 @@ if Code.ensure_loaded?(Absinthe) do
       stats = %{
         count: length(values),
         denied: length(denials),
-        reason: first_reason(denials)
+        reason: first_reason(denials),
+        admitted: admitted(values, outcomes, spec, ctx)
       }
 
       {decided, actor, stats}
     end
+
+    # The values admitted by a batched object rule of a plain object type. Their fields'
+    # pre middleware does not decide that rule again for them (see `Middleware.pre/2`),
+    # so a list stays one batched call instead of one call per value and field.
+    defp admitted(values, outcomes, %{abstract: nil} = spec, ctx) do
+      rule = Map.get(spec.rules, spec.named)
+
+      if rule != nil and Evaluator.batched?(rule, ctx.spec.authorizer.__warden_catalog__()) do
+        for {value, :ok} <- Enum.zip(values, outcomes), do: {spec.named, value}
+      else
+        []
+      end
+    end
+
+    defp admitted(_values, _outcomes, _spec, _ctx), do: []
 
     defp first_reason([%Denial{reason: reason} | _rest]), do: reason
     defp first_reason([]), do: nil
@@ -132,8 +148,9 @@ if Code.ensure_loaded?(Absinthe) do
       {outcomes, actor}
     end
 
-    defp outcome(:ok, _rule, _type, _ctx), do: :ok
-    defp outcome({:deny, failure}, rule, type, ctx), do: {:deny, denial(rule, failure, type, ctx)}
+    # Turns an evaluation result into the outcome the walk reads.
+    def outcome(:ok, _rule, _type, _ctx), do: :ok
+    def outcome({:deny, failure}, rule, type, ctx), do: {:deny, denial(rule, failure, type, ctx)}
 
     defp denial(rule, failure, type, ctx) do
       %Denial{

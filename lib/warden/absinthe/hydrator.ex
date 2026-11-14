@@ -11,7 +11,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Phase.Schema.Hydrate
 
-    @warden_keys [:warden_rule, :warden_args, :warden_list_policy]
+    @warden_keys [:warden_rule, :warden_args, :warden_list_policy, :warden_on_deny]
 
     @impl true
     def apply_hydration(%{__private__: private} = node, {:meta, keyword_list})

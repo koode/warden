@@ -27,6 +27,8 @@ if Code.ensure_loaded?(Absinthe) do
       * `:rule` - a field, input-field or object rule (depending on the node).
       * `:args` - `%{arg => rule}` or a keyword list, for object fields.
       * `:list_policy` - `:null_item`, `:filter` or `:fail_list`, for object fields.
+      * `:on_deny` - `:null`, `{:replace, value}` or `:error`, for object fields with a
+        `:rule` (see `Warden.Absinthe.Notation.authorize/2`).
     """
     @spec meta(keyword, keyword) :: {:meta, keyword}
     def meta(opts, extra_meta \\ []) do
@@ -47,6 +49,13 @@ if Code.ensure_loaded?(Absinthe) do
             end
 
             {:warden_list_policy, policy}
+
+          {:on_deny, on_deny} ->
+            if not Rules.valid_on_deny?(on_deny) do
+              raise ArgumentError, "invalid on_deny: #{inspect(on_deny)}"
+            end
+
+            {:warden_on_deny, on_deny}
 
           {key, _} ->
             raise ArgumentError, "unknown Warden.Absinthe.Hydrate.meta option: #{inspect(key)}"

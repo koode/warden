@@ -35,7 +35,7 @@ if Code.ensure_loaded?(Absinthe) do
             {_, field} <- Enum.sort_by(object.fields, &elem(&1, 0)),
             error <- check_field(object, field, plan),
             do: error
-          ) ++ check_subscriptions(types, plan)
+          ) ++ check_subscriptions(types, plan) ++ check_batch_plugin(schema, config)
 
       if errors == [], do: :ok, else: {:error, errors}
     end
@@ -106,6 +106,16 @@ if Code.ensure_loaded?(Absinthe) do
           []
       end
     end
+
+    # Cross-parent batching defers object rules through `Absinthe.Middleware.Batch`; a
+    # schema without that plugin would never resume the deferred fields.
+    defp check_batch_plugin(schema, %{batch_across_parents: true}) do
+      if Absinthe.Middleware.Batch in schema.plugins(),
+        do: [],
+        else: ["`batch_across_parents: true` needs Absinthe.Middleware.Batch in plugins/0"]
+    end
+
+    defp check_batch_plugin(_schema, _config), do: []
 
     defp describe(nil), do: "absent"
     defp describe(_), do: "present"

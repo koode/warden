@@ -9,10 +9,16 @@ if Code.ensure_loaded?(Absinthe) do
     @spec list_policies() :: [Warden.Rule.list_policy()]
     def list_policies, do: @list_policies
 
-    # Combines rules with AND, dropping `:public` and `nil`.
+    @spec valid_on_deny?(term) :: boolean
+    def valid_on_deny?(on_deny) when on_deny in [:null, :error], do: true
+    def valid_on_deny?({:replace, _value}), do: true
+    def valid_on_deny?(_on_deny), do: false
+
+    # Combines rules with AND, dropping `nil`, `:public` and `:covered` (which always
+    # passes; the verifier checks that an object rule guards it).
     @spec conjoin([Warden.Rule.t() | nil]) :: Warden.Rule.t() | nil
     def conjoin(rules) do
-      case rules |> Enum.reject(&(&1 in [nil, :public])) |> Enum.uniq() do
+      case rules |> Enum.reject(&(&1 in [nil, :public, :covered])) |> Enum.uniq() do
         [] -> nil
         [rule] -> rule
         rules -> {:all, rules}

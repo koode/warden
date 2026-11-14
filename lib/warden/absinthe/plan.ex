@@ -29,9 +29,8 @@ if Code.ensure_loaded?(Absinthe) do
     """
     def build(types, config) do
       catalog = config.catalog
-      errors = validate_meta(types, catalog)
-
       object_rules = object_rules(types, config)
+      errors = validate_meta(types, catalog) ++ covered_errors(types, object_rules)
       inputs = input_plans(types)
 
       # For abstract types the concrete type comes from user code (`resolve_type`), which
@@ -145,8 +144,11 @@ if Code.ensure_loaded?(Absinthe) do
       ctx = %{types: types, object_rules: object_rules, inputs: inputs, config: config}
 
       case pre_checks(object, field, root?, ctx) do
-        [] -> nil
-        checks -> %{authorizer: config.authorizer, root: root?, checks: checks}
+        [] ->
+          nil
+
+        checks ->
+          with_on_deny(%{authorizer: config.authorizer, root: root?, checks: checks}, field)
       end
     end
 
@@ -165,6 +167,14 @@ if Code.ensure_loaded?(Absinthe) do
         true ->
           parent_check(object, ctx) ++
             field_check(object, field, ctx) ++ args_check(object, field, ctx)
+      end
+    end
+
+    # `authorize rule, on_deny: ...` on the field itself.
+    defp with_on_deny(spec, field) do
+      case meta(field, :warden_on_deny) do
+        nil -> spec
+        on_deny -> Map.put(spec, :on_deny, on_deny)
       end
     end
 
@@ -433,7 +443,7 @@ if Code.ensure_loaded?(Absinthe) do
         if abstract_rule == nil and map_size(concrete_rules) == 0 do
           nil
         else
-          %{
+          spec = %{
             authorizer: config.authorizer,
             shape: shape,
             named: named,
@@ -442,9 +452,28 @@ if Code.ensure_loaded?(Absinthe) do
             rules: concrete_rules,
             list_policy: list_policy(object, field, types, config)
           }
+
+          with_across_parents(spec, config)
         end
       end
     end
+
+    # `batch_across_parents: true`: the object rule of a single object (not a list, not
+    # an abstract type) is deferred through `Absinthe.Middleware.Batch` when the rule has
+    # batched leaves, so the values of every parent at one level are decided together.
+    defp with_across_parents(
+           %{abstract: nil, shape: shape} = spec,
+           %{batch_across_parents: true} = config
+         )
+         when shape in [:named, {:non_null, :named}] do
+      rule = Map.get(spec.rules, spec.named)
+
+      if Warden.Evaluator.batched?(rule, config.catalog),
+        do: Map.put(spec, :across_parents, true),
+        else: spec
+    end
+
+    defp with_across_parents(spec, _config), do: spec
 
     defp list_policy(object, field, types, config) do
       own = meta(field, :warden_list_policy)
@@ -514,6 +543,8 @@ if Code.ensure_loaded?(Absinthe) do
     defp value_independent?(rule), do: not contains_check?(rule)
 
     defp contains_check?({:check, _, _}), do: true
+    defp contains_check?({:can, _policy, _action, _opts}), do: true
+    defp contains_check?({:tenant_role, _role, _opts}), do: true
 
     defp contains_check?({tag, rules}) when tag in [:all, :any],
       do: Enum.any?(rules, &contains_check?/1)
@@ -542,7 +573,7 @@ if Code.ensure_loaded?(Absinthe) do
         end
 
       stray =
-        for key <- [:warden_args, :warden_list_policy], meta(type, key) != nil do
+        for key <- [:warden_args, :warden_list_policy, :warden_on_deny], meta(type, key) != nil do
           "#{type.name}: #{inspect(key)} is only supported on object fields"
         end
 
@@ -566,6 +597,7 @@ if Code.ensure_loaded?(Absinthe) do
       optional_rule_errors(meta(field, :warden_rule), catalog, where) ++
         field_args_errors(type_mod, meta(field, :warden_args), field, where, catalog) ++
         list_policy_errors(type_mod, meta(field, :warden_list_policy), where) ++
+        on_deny_errors(type_mod, meta(field, :warden_on_deny), field, where) ++
         arg_rule_errors(field, where, catalog)
     end
 
@@ -599,6 +631,94 @@ if Code.ensure_loaded?(Absinthe) do
         else: ["#{where}: invalid list policy #{inspect(policy)}"]
     end
 
+    defp on_deny_errors(_type_mod, nil, _field, _where), do: []
+
+    defp on_deny_errors(Type.InputObject, _on_deny, _field, where),
+      do: ["#{where}: `on_deny:` is not supported on input object fields"]
+
+    defp on_deny_errors(_type_mod, on_deny, field, where) do
+      cond do
+        not Rules.valid_on_deny?(on_deny) ->
+          ["#{where}: invalid `on_deny:` #{inspect(on_deny)}"]
+
+        meta(field, :warden_rule) == nil ->
+          ["#{where}: `on_deny:` needs a field rule"]
+
+        on_deny == :null and match?(%Type.NonNull{}, field.type) ->
+          ["#{where}: `on_deny: :null` on a non-null field; the field cannot be null"]
+
+        true ->
+          []
+      end
+    end
+
+    # `covered()` says "the object rule guards this field", so it stands alone as a field
+    # rule, on a field of an object type or interface that has an object rule. Anywhere
+    # else it would be a `public()` in disguise.
+    defp covered_errors(types, object_rules) do
+      types
+      |> Enum.sort_by(fn {ident, _type} -> ident end)
+      |> Enum.flat_map(fn {ident, type} -> type_covered_errors(ident, type, object_rules) end)
+    end
+
+    defp type_covered_errors(_ident, %{name: "__" <> _introspection}, _object_rules), do: []
+
+    defp type_covered_errors(ident, %type_mod{} = type, object_rules) do
+      own =
+        if contains_covered?(meta(type, :warden_rule)),
+          do: ["#{type.name}: covered() is only for fields, not object rules"],
+          else: []
+
+      fields =
+        case type do
+          %{fields: fields} when is_map(fields) ->
+            guarded? =
+              type_mod in [Type.Object, Type.Interface] and Map.has_key?(object_rules, ident)
+
+            fields
+            |> Enum.sort_by(fn {field_ident, _field} -> field_ident end)
+            |> Enum.flat_map(fn {_field_ident, field} ->
+              field_covered_errors(type, field, guarded?)
+            end)
+
+          _ ->
+            []
+        end
+
+      own ++ fields
+    end
+
+    defp field_covered_errors(type, field, guarded?) do
+      where = "#{type.name}.#{field.name}"
+      arg_rules = Map.values(meta(field, :warden_args) || %{})
+      on_args = for {_ident, arg} <- Map.get(field, :args) || %{}, do: meta(arg, :warden_rule)
+
+      arg_errors =
+        if Enum.any?(arg_rules ++ on_args, &contains_covered?/1),
+          do: ["#{where}: covered() is not an argument rule"],
+          else: []
+
+      field_rule_covered_errors(meta(field, :warden_rule), type, where, guarded?) ++ arg_errors
+    end
+
+    defp field_rule_covered_errors(:covered, _type, _where, true), do: []
+
+    defp field_rule_covered_errors(:covered, type, where, false),
+      do: ["#{where}: covered() needs an object rule on #{type.name}; use public() or a rule"]
+
+    defp field_rule_covered_errors(rule, _type, where, _guarded?) do
+      if contains_covered?(rule),
+        do: ["#{where}: covered() must be the whole field rule, not part of all_of/any_of"],
+        else: []
+    end
+
+    defp contains_covered?(:covered), do: true
+
+    defp contains_covered?({tag, rules}) when tag in [:all, :any] and is_list(rules),
+      do: Enum.any?(rules, &contains_covered?/1)
+
+    defp contains_covered?(_rule), do: false
+
     defp arg_rule_errors(field, where, catalog) do
       for {ident, arg} <- Enum.sort_by(Map.get(field, :args) || %{}, &elem(&1, 0)),
           error <- validate_arg(arg, "#{where}(#{ident})", catalog),
@@ -613,7 +733,7 @@ if Code.ensure_loaded?(Absinthe) do
         end
 
       stray =
-        for key <- [:warden_args, :warden_list_policy], meta(arg, key) != nil do
+        for key <- [:warden_args, :warden_list_policy, :warden_on_deny], meta(arg, key) != nil do
           "#{where}: #{inspect(key)} is not supported on an argument"
         end
 
