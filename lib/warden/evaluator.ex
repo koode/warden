@@ -17,6 +17,7 @@ defmodule Warden.Evaluator do
 
   alias Warden.{Actor, Check, Credential, Explanation}
   alias Warden.Authorizer.{Callbacks, Catalog}
+  alias Warden.Policy.Dispatch
 
   @unavailable :unavailable
   @check_contract "must return true or false (or {:deny, reason})"
@@ -119,13 +120,34 @@ defmodule Warden.Evaluator do
     if check_spec(catalog, name).batch and leaf not in acc, do: acc ++ [leaf], else: acc
   end
 
+  defp batched_leaves({:can, _policy, _action, opts} = leaf, _catalog, acc) when is_list(opts) do
+    if Keyword.has_key?(opts, :arg) or leaf in acc, do: acc, else: acc ++ [leaf]
+  end
+
   defp batched_leaves(_rule, _catalog, acc), do: acc
 
   defp leaf_refused?({:check, name, _opts}, actor, catalog),
     do: system_refused?(actor, check_spec(catalog, name))
 
+  defp leaf_refused?({:can, _policy, _action, _opts}, _actor, _catalog), do: false
+
   # Calls `check_many/2` once for every value. Returns the verdicts as a tuple, indexed
   # like `checks`.
+  # A policy is asked once about every value (it splits by tenant itself).
+  defp batch_verdicts(
+         {:can, policy, action, _opts},
+         [first | _rest] = checks,
+         actor,
+         authorizer,
+         _catalog
+       ) do
+    values = Enum.map(checks, & &1.value)
+
+    policy
+    |> Dispatch.decide(action, actor, values, first.context, authorizer)
+    |> List.to_tuple()
+  end
+
   defp batch_verdicts({:check, name, opts}, checks, actor, authorizer, catalog) do
     spec = check_spec(catalog, name)
     batch = Enum.map(checks, &%{&1 | actor: actor, name: name, opts: opts})
@@ -386,8 +408,40 @@ defmodule Warden.Evaluator do
     end
   end
 
+  defp leaf({:can, policy, action, opts} = rule, %__MODULE__{} = state) when is_list(opts) do
+    if Map.has_key?(state.decided, rule) do
+      decided(Map.fetch!(state.decided, rule), rule, state)
+    else
+      check = state.check
+      values = can_values(policy, opts, check)
+      verdict = can_verdict(policy, action, values, check, state.authorizer)
+      decided(verdict, rule, state)
+    end
+  end
+
   defp leaf(other, _state) do
     raise Warden.PolicyError, "invalid rule: #{inspect(other)}"
+  end
+
+  # The values a `can` rule asks about: the guarded value, or `{schema, id}` for every id
+  # at the `arg:` path (a list of ids asks about each). Nothing to ask about denies.
+  defp can_values(policy, opts, %Check{} = check) do
+    case Keyword.fetch(opts, :arg) do
+      :error ->
+        List.wrap(check.value)
+
+      {:ok, path} ->
+        schema = Dispatch.info!(policy).for
+        check.args |> get_path(path) |> List.wrap() |> Enum.map(&{schema, &1})
+    end
+  end
+
+  defp can_verdict(_policy, _action, [], _check, _authorizer), do: {:deny, nil}
+
+  defp can_verdict(policy, action, values, check, authorizer) do
+    policy
+    |> Dispatch.decide(action, check.actor, values, check.context, authorizer)
+    |> Enum.find(:ok, &(&1 != :ok))
   end
 
   # A verdict is `:ok` or `{:deny, reason}`.
@@ -485,8 +539,8 @@ defmodule Warden.Evaluator do
 
       {:ok, other} ->
         raise Warden.PolicyError, """
-        #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return one result \\
-        per check, got: #{inspect(other)}\\
+        #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return one result \
+        per check, got: #{inspect(other)}\
         """
     end
   end

@@ -22,6 +22,7 @@ defmodule Warden.Rule do
   | `kind(k)` / `kind([k, ...])` | `{:kind, [k, ...]}` | the actor's kind is one of them |
   | `credential_scope(s)` | `{:credential_scope, s}` | the credential grants scope `s` (a session grants every scope) |
   | `session()` | `:session` | the credential is a full session |
+  | `can(policy, action)` / `can(policy, action, arg: path)` | `{:can, policy, action, opts}` | the `Warden.Policy` allows `action` on the value, or on `{schema, id}` from the argument at `path` |
 
   There is no negation on purpose: a negated check fails open when actor data is
   incomplete.
@@ -59,6 +60,7 @@ defmodule Warden.Rule do
           | {:tenant_role, atom, keyword}
           | {:kind, [atom, ...]}
           | {:credential_scope, String.t()}
+          | {:can, module, atom, keyword}
 
   @typedoc """
   Result of a failed evaluation. `reason` and `trace` are described in `Warden.Denial`.
@@ -139,6 +141,16 @@ defmodule Warden.Rule do
   @doc "Passes when the actor's credential is a full session (`nil` or `method: :session`)."
   @spec session() :: t
   def session, do: :session
+
+  @doc """
+  Passes when `policy` (a `Warden.Policy` listed in the authorizer's `policies:`) allows
+  `action` on the guarded value. With `arg: path`, the policy is asked about
+  `{schema, id}` for the id at that argument path (every id of a list), before any
+  resolver runs; a missing id denies. Over a list of values the policy is asked once
+  (`c:Warden.Policy.allowed_many/4`).
+  """
+  @spec can(module, atom, keyword) :: t
+  def can(policy, action, opts \\ []), do: {:can, policy, action, opts}
 
   @doc "Passes when every rule passes. Evaluates left to right and stops at the first failure."
   @spec all_of([t, ...]) :: t
@@ -225,6 +237,14 @@ defmodule Warden.Rule do
     end
   end
 
+  defp do_validate({:can, policy, action, opts}, catalog, errors) when is_list(opts) do
+    shape_errors = can_shape_errors(policy, action, opts)
+
+    if shape_errors == [] and catalog != nil,
+      do: Enum.reverse(can_catalog_errors(policy, action, catalog), errors),
+      else: Enum.reverse(shape_errors, errors)
+  end
+
   defp do_validate({tag, [_ | _] = rules}, catalog, errors) when tag in [:all, :any] do
     Enum.reduce(rules, errors, &do_validate(&1, catalog, &2))
   end
@@ -236,6 +256,67 @@ defmodule Warden.Rule do
   defp check_option_errors(name, opts, catalog) do
     spec = Map.get(catalog[:check_specs] || %{}, name, Catalog.default_check_spec())
     Catalog.check_options_errors(name, opts, spec)
+  end
+
+  defp can_shape_errors(policy, action, opts) do
+    name = "can(#{inspect(policy)}, #{inspect(action)})"
+
+    cond do
+      not plain_atom?(policy) or not plain_atom?(action) ->
+        ["#{name} needs a policy module and an action atom"]
+
+      not Keyword.keyword?(opts) or Keyword.keys(opts) -- [:arg] != [] ->
+        ["#{name} only takes the option `arg:`"]
+
+      not valid_can_arg?(opts) ->
+        ["#{name} `arg:` must be a path of atoms and list indexes, got: #{inspect(opts[:arg])}"]
+
+      true ->
+        []
+    end
+  end
+
+  defp plain_atom?(term), do: is_atom(term) and not is_nil(term)
+
+  defp valid_can_arg?(opts),
+    do: not Keyword.has_key?(opts, :arg) or valid_path?(Keyword.fetch!(opts, :arg))
+
+  defp can_catalog_errors(policy, action, catalog) do
+    name = "can(#{inspect(policy)}, #{inspect(action)})"
+    authorizer = Map.get(catalog, :authorizer)
+
+    with :ok <- listed_policy(policy, catalog, name),
+         {:ok, info} <- policy_info(policy, name) do
+      cond do
+        authorizer != nil and info.authorizer != authorizer ->
+          [
+            "#{name}: the policy belongs to #{inspect(info.authorizer)}, not #{inspect(authorizer)}"
+          ]
+
+        action not in info.actions ->
+          [
+            "#{name}: the policy has no action #{inspect(action)} (actions: #{inspect(info.actions)})"
+          ]
+
+        true ->
+          []
+      end
+    end
+  end
+
+  defp listed_policy(policy, catalog, name) do
+    if policy in Map.get(catalog, :policies, []),
+      do: :ok,
+      else: ["#{name}: #{inspect(policy)} is not in the authorizer's `policies:`"]
+  end
+
+  defp policy_info(policy, name) do
+    if match?({:module, _module}, Code.ensure_compiled(policy)) and
+         function_exported?(policy, :__warden_policy__, 1) do
+      {:ok, policy.__warden_policy__(:info)}
+    else
+      ["#{name}: #{inspect(policy)} is not a Warden policy (use Warden.Policy)"]
+    end
   end
 
   defp validate_tenant_source(role, opts, errors) do

@@ -5,7 +5,8 @@ defmodule Warden.Authorizer.Callbacks do
   # by `use Warden.Authorizer`; dispatching here keeps the user's module free of
   # generated public functions.)
 
-  alias Warden.{Actor, Check, Denial}
+  alias Warden.{Actor, Check, Denial, Policy}
+  alias Warden.Policy.Dispatch
 
   @default_kind :user
 
@@ -82,8 +83,22 @@ defmodule Warden.Authorizer.Callbacks do
       else: default_tenant_of(authorizer, value)
   end
 
+  defp default_tenant_of(authorizer, %_struct{} = value) do
+    case Policy.policy_for(authorizer, value) do
+      nil -> Map.get(value, :tenant_id)
+      policy -> policy_tenant(policy, value)
+    end
+  end
+
   defp default_tenant_of(_authorizer, value) when is_map(value), do: Map.get(value, :tenant_id)
   defp default_tenant_of(_authorizer, _value), do: nil
+
+  defp policy_tenant(policy, value) do
+    case Dispatch.info!(policy).tenant do
+      nil -> Map.get(value, :tenant_id)
+      field -> Map.get(value, field)
+    end
+  end
 
   @spec check_many(module, atom, [Check.t()]) :: term
   def check_many(authorizer, name, checks) do
