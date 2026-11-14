@@ -2,29 +2,6 @@
 
 ## Unreleased
 
-### Added
-
-- `through: {assoc, action, resolve: :ids}`: the parent scope runs once per actor,
-  tenant and call and the clause compares the foreign key with the ids
-  (`fk = ANY($ids)`); `through: {assoc, action, system: :inherit}` lets the parent policy
-  decide system actors for that clause.
-- `within: {bounds_key, field, if_missing: :allow}` for optional limits.
-- `Warden.Ecto.to_sql/4` takes `param_offset:`, and `scope/4` takes `prefix:`.
-- Policy options and clause values may read module attributes.
-
-### Changed
-
-- `none:` over a `many_to_many` reads the join table only.
-- In memory, a match on `nil` (`where: [field: nil]`, a `nil` foreign key under
-  `if_nil: :tenant`) is left to the database, since a partial `select` leaves unloaded
-  columns `nil`.
-- `within:` bounds and `actor_in:` subject ids are cast through the field's type in
-  memory and in SQL alike; values that do not cast match nothing.
-- CTE checks cover the whole query, outer queries around a scoped subquery included.
-- Two policies for one schema in an authorizer warn after compiling and raise on first
-  use.
-- A `Warden.Test.Matrix` fixture that fails names the fixture and its line.
-
 ## 0.2.0 (2026-11-14)
 
 ### Added
@@ -38,23 +15,33 @@
   `Warden.Actor.tenants/2` and `Warden.Actor.preload_tenant_roles/3`.
 - A credential (or system actor) bound to a tenant denies every rule except `public()`
   and `covered()` on a value of another tenant, with reason `:tenant_binding`, without
-  calling the authorizer or the policy; batched checks never receive such values.
+  calling the authorizer or the policy; batched checks never receive such values. A
+  `tenant:` option on the core API, `Warden.Plug` and `Warden.Phoenix.Channel` gives the
+  tenant of a bare id (from a URL or a channel topic), so the binding covers it too.
 - `Warden.system_actor/2`: system actors that are never anonymous and never users.
 - `Warden.on_behalf_of/3`: delegation that evaluates every rule for both actors and ANDs
   the results.
 - `Warden.Policy` and the `can/2,3` rule, with `allowed?/4` and an optional
-  `allowed_many/4` for lists; `arg:` asks about `{schema, id}` before the resolver.
+  `allowed_many/4` for lists; `arg:` asks about `{schema, id}` before the resolver. An
+  authorizer whose `policies:` lists two policies for one struct raises
+  `Warden.PolicyError` on first use (Ecto policies also warn after compiling).
 - Checks declared as `name: options`: an option schema (`opts:`, `required:`),
-  `batch: true` with `c:Warden.Authorizer.check_many/2`, `timeout:` (a timeout denies
-  with reason `:unavailable`) and `system_kinds:`.
+  `batch: true` with `c:Warden.Authorizer.check_many/2` (single values too, as a
+  one-element list, unless the check declares `single: true`), `timeout:` (a timeout
+  denies with reason `:unavailable`, and the rest of that call is denied without waiting
+  again) and `system_kinds:`.
 - Checks may return `{:deny, reason}`. `Warden.Denial` gains `reason` and `trace`;
   the default denial handler exposes atom reasons only with `expose_denial_reasons: true`.
 - `Warden.explain/3` and `Warden.Explanation`.
 - Telemetry: one `[:warden, :decision]` event per decision call (`Warden.Telemetry`).
 - `Warden.filter/4` and GraphQL lists decide batched checks and policies once per list.
 - Absinthe: `covered()`, `authorize rule, on_deny: ...`, `can/2` as object, field and
-  argument rules (`can/3` with `arg:` in field and argument rules only), and opt-in
-  `batch_across_parents: true`. Object rules that read field arguments fail compilation.
+  argument rules (`can/3` with `arg:` in field and argument rules only), and
+  `batch_across_parents` (`:auto` by default: the object rule of a single object under a
+  list is decided for every parent at once when it has a batched leaf and the schema has
+  the Batch plugin). Object rules that read field arguments fail compilation. A
+  subscription field guarded only by an object rule that depends on the value warns at
+  compile time, since a denied payload is still pushed as `null`.
 - The core API takes an `args:` option.
 - `Warden.Phoenix.Channel` for Phoenix channels: a rule checked at join, before every
   push (`recheck: :every_push`) and on a timer (`{:every, ms}`), with a fresh actor
@@ -71,7 +58,9 @@
   on every subscription publish too. `with: nil` on a non-null field, a module that is
   not a field policy of the schema's authorizer, and a field policy for another struct
   than the object's `can/2` policy fail compilation, and so does an object type over a
-  struct with a field policy that exposes a redacted field without `redact_with`. `Warden.Absinthe.Hydrate.meta/2`
+  struct with a field policy that exposes a redacted field without `redact_with`. The
+  `can/2` policy is read from the object's effective rule: its own, an interface's or
+  `default_object_rule`. `Warden.Absinthe.Hydrate.meta/2`
   takes `redact_with:`.
 - `guides/actors.md`, `guides/channels.md` and `guides/fields.md`.
 - `Warden.Ecto.Policy` (needs `ecto`): one policy per schema and action, as a
@@ -79,25 +68,37 @@
   `where:`, `through:` with `if_nil:`, `through_any:`, `none:`, `actor_in:`,
   `member_of:`, `grant:`, `through_type:`, `within:`, `when:`), with options `schema:`,
   `as:`, `tenant:`, `null_tenant:`, `repo:`, `system_kinds:`, `subject_id:` and
-  `write_actions:`. Clause errors fail compilation; errors across policies (a `through`
-  to a schema without a policy, a cycle) warn after compiling and raise on first use.
-- `Warden.Ecto`: `scope/3,4` (one tenant, or every tenant of the actor ORed),
+  `write_actions:`. Options and clause values may read module attributes. Clause errors
+  fail compilation; errors across policies (a `through` to a schema without a policy, a
+  cycle) warn after compiling and raise on first use.
+- `through: {assoc, action, resolve: :ids}` runs the parent scope once per actor, tenant,
+  call and prefix and compares the foreign key with the ids (`fk = ANY($ids)`);
+  `system: :inherit` lets the parent policy decide system actors for that clause.
+  `within: {bounds_key, field, if_missing: :allow}` makes a limit optional. `within:`
+  bounds and `actor_in:` subject ids are cast through the field's type, in memory and in
+  SQL alike; values that do not cast match nothing.
+- `Warden.Ecto`: `scope/3,4` (one tenant, or every tenant of the actor ORed, and
+  `prefix:`),
   `allowed?/3,4`, `authorize/3,4` and `filter/3,4` on loaded structs and `{schema, id}`,
   `allowed_actors/3,4`, `explain/3,4`, `dataloader_query/2`, `to_sql/4` (needs
-  `ecto_sql`), and `update_all/4` and `delete_all/3`, which refuse a query that was not
-  scoped for a write action, a shadowing CTE, and updates of the tenant field or a
+  `ecto_sql`; `param_offset:` renumbers the placeholders for embedding in raw SQL), and `update_all/4` and `delete_all/3`, which refuse a query that was not
+  scoped for a write action, a shadowing CTE (at any level of the query), and updates of
+  the tenant field or a
   `through:` field. `scope/4` refuses unions and preloads; checks decide loaded structs
   against their own query prefix. Telemetry with `layer: :ecto`.
 - `can/2` with a `Warden.Ecto.Policy` decides a list with one query per tenant
   (`WHERE id = ANY($1) AND scope`); loaded structs are decided in memory where the
-  clauses allow it.
+  clauses allow it. A match on `nil` (`where: [field: nil]`, a `nil` foreign key under
+  `if_nil: :tenant`) never grants in memory and goes to the database, since a partial
+  `select` leaves unloaded columns `nil`.
 - Absinthe: `require_can_for: [Schema, ...]` (with `strict_mode: :all`) and the
   `warden_schema Schema` notation on object types.
 - `guides/policies-and-ecto.md`.
 - Test helpers: `Warden.Test.assert_policy_consistent/4` (every way Warden answers a
   policy agrees, per actor, row and action), `Warden.Test.Matrix` (needs `ecto`: actor
   and resource fixtures, every policy needs a resource, a sorted snapshot of fixture
-  names whose differences name the changed cells only),
+  names whose differences name the changed cells only; a fixture that fails names
+  itself and its line),
   `Warden.Test.Absinthe.assert_matrix_matches/2` (needs `absinthe`: object rules and
   `redact_with` agree with the policies) and `mix warden.matrix [--update]`.
 - The formatter exports `allow/2`, `requires/2`, `warden_schema/1`, `actor/2` and
@@ -106,6 +107,8 @@
 
 ### Changed
 
+- An actor built with `Warden.actor/2` keeps its context: checks of a call without
+  `context:` get the context the actor was built from.
 - `default_actor_key/1` also covers the kind, the credential, system actors, bounds and
   the delegator. The key of a plain user actor is unchanged.
 - `inspect/1` of an actor shows its kind, whether it is a system actor, the credential
