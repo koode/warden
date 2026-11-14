@@ -791,6 +791,27 @@ defmodule Warden.Ecto.ScopeTest do
       assert "t1" in params
     end
 
+    test "param_offset: numbers the placeholders after the outer query's own" do
+      world = world()
+      query = from(issue in Issue, select: issue.id)
+      {sql, params} = WardenEcto.to_sql(query, actor(sam()), :read, tenant: "t1", param_offset: 1)
+
+      refute sql =~ "$1)"
+      assert sql =~ "$2"
+
+      raw = "SELECT count(*) FROM (#{sql}) AS scoped WHERE $1::text = 't1'"
+      %{rows: [[count]]} = Repo.query!(raw, ["t1" | params])
+
+      expected = Issue |> WardenEcto.scope(actor(sam()), :read, tenant: "t1") |> all_ids()
+      assert count == length(expected)
+      assert count > 0
+      _unused = world
+
+      assert_raise ArgumentError, ~r/`param_offset:` must be a non-negative integer/, fn ->
+        WardenEcto.to_sql(Issue, actor(sam()), :read, param_offset: -1)
+      end
+    end
+
     test "tenant ids and where: literals stay parameters" do
       world = world()
       hostile = "t1'; DROP TABLE teams; --"

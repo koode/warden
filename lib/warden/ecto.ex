@@ -296,6 +296,7 @@ if Code.ensure_loaded?(Ecto) do
 
     if Code.ensure_loaded?(Ecto.Adapters.SQL) do
       alias Ecto.Adapters.SQL
+      alias Warden.Ecto.Placeholders
 
       @doc """
       Returns `{sql, params}` for `scope/4` of `queryable`, for raw SQL such as a
@@ -303,15 +304,29 @@ if Code.ensure_loaded?(Ecto) do
 
           {sql, params} = Warden.Ecto.to_sql(MyApp.Issues.Issue, actor, :read, tenant: id)
 
-      Takes the options of `scope/4` and `:repo` (default: the policy's `:repo`).
+      Takes the options of `scope/4`, `:repo` (default: the policy's `:repo`) and
+      `:param_offset` (default `0`): the placeholders are numbered from
+      `$param_offset + 1`, so the SQL can be embedded in a raw query that already uses
+      `$1..$param_offset`:
+
+          {sql, params} = Warden.Ecto.to_sql(query, actor, :read, param_offset: 1)
+          Repo.query!("SELECT count(*) FROM (\#{sql}) AS scoped WHERE $1", [true | params])
       """
       @spec to_sql(Ecto.Queryable.t(), Warden.actor_or_context(), atom, opts) ::
               {String.t(), [term]}
       def to_sql(queryable, actor_or_context, action, opts) when is_list(opts) do
         {repo, scope_opts} = Keyword.pop(opts, :repo)
+        {offset, scope_opts} = Keyword.pop(scope_opts, :param_offset, 0)
+
+        if not (is_integer(offset) and offset >= 0) do
+          raise ArgumentError, "`param_offset:` must be a non-negative integer"
+        end
+
         scoped = scope(queryable, actor_or_context, action, scope_opts)
         repo = repo || scoped |> root_schema!() |> policy_repo(actor_or_context, opts)
-        SQL.to_sql(:all, repo, scoped)
+        {sql, params} = SQL.to_sql(:all, repo, scoped)
+        shifted = Placeholders.shift(sql, offset)
+        {shifted, params}
       end
 
       defp policy_repo(schema, actor_or_context, opts) do
