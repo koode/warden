@@ -14,6 +14,7 @@ defmodule Warden.Authorizer.Catalog do
     :tenant_role_hierarchy,
     :credential_scopes,
     :policies,
+    :fields,
     :expose_denial_reasons,
     :spec_compliant_errors
   ]
@@ -42,6 +43,7 @@ defmodule Warden.Authorizer.Catalog do
     tenant_hierarchy = Keyword.get(opts, :tenant_role_hierarchy, %{})
     scopes = Keyword.get(opts, :credential_scopes)
     policies = Keyword.get(opts, :policies, [])
+    fields = Keyword.get(opts, :fields, [])
 
     role_set = if is_list(roles), do: MapSet.new(roles), else: MapSet.new()
     perm_set = if is_list(perms), do: MapSet.new(perms), else: nil
@@ -65,6 +67,7 @@ defmodule Warden.Authorizer.Catalog do
         tenant_roles_errors(tenant_roles, tenant_hierarchy, tenant_role_set) ++
         credential_scopes_errors(scopes) ++
         policies_errors(policies) ++
+        fields_errors(fields) ++
         boolean_errors(opts)
 
     case errors do
@@ -86,6 +89,7 @@ defmodule Warden.Authorizer.Catalog do
             Map.new(List.wrap(tenant_roles), &{&1, reachable(&1, tenant_hierarchy)}),
           credential_scopes: if(is_list(scopes), do: MapSet.new(scopes), else: nil),
           policies: policies,
+          fields: fields,
           expose_denial_reasons: Keyword.get(opts, :expose_denial_reasons, false),
           spec_compliant_errors: Keyword.get(opts, :spec_compliant_errors, false)
         }
@@ -425,6 +429,23 @@ defmodule Warden.Authorizer.Catalog do
   end
 
   defp policies_errors(_policies), do: ["`:policies` must be a list of modules"]
+
+  # Field policies are only named here, like policies: each `use Warden.Fields` module
+  # names its authorizer, so depending on them at compile time would be a cycle.
+  defp fields_errors(fields) when is_list(fields) do
+    cond do
+      not Enum.all?(fields, &plain_atom?/1) ->
+        ["`:fields` must be a list of modules, got: #{inspect(fields)}"]
+
+      duplicates(fields) != [] ->
+        ["`:fields` contains duplicates: #{inspect(duplicates(fields))}"]
+
+      true ->
+        []
+    end
+  end
+
+  defp fields_errors(_fields), do: ["`:fields` must be a list of modules"]
 
   defp hierarchy_errors(hierarchy, role_set),
     do: hierarchy_errors(hierarchy, role_set, ":role_hierarchy", "catalog role")

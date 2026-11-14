@@ -1,4 +1,4 @@
-locals_without_parens = [authorize: 1, authorize_args: 1, list_policy: 1]
+locals_without_parens = [authorize: 1, authorize_args: 1, list_policy: 1, redact: 2]
 
 [
   import_deps: [:absinthe],
