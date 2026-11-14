@@ -147,7 +147,11 @@ defmodule Warden.Policy do
 
   def policy_for(_authorizer, _value), do: nil
 
-  defp validate_options(opts, module) when is_list(opts) do
+  # Shared with `Warden.Ecto.Policy`, which validates the same core options.
+  # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
+  @doc false
+  @spec validate_options(term, module) :: {:ok, map} | {:error, [String.t()]}
+  def validate_options(opts, module) when is_list(opts) do
     authorizer = Keyword.get(opts, :authorizer)
     for_module = Keyword.get(opts, :for)
     actions = Keyword.get(opts, :actions)
@@ -178,7 +182,7 @@ defmodule Warden.Policy do
     end
   end
 
-  defp validate_options(_opts, _module), do: {:error, ["options must be a keyword list"]}
+  def validate_options(_opts, _module), do: {:error, ["options must be a keyword list"]}
 
   defp unknown_option_errors(opts) do
     case Keyword.keys(opts) -- @option_keys do
