@@ -311,6 +311,11 @@ if Code.ensure_loaded?(Ecto) do
 
           {sql, params} = Warden.Ecto.to_sql(query, actor, :read, param_offset: 1)
           Repo.query!("SELECT count(*) FROM (\#{sql}) AS scoped WHERE $1", [true | params])
+
+      The offset must equal the number of placeholders the host statement binds, with no
+      gaps: Postgres cannot type a placeholder that no expression uses. `params` holds
+      every value the scope needs (the tenant and the subject id included), even when the
+      host statement already binds the same value.
       """
       @spec to_sql(Ecto.Queryable.t(), Warden.actor_or_context(), atom, opts) ::
               {String.t(), [term]}

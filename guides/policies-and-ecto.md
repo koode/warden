@@ -200,7 +200,8 @@ Options go in a third element (or the second, without an action):
 
 * `resolve: :ids` runs the parent's scope once per actor, tenant and call, and compares
   the foreign key with the ids it returns: `team_id = ANY($ids)` instead of a correlated
-  `EXISTS`. The ids are read from the same tenant, so the tenant condition holds. Use it
+  `EXISTS`. Each call reads the ids again: an app that builds several scoped queries per
+  request pays one extra query for each, which `EXISTS` does not. The ids are read from the same tenant, so the tenant condition holds. Use it
   when the parent set is small per actor (the teams a member can see), where it is
   faster than `EXISTS` on large child tables; keep the default for parents an actor sees
   thousands of. The ids are read when the scope is built, so `scope/4` takes `prefix:`
@@ -218,7 +219,11 @@ policy:
 ```elixir
 allow :read, through_any: :teams                     # many_to_many
 allow :read, rule: tenant_role(:guest), through_any: {:linked_issues, :read}
+allow :read, through_any: {:teams, :read, system: :inherit}
 ```
+
+`system: :inherit` works as for `through:`: the related policy decides system actors.
+`resolve:` is not available here.
 
 ### `none:`
 

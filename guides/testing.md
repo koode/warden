@@ -51,6 +51,9 @@ returns `%{{actor_name, row_name, action} => allowed?}`. Options: `:authorizer`,
 
 ## Every policy: `Warden.Test.Matrix`
 
+The example writes `actor` and `resource` without parentheses, which needs a formatter
+setup of your own (below): `import_deps: [:warden]` alone makes `mix format` add them.
+
 ```elixir
 defmodule MyApp.AuthzMatrixTest do
   use Warden.Test.Matrix,
