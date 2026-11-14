@@ -9,10 +9,10 @@ defmodule Warden do
 
   Building blocks: `Warden.Authorizer` (the behaviour for your authorizer module),
   `Warden.Rule` (the rule builders), `Warden.Policy` (one declaration per resource and
-  action), `Warden.Actor`, `Warden.Credential`, `Warden.Check`, `Warden.Denial`,
-  `Warden.Explanation`, `Warden.Telemetry`, `Warden.PolicyError` and
-  `Warden.ForbiddenError`. The actors guide covers kinds, credentials, tenant roles,
-  system actors, delegation, batched checks and policies.
+  action), `Warden.Fields` (field redaction), `Warden.Actor`, `Warden.Credential`,
+  `Warden.Check`, `Warden.Denial`, `Warden.Explanation`, `Warden.Telemetry`,
+  `Warden.PolicyError` and `Warden.ForbiddenError`. The actors guide covers kinds,
+  credentials, tenant roles, system actors, delegation, batched checks and policies.
 
   ## Choosing the authorizer
 
@@ -68,6 +68,7 @@ defmodule Warden do
   """
 
   alias Warden.{Actor, Decision, Denial, Explanation, Rule}
+  alias Warden.Fields.Redactor
 
   @default_authorizer Application.compile_env(:warden, :authorizer)
 
@@ -296,4 +297,60 @@ defmodule Warden do
   """
   @spec on_behalf_of(Actor.t(), Actor.t(), keyword) :: Actor.t()
   def on_behalf_of(actor, delegator, opts \\ []), do: Actor.delegate(actor, delegator, opts)
+
+  @doc """
+  Returns `value` with the fields `actor_or_context` may not read replaced, as declared by
+  the field policies (`Warden.Fields`) the authorizer lists in `fields:`.
+
+      Warden.redact(actor, comment)                  # one struct
+      Warden.redact(actor, comments)                 # a list: one decision per rule, order kept
+      Warden.redact(actor, payload, deep: true)      # registered structs at any depth
+      Warden.redact(context, comment, authorizer: MyApp.Authz)
+
+  Without `deep: true`, a registered struct, or the registered structs of a list, are
+  redacted, and everything else is returned as it is. With `deep: true`, Warden walks
+  maps, lists, tuples and registered structs (after redacting them, so a replaced field is
+  not walked into) and redacts every registered struct it finds. Other structs, such as
+  `Ecto.Association.NotLoaded` or `DateTime`, are left alone with their contents.
+
+  The structs of one field policy are decided together: each rule runs once for all of
+  them, so a batched check is called once per rule. Redaction never writes anything.
+
+  Options: `:authorizer` (explicit option, then the actor's own authorizer, then the
+  configured default), `:context` (see `t:opts/0`) and `:deep` (default `false`).
+  """
+  @spec redact(actor_or_context, term, keyword) :: term
+  def redact(actor_or_context, value, opts \\ []) when is_list(opts) do
+    {actor, context, authorizer} = Decision.setup(actor_or_context, opts)
+    {redacted, _actor} = Redactor.redact(value, actor, context, authorizer, opts)
+    redacted
+  end
+
+  @doc """
+  Returns the fields of `struct` that `actor_or_context` may read as they are: every
+  field of the struct except those its field policy redacts for the actor. A struct
+  without a field policy returns all its fields.
+
+      Warden.visible_fields(actor, comment)
+      #=> MapSet.new([:id, :author_id, :workspace_id])
+
+  Same options as `redact/3`, without `:deep`.
+  """
+  @spec visible_fields(actor_or_context, struct, keyword) :: MapSet.t(atom)
+  def visible_fields(actor_or_context, struct, opts \\ [])
+
+  def visible_fields(actor_or_context, %_module{} = struct, opts) when is_list(opts) do
+    {actor, context, authorizer} = Decision.setup(actor_or_context, opts)
+    {hidden, _actor} = Redactor.hidden_fields(struct, actor, context, authorizer)
+
+    struct
+    |> Map.keys()
+    |> List.delete(:__struct__)
+    |> MapSet.new()
+    |> MapSet.difference(MapSet.new(hidden))
+  end
+
+  def visible_fields(_actor_or_context, _value, _opts) do
+    raise ArgumentError, "Warden.visible_fields/3 expects a struct"
+  end
 end

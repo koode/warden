@@ -91,11 +91,7 @@ defmodule Warden.MixProject do
         "Warden.Absinthe.Phase.ItemErrors",
         "Warden.Absinthe.Plugin",
         "Warden.Policy.Dispatch",
-        "Warden.Plug.init/1",
-        # Functions the design notes describe for layers that are not built yet.
-        "Warden.redact/2",
-        "Warden.redact/3",
-        "Warden.visible_fields/2"
+        "Warden.Plug.init/1"
       ]
     ]
   end

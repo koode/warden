@@ -134,6 +134,42 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
     assert out =~ "absinthe=false"
   end
 
+  test "field policies without any optional dependency" do
+    fields = """
+    defmodule Standalone.FieldsAuthz do
+      use Warden.Authorizer, roles: [:admin], fields: [Standalone.NoteFields]
+
+      @impl true
+      def subject(context), do: context[:current_user]
+
+      @impl true
+      def roles(user, _context), do: user.roles
+    end
+
+    defmodule Standalone.Note do
+      defstruct [:id, body: "secret"]
+    end
+
+    defmodule Standalone.NoteFields do
+      use Warden.Fields, authorizer: Standalone.FieldsAuthz, for: Standalone.Note
+      redact :body, with: "", unless: role(:admin)
+    end
+    """
+
+    dir = project("fields_only", "[]", %{"lib/fields.ex" => fields})
+    build!(dir)
+
+    out =
+      run!(dir, """
+      viewer = %{current_user: %{id: "u2", roles: []}}
+      notes = [%Standalone.Note{id: 1}, %Standalone.Note{id: 2}]
+      redacted = Warden.redact(viewer, %{notes: notes}, deep: true, authorizer: Standalone.FieldsAuthz)
+      IO.puts("bodies=" <> inspect(Enum.map(redacted.notes, & &1.body)))
+      """)
+
+    assert out =~ ~s(bodies=["", ""])
+  end
+
   test "plug without absinthe" do
     dir =
       project("plug_only", ~s([{:plug, "~> 1.14"}]), %{
