@@ -24,6 +24,22 @@ defmodule Warden.Authorizer.Callbacks do
       else: Warden.Authorizer.default_deny(denial, authorizer.__warden_catalog__())
   end
 
+  @spec socket_context(module, struct()) :: map
+  def socket_context(authorizer, socket) do
+    if function_exported?(authorizer, :socket_context, 1) do
+      case authorizer.socket_context(socket) do
+        context when is_map(context) ->
+          context
+
+        other ->
+          raise Warden.PolicyError,
+                "#{inspect(authorizer)}.socket_context/1 must return a map, got: #{inspect(other)}"
+      end
+    else
+      socket.assigns
+    end
+  end
+
   @spec check(module, atom, Check.t()) :: term
   def check(authorizer, name, %Check{} = check) do
     if function_exported?(authorizer, :check, 2) do

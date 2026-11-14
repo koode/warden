@@ -196,6 +196,13 @@ defmodule Warden.Authorizer do
   """
   @callback deny_conn(conn :: struct(), Denial.t()) :: struct()
 
+  @doc """
+  `Warden.Phoenix.Channel` only. Returns the context to build the actor from for a
+  channel socket. Default: `socket.assigns`. Runs on every channel check (there is no
+  actor cache); keep it cheap.
+  """
+  @callback socket_context(socket :: struct()) :: map
+
   @optional_callbacks permissions: 2,
                       check: 2,
                       check_many: 2,
@@ -207,7 +214,8 @@ defmodule Warden.Authorizer do
                       deny: 1,
                       actor_key: 2,
                       conn_context: 1,
-                      deny_conn: 2
+                      deny_conn: 2,
+                      socket_context: 1
 
   defmacro __using__(opts) do
     {opts, _} = Code.eval_quoted(opts, [], __CALLER__)
