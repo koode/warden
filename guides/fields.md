@@ -74,10 +74,12 @@ Like the rest of the core API, the first argument is an actor or a context map, 
 
 * A struct without a field policy, and any other value, is returned as it is.
 * A list: its registered structs are redacted, everything else is left in place.
-* `deep: true` walks maps, lists, tuples and registered structs. Structs without a field
-  policy (`Ecto.Association.NotLoaded`, `DateTime`, your own) are left alone, with
-  everything inside them. A registered struct is redacted before Warden walks its
-  fields, so a field the policy replaced is not walked into.
+* `deep: true` walks maps (keys and values), lists, tuples, `MapSet` elements (the set
+  is rebuilt with `MapSet.new/1`) and structs. A struct without a field policy is
+  rebuilt as the same struct with its fields walked, so a registered struct inside it
+  is redacted too. `Ecto.Association.NotLoaded`, `Date`, `Time`, `NaiveDateTime`,
+  `DateTime` and `Decimal` are left as they are. A registered struct is redacted before
+  Warden walks its fields, so a field the policy replaced is not walked into.
 * `visible_fields/2` counts a field as redacted when its rule denies, even when the value
   already equals the replacement.
 

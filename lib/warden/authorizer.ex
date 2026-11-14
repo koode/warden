@@ -35,7 +35,9 @@ defmodule Warden.Authorizer do
       * `batch: true` - `c:check_many/2` answers the check for a list of values at once
         (it must then be defined).
       * `timeout: ms` - run the check in a separate process; when it takes longer, every
-        value it was asked about is denied with reason `:unavailable`.
+        value it was asked about is denied with reason `:unavailable`. The process gets
+        a copy of the caller's process dictionary, except keys that are atoms starting
+        with `$`.
       * `opts: [name: type]` - the schema of the rule options (`check(name, opts)`),
         validated wherever rules are validated. Types: `:atom`, `:string`, `:integer`,
         `:boolean`, `:any`, `{:in, list}`, `{:list, type}`. Without `opts:` any options
@@ -108,6 +110,11 @@ defmodule Warden.Authorizer do
   Handles a `check(name, opts)` rule. Must return `true`, `false` or `{:deny, reason}`
   (`reason`: an atom or `{atom, map}`). Only `true` grants; anything else raises
   `Warden.PolicyError`.
+
+  Read the actor being decided from `check.actor`, never the subject from
+  `check.context`. For a delegated actor the check runs once with the agent and once
+  with the delegator as `check.actor`, while `check.context` is the request's context
+  both times.
   """
   @callback check(name :: atom, check :: Check.t()) :: check_result
 

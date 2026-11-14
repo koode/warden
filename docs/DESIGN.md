@@ -651,8 +651,15 @@ output that never shows a subject or a guarded value; the optional dependencies.
    rule, and no policy clause, that does not name its kind.
 10. **Delegation never widens.** An actor acting on behalf of another gets the AND of both
     actors' decisions, inside explicit bounds.
-11. **Bound credentials stay bound.** A credential bound to tenant A denies every rule,
-    policy and scope for any other tenant, without calling user code.
+11. **Bound credentials stay bound.** For an actor bound to tenant A (a credential with
+    `tenant: A`, or a system actor built with `tenant: A`) and a value whose tenant
+    (`tenant_of/1`) is known and is not A, every rule leaf except `public()` and
+    `covered()` denies with reason `:tenant_binding`: checks, roles, permissions, kinds,
+    `session()`, `credential_scope/1`, tenant roles and policies alike. No user code is
+    called for it, and the batched pre-pass leaves such values out, so `check_many/2` and
+    `allowed_many/4` never receive them. A value whose tenant is unknown (`nil`, such as a
+    GraphQL root value) is decided as for an unbound actor, except by `tenant_role` and
+    `can`, which deny it. Every policy and scope for another tenant is `false`.
 12. **Fail closed everywhere new.** A batch callback with a wrong length, a bad value, a
     raise or a timeout denies. A scope callback that returns anything but a dynamic,
     `true` or `false` raises `Warden.PolicyError`. A timeout never grants.
@@ -719,8 +726,11 @@ Authorizer options and callbacks:
   `false`. `tenant` binds it like a credential.
 * `Warden.on_behalf_of(actor, delegator, bounds: map)`: both actors from the same
   authorizer, neither anonymous, the delegator not itself delegated. Every rule, check,
-  policy decision and scope is evaluated for both and ANDed. Bounds are merged into
-  `bounds` for policies to read.
+  policy decision and scope is evaluated for both and ANDed. The given bounds only
+  narrow the actor's own (its credential's included): for a key in both, two lists give
+  their intersection, equal values stay, any other difference raises `ArgumentError`;
+  a key in only one is kept. `tenants/2` of a delegated actor is the intersection of
+  both actors' tenants.
 * `inspect/1` shows `kind`, `system?`, the credential method and scopes, and the
   delegator's kind. Never a subject, never bounds.
 * `default_actor_key/1` also covers `kind`, the credential (method, scopes, tenant),
@@ -913,8 +923,9 @@ Paths are relative to `lib/warden/`.
 - **Checks.** A batched check's single value goes to `check/2` when it has a clause for
   the name (a `FunctionClauseError` raised by the authorizer's own `check/2` falls back to
   `check_many/2` with one element). `timeout:` runs the call in a process started with
-  `spawn_monitor/1` that carries `$callers`; on timeout it is killed and a late reply is
-  flushed. A raise inside `check_many/2` (with or without a timeout) becomes a
+  `spawn_monitor/1` that gets a copy of the caller's process dictionary (except keys that
+  are atoms starting with `$`) and `$callers`; on timeout it is killed, Warden waits for
+  its `:DOWN`, then flushes any reply it sent, so none arrives late. A raise inside `check_many/2` (with or without a timeout) becomes a
   `Warden.PolicyError`; a raise inside `check/2` propagates as in 0.1.
 - **Batching.** `Evaluator.many/3` first decides every batched leaf (checks with
   `batch: true`, and `can/2` without `arg:`) for all values at once, then evaluates the
@@ -940,7 +951,20 @@ Paths are relative to `lib/warden/`.
   its authorizer lists it. `Warden.Policy.policy_for/2` finds the policy of a struct
   through that list, and the default `tenant_of/1` uses its `tenant:` field.
 - **`can(..., arg: path)`** asks about `{for_module, id}` for the id at the path, or for
-  every id of a list there. A missing id, an empty list or a `nil` value denies.
+  every id of a list there. A missing id, an empty list, a list with a `nil` id or a
+  `nil` value denies without asking the policy.
+- **The binding screen.** Before any leaf but `public()` and `covered()`, the evaluator
+  compares the tenant of the value (`tenant_of/1`, a scalar; a list, map or tuple counts
+  as unknown) with the actor's bound tenant, once per value, and denies with
+  `:tenant_binding` when both are known and differ. The batched pre-pass applies the
+  same screen, so batch callbacks only see values the per-value path could reach. The
+  policy dispatch keeps its own screen for values of unknown tenant (`{schema, id}`).
+  A tenant from `{:arg, path}` that is not a scalar denies without `tenant_roles/3`.
+- **Error messages describe, never print.** A `Warden.PolicyError` (or `ArgumentError`)
+  about a check or policy answer, a handler result, a context or a guarded value names
+  only its shape (`Warden.Shape`: type, struct name, size). A raise inside a batch or a
+  policy is named by its exception module only, since exception messages can print the
+  data they failed on.
 - **GraphQL post middleware in two passes.** `absinthe/decide.ex` collects the values of
   a field in walk order, groups them by the rule that applies (abstract rule first, then
   the concrete type's rule for the values that passed), decides each group with

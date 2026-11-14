@@ -64,7 +64,9 @@ if Code.ensure_loaded?(Phoenix.Channel) do
 
     On a denial after the join, Warden pushes the event `"warden:denied"` with the reply
     map, then stops the channel with reason `{:shutdown, :forbidden}` (the client sees
-    the channel close). Nothing else is pushed after that.
+    the channel close). Nothing else is pushed after that by Warden. Your `terminate/2`
+    is not wrapped: Phoenix calls it after a denial with reason
+    `{:shutdown, :forbidden}`, and it must not push.
 
     The reply map is `%{reason: "unauthorized"}` for an anonymous actor and
     `%{reason: "forbidden"}` otherwise, unless `on_deny:` returns another map. It

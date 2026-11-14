@@ -88,6 +88,10 @@ value. To send something else, return a map from `on_deny:`. The handler cannot 
 denied channel open: Warden stops the channel whatever it returns, and a return value
 that is not a map gets the default reply.
 
+Warden does not wrap your `terminate/2`. After a denial Phoenix calls it with reason
+`{:shutdown, :forbidden}`; it must not push anything (match on that reason if it
+pushes in other cases), because the actor no longer has access.
+
 ## The actor
 
 There is no cache. Every check builds the actor from the socket as it is now:

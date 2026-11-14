@@ -85,10 +85,19 @@ authorize credential_scope("issues:write") # a session grants every scope
 
 An anonymous actor has no session and no scopes.
 
-A **bound** credential (`tenant:` set) holds no tenant roles in any other tenant
-(`tenant_roles/3` is not called for it), `Warden.Actor.tenants/2` lists only its tenant,
-and every policy denies values of another tenant, or of no known tenant, before the
-policy runs.
+A **bound** credential (`tenant:` set) stays in its tenant:
+
+- for a value whose tenant (`tenant_of/1`) is known and is another one, every rule leaf
+  except `public()` and `covered()` denies with reason `:tenant_binding`: checks, roles,
+  permissions, kinds, `session()`, `credential_scope/1`, tenant roles and policies. No
+  check, policy or `tenant_roles/3` is called for such a value, and `check_many/2` and
+  `allowed_many/4` never receive it;
+- for a value whose tenant is unknown (`nil`, such as a GraphQL root value or a map
+  without a tenant), the rules decide as for an unbound actor, except `tenant_role`
+  and `can`, which deny it;
+- `Warden.Actor.tenants/2` lists only its tenant.
+
+A system actor built with `tenant:` is bound the same way.
 
 ## Tenant roles
 
@@ -150,8 +159,19 @@ actor = Warden.on_behalf_of(agent_actor, user_actor, bounds: %{issue_ids: [issue
 Every rule, check and policy decision is evaluated for the agent and for the user, and
 both must pass, so delegation never gives more than either actor has. Rules that name
 kinds must list both: `kind([:agent, :user])`. Both actors must come from the same
-authorizer; neither may be anonymous or already delegated. `bounds:` is merged into the
-actor's `bounds` for policies to read.
+authorizer; neither may be anonymous or already delegated.
+
+`bounds:` only narrows the agent's own bounds (those of its credential included), never
+replaces them. For a key both have, two lists give their intersection, equal values
+stay, and any other difference raises `ArgumentError`. A key only one of them has is
+kept. The delegator keeps its own bounds. `Warden.Actor.tenants/2` of a delegated actor
+lists only the tenants both actors have.
+
+Checks run once per actor. `check.actor` is the agent in the first pass and the
+delegator in the second, while `check.context` is the request's context in both. So a
+check must read the user from `check.actor`, never from the context (such as
+`context[:current_user]`): under delegation the context belongs to the request, not to
+the actor being decided.
 
 ## Checks
 
@@ -220,6 +240,11 @@ one level is decided in one call. Checks deferred this way have no `resolution`.
 `timeout: ms` runs the check (single or batched) in a separate process. When it takes
 longer, the process is killed and every value it was asked about is denied with reason
 `:unavailable`. A timeout never grants.
+
+The process gets a copy of the caller's whole process dictionary (a tenant prefix, a
+dynamic repo), except keys that are atoms starting with `$`, which belong to the
+runtime. `$callers` is set to the caller chain, so test sandboxes that follow it work.
+After a kill Warden waits for the process to be gone, so no late answer can arrive.
 
 ## Policies
 
