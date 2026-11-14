@@ -43,6 +43,26 @@ if Code.ensure_loaded?(Absinthe) do
       end
     end
 
+    # What cross-parent batching shares per document execution, made once and kept in
+    # `resolution.acc`: a reference that groups the deferred checks of one execution, and
+    # the actor and the context encoded as one binary. Absinthe runs the batch function in
+    # another process, and a message copies a term once per reference to it; a large
+    # binary is shared instead, so every deferred check costs the same whatever the size
+    # of the context or the subject.
+    def execution_share(%Resolution{acc: acc} = res, %Actor{} = actor) do
+      state = Map.get(acc, @acc_key, %{})
+
+      case state do
+        %{execution: share} ->
+          {share, res}
+
+        _none ->
+          shared = :erlang.term_to_binary({actor, res.context})
+          share = {make_ref(), shared}
+          {share, %{res | acc: Map.put(acc, @acc_key, Map.put(state, :execution, share))}}
+      end
+    end
+
     def put_actor(%Resolution{acc: acc} = res, %Actor{} = actor) do
       state = Map.get(acc, @acc_key, %{})
       %{res | acc: Map.put(acc, @acc_key, Map.put(state, :actor, actor))}
@@ -399,13 +419,13 @@ if Code.ensure_loaded?(Absinthe) do
     # `resolution`, and tenant roles read in the batch are not kept in `resolution.acc`.
     defp defer_across_parents(%Resolution{value: value} = res, spec) do
       {actor, res} = actor(res, spec.authorizer)
+      {execution, res} = execution_share(res, actor)
       rule = Map.fetch!(spec.rules, spec.named)
 
+      # The actor and the context travel once per execution, in `execution`.
       base = %Check{
-        actor: actor,
         value: value,
         args: res.arguments || %{},
-        context: res.context,
         field: field_ident(res),
         parent_type: parent_ident(res),
         type: spec.named
@@ -425,31 +445,38 @@ if Code.ensure_loaded?(Absinthe) do
 
       Batch.call(
         waiting,
-        {batch_key, {ref, base}, &{:ok, {:__warden_outcome__, Map.fetch!(&1, ref)}}, []}
+        {batch_key, {ref, execution, base}, &{:ok, {:__warden_outcome__, Map.fetch!(&1, ref)}},
+         []}
       )
     end
 
     # Called by `Absinthe.Middleware.Batch` with the deferred checks of one level. Checks
-    # are grouped by actor and context (a batch may span several documents) and each group
-    # is decided with one `Warden.Evaluator.many/3` call; with `redact_with`, the values
-    # that pass are redacted together too. Returns `%{ref => {result, value}}`.
+    # are grouped by document execution (a batch may span several documents; one
+    # execution has one actor and one context), by a reference kept in `resolution.acc`,
+    # so grouping costs the same whatever the size of the context. Each group is decided
+    # with one `Warden.Evaluator.many/3` call; with `redact_with`, the values that pass
+    # are redacted together too. Returns `%{ref => {result, value}}`.
     def decide_across_parents({rule, authorizer, redactor}, items) do
       items
-      |> Enum.group_by(fn {_ref, check} -> {without_cache(check.actor), check.context} end)
-      |> Enum.flat_map(fn {_group, members} ->
+      |> Enum.group_by(
+        fn {_ref, {execution, _shared}, _check} -> execution end,
+        fn {ref, {_execution, shared}, check} -> {ref, shared, check} end
+      )
+      |> Enum.flat_map(fn {_execution, members} ->
         decide_group(rule, authorizer, redactor, members)
       end)
       |> Map.new()
     end
 
-    defp decide_group(
-           rule,
-           authorizer,
-           redactor,
-           [{_ref, %Check{actor: actor}} | _rest] = members
-         ) do
-      {refs, checks} = Enum.unzip(members)
-      checks = Enum.map(checks, &%{&1 | actor: actor})
+    defp decide_group(rule, authorizer, redactor, [{_ref, shared, _check} | _rest] = members) do
+      {actor, context} = :erlang.binary_to_term(shared)
+      refs = Enum.map(members, &elem(&1, 0))
+
+      checks =
+        Enum.map(members, fn {_ref, _shared, check} ->
+          %{check | actor: actor, context: context}
+        end)
+
       {results, actor} = Evaluator.many(rule, checks, authorizer)
       values = redact_passed(redactor, checks, results, actor, authorizer)
       denied = Enum.count(results, &(&1 != :ok))
