@@ -35,6 +35,19 @@ if Code.ensure_loaded?(Ecto) do
     unbound system actor has no tenants. Single checks of a loaded struct use the
     struct's tenant; checks by id use the scope over every tenant.
 
+    ## Preloads and unions
+
+    `scope/4` refuses a query with preloads, which would load children without their
+    policy, and one with `union`, `union_all`, `intersect` or `except`, whose other arms
+    would stay unscoped. Scope the children and each arm instead:
+
+        comments = Warden.Ecto.scope(MyApp.Comment, actor, :read)
+        issues = MyApp.Issues.Issue |> Warden.Ecto.scope(actor, :read) |> preload(comments: ^comments)
+
+        union_all(Warden.Ecto.scope(open, actor, :read), ^Warden.Ecto.scope(recent, actor, :read))
+
+    In GraphQL, `dataloader_query/2` scopes every Dataloader load.
+
     ## Delegation
 
     For an actor acting on behalf of another (`Warden.on_behalf_of/3`), every scope and
