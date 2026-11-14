@@ -33,7 +33,19 @@
   push (`recheck: :every_push`) and on a timer (`{:every, ms}`), with a fresh actor
   from the new authorizer callback `socket_context/1` on every check. A denial stops the
   channel with a reason the client can show.
-- `guides/actors.md` and `guides/channels.md`.
+- Field policies: `use Warden.Fields, authorizer:, for:` with
+  `redact field, with: value, unless: rule`, registered in the authorizer's new `fields:`
+  option. Unknown fields and rules outside the catalog fail compilation.
+- `Warden.redact/3` (a struct, a list, or with `deep: true` every registered struct in
+  maps, lists and tuples) and `Warden.visible_fields/3`. Lists are decided once per rule,
+  so a batched check runs once per list. Telemetry reports them as layer `:fields`.
+- Absinthe: `redact_with FieldsModule` on an object type replaces the object value with
+  its redacted struct after the object rule passes and before any child field resolves,
+  on every subscription publish too. `with: nil` on a non-null field, a module that is
+  not a field policy of the schema's authorizer, and a field policy for another struct
+  than the object's `can/2` policy fail compilation. `Warden.Absinthe.Hydrate.meta/2`
+  takes `redact_with:`.
+- `guides/actors.md`, `guides/channels.md` and `guides/fields.md`.
 
 ### Changed
 
@@ -42,7 +54,9 @@
 - `inspect/1` of an actor shows its kind, whether it is a system actor, the credential
   method and scopes, and the delegator's kind; of a denial, its reason (atoms only).
 - In GraphQL, an object value admitted by a batched object rule is not decided again by
-  the pre middleware of each of its fields, so a list stays one batched call.
+  the pre middleware of each of its fields, so a list stays one batched call. A value
+  redacted by `redact_with` is admitted as its fields see it (redacted), whatever its
+  object rule: that rule was decided on the value before redaction.
 - `Warden.Plug` sends 403 (not 401) for a denied system actor.
 
 ## 0.1.0 (2026-10-09)

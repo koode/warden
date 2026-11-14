@@ -76,6 +76,7 @@ defmodule Warden.MixProject do
         "README.md",
         "guides/actors.md",
         "guides/channels.md",
+        "guides/fields.md",
         "docs/DESIGN.md",
         "CHANGELOG.md",
         "CONTRIBUTING.md",

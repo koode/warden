@@ -951,7 +951,10 @@ Paths are relative to `lib/warden/`.
   field (defense in depth). For a value that this execution's post middleware admitted
   under a batched rule, it does not: that would turn one batched call per list into one
   call per value and field. Admissions live in `resolution.acc`, keyed by the type, the
-  actor (without its cache) and the exact value; any other value is decided again.
+  actor (without its cache) and the exact value; any other value is decided again. A
+  value replaced by `redact_with` is admitted too, whatever its object rule, keyed by the
+  redacted value its fields see: the rule was decided on the value before redaction, and
+  deciding it again on the redacted struct could deny what was admitted.
 - **Cross-parent batching** (`batch_across_parents: true`) applies to object rules with
   batched leaves on fields that return one object (not a list, not an abstract type)
   inside a list. The post middleware hands the check to `Absinthe.Middleware.Batch` with a
@@ -960,6 +963,35 @@ Paths are relative to `lib/warden/`.
   `Evaluator.many/3` call. Such checks have no `resolution`, and tenant roles read there
   are not written back to `resolution.acc`. The verifier fails compilation when the
   schema's `plugins/0` has no `Absinthe.Middleware.Batch`.
+- **Field policies** (`fields.ex`, `fields/redactor.ex`). `use Warden.Fields` validates
+  at expansion time (the struct is compiled, every field exists and is named once, the
+  rule passes the core API's validation) and generates `__warden_fields__(:info)`
+  returning `%{authorizer, for, struct_fields, redactions: [%{field, with, rule}]}`. The
+  authorizer names its field policies in `fields:` without depending on them, like
+  `policies:`; the registry `%{struct => fields_module}` is built per call from that
+  list and refuses two policies for one struct. A redaction rule may not read field
+  arguments (`{:arg, path}` tenants, `can(..., arg:)`) or use `covered()`: it is about
+  the struct, and its checks get only the actor, the value and the context.
+- **Redaction.** The structs of one policy are decided together, one
+  `Evaluator.many/3` per distinct rule, with the actor threaded through. `deep: true`
+  works level by level: the outermost registered structs of every term (walking maps,
+  lists, improper lists and tuples; never into unregistered structs) are redacted as
+  one batch per policy, then their redacted fields are the next level. Telemetry: one
+  event per rule and group, `layer: :fields`, `kind: :field`.
+- **`redact_with`** is `:warden_redact_with` meta on an object type. The plan adds
+  `redactors: %{object_type => fields_module}` to a post spec (only when non-empty, so
+  specs without redaction are unchanged): the return type's own for an object type,
+  every object type's for an abstract type, and a field whose return type has a
+  redactor but no object rule gets a post spec for it. `Decide` redacts the values that
+  passed after deciding object rules, grouped by policy; for abstract types the
+  concrete type is resolved once and reused, and a value whose concrete type cannot be
+  determined is denied when a redactor may apply. A value that is not the policy's
+  struct raises `Warden.PolicyError` (fail closed, without inspecting the value).
+  Cross-parent batching passes the redactor in the batch key and redacts the passing
+  values of a group together. Compile-time: the module is a field policy of the schema's
+  authorizer; when the object's own rule names `can/2` policies or the object has a
+  `:warden_schema` meta, the policy's struct must be one of them; `with: nil` on a
+  same-named non-null field fails.
 - **`on_deny:`** is stored as `:warden_on_deny` meta and copied into the field's pre spec.
   It decides only denials of the field rule (`kind: :field`); argument and object denials
   still go through `deny/1`.
