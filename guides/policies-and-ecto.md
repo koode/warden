@@ -200,12 +200,24 @@ Options go in a third element (or the second, without an action):
 
 * `resolve: :ids` runs the parent's scope once per actor, tenant and call, and compares
   the foreign key with the ids it returns: `team_id = ANY($ids)` instead of a correlated
-  `EXISTS`. Each call reads the ids again: an app that builds several scoped queries per
-  request pays one extra query for each, which `EXISTS` does not. The ids are read from the same tenant, so the tenant condition holds. Use it
+  `EXISTS`. The ids are read from the same tenant, so the tenant condition holds. Use it
   when the parent set is small per actor (the teams a member can see), where it is
   faster than `EXISTS` on large child tables; keep the default for parents an actor sees
   thousands of. The ids are read when the scope is built, so `scope/4` takes `prefix:`
   for a query you will run with a prefix. `to_sql/4` shows the result.
+
+  Each call reads the ids again, so an app that builds several scoped queries per
+  request pays one extra query for each, which `EXISTS` does not. To read them once per
+  request, preload them into the actor and pass that actor on, as with tenant roles:
+
+  ```elixir
+  actor = Warden.Ecto.preload_ids(actor, MyApp.Teams.Team, :read)
+  ```
+
+  The cached ids are used only for the same parent, action, tenant (`tenant:`, else
+  every tenant of the actor), query prefix and actor; for a delegated actor each side
+  keeps its own. They are as fresh as the actor: a team created later in the request is
+  not in them, so keep the actor for one request.
 * `system: :inherit` makes the clause apply to system actors without its `rule:` naming
   their kind: the parent policy decides them, so the clause admits only the system kinds
   the parent admits (and the child must still list the kind in `system_kinds:`). It

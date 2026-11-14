@@ -1127,6 +1127,14 @@ Paths are relative to `lib/warden/`.
   child's scope is built and inlines the ids; those ids belong to one query prefix, so
   the state carries the prefix and the memo keys on it (`decide.ex` sets it per group
   of loaded structs).
+- **Ids across calls.** `Warden.Ecto.preload_ids/4` runs a parent's scope per tenant and
+  actor side and puts the ids in that side's `actor.cache`, under the memo's key: the
+  parent policy, action, column read (the parent's primary key), tenant, side (the
+  actor without its cache, so a delegated actor's own side carries its narrowed
+  bounds) and prefix. `Scope` reads the memo, then the actor's cache, then the
+  database; a different key is a miss, never a wider match. Only `preload_ids/4` writes
+  the cache, so the ids are as fresh as the actor, like tenant roles, and were read
+  with the context of the preload call.
 - **Errors across policies.** A policy only names other policies at runtime (through
   the authorizer's `policies:`), so a `through` target without a policy, a cycle over
   several policies, a parent of another authorizer or without the action, and mixed

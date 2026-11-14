@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- `Warden.Ecto.preload_ids/4` reads the parent ids of `through: {assoc, action,
+  resolve: :ids}` once and caches them in the actor, so later scopes of the request
+  with the same actor, tenant and prefix run no extra query.
+
 ## 0.2.0 (2026-11-14)
 
 ### Added
