@@ -9,7 +9,10 @@ if Code.ensure_loaded?(Ecto) do
     # binding is applied here (by the scope gates). The evaluator asks the actor and its
     # delegator separately and ANDs the answers, so the actor is decided as one side.
     #
-    #   * Loaded structs: a hand-written `allowed_many/4` or `allowed?/4` answers;
+    #   * Loaded structs that `Warden.Ecto.all/5` loaded for this actor instance and
+    #     action (`Warden.Ecto.Mark`) are allowed once the scope gates pass: their scope
+    #     admitted them, so neither the policy nor the database is asked again.
+    #   * Other loaded structs: a hand-written `allowed_many/4` or `allowed?/4` answers;
     #     otherwise the clauses in memory where exact, and one query per tenant for the
     #     rest (`WHERE id = ANY($1) AND tenant = $2 AND scope`).
     #   * `{schema, id}` values: one query over the scope of every tenant of the actor.
@@ -18,7 +21,7 @@ if Code.ensure_loaded?(Ecto) do
     import Ecto.Query, only: [from: 2]
 
     alias Warden.Actor
-    alias Warden.Ecto.{Info, Memory, Scope}
+    alias Warden.Ecto.{Info, Mark, Memory, Scope}
     alias Warden.Ecto.Policy.Graph
 
     # Returns `{answers, actor}`: the actor carries what the decision cached (tenant roles,
@@ -69,6 +72,9 @@ if Code.ensure_loaded?(Ecto) do
       cond do
         gate != nil ->
           {{:done, false}, {side, state}}
+
+        Mark.admits?(struct, info, action, side) ->
+          {{:done, true}, {side, state}}
 
         info.allowed? or info.allowed_many? ->
           {{:custom, struct}, {side, state}}

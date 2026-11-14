@@ -7,6 +7,7 @@ defmodule Warden.Test.Ecto.GraphQL do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Warden.Absinthe.Middleware
   alias Warden.Test.Ecto.{Comment, CommentFields, Comments, Issue, Issues}
   alias Warden.Test.Repo
 
@@ -40,6 +41,23 @@ defmodule Warden.Test.Ecto.GraphQL do
         {:ok, Repo.all(query)}
       end
     end
+
+    # Loads through `Warden.Ecto.all/5` with the execution's own actor, which the object
+    # rule then decides with.
+    field :scoped_issues, list_of(:issue) do
+      middleware &execution_actor/2
+
+      resolve fn _args, %{acc: %{Warden => %{actor: actor}}} ->
+        query = from(issue in Issue, order_by: issue.id)
+        {:ok, Warden.Ecto.all(Repo, query, actor, :read)}
+      end
+    end
+  end
+
+  defp execution_actor(resolution, _config) do
+    {_actor, resolution} = Middleware.actor(resolution, Warden.Test.Ecto.Authz)
+
+    resolution
   end
 
   mutation do

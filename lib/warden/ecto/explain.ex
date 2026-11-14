@@ -9,7 +9,7 @@ if Code.ensure_loaded?(Ecto) do
     import Ecto.Query, only: [from: 2]
 
     alias Warden.{Actor, Explanation}
-    alias Warden.Ecto.{Info, Memory, Scope}
+    alias Warden.Ecto.{Info, Mark, Memory, Scope}
 
     @spec explain(map, atom, Actor.t(), term, map) :: Explanation.t()
     def explain(info, action, %Actor{} = actor, row, context) do
@@ -18,8 +18,10 @@ if Code.ensure_loaded?(Ecto) do
       case locate(info, row) do
         {:ok, key, tenant} ->
           state = Scope.new(context, Info.prefix(row))
-          own = side(info, action, %{actor | delegator: nil}, key, tenant, state)
-          delegator = actor.delegator && side(info, action, actor.delegator, key, tenant, state)
+          own = side(info, action, %{actor | delegator: nil}, row, key, tenant, state)
+
+          delegator =
+            actor.delegator && side(info, action, actor.delegator, row, key, tenant, state)
 
           result =
             if own.result == :ok and (delegator == nil or delegator.result == :ok),
@@ -69,10 +71,21 @@ if Code.ensure_loaded?(Ecto) do
       end
     end
 
-    defp side(info, action, side, key, tenant, state) do
+    defp side(info, action, side, row, key, tenant, state) do
       case Scope.gate(info, side, tenant, state) do
-        {nil, state} -> planned(info, action, side, key, tenant, state)
+        {nil, state} -> admitted_or_planned(info, action, side, row, key, tenant, state)
         {reason, _state} -> gate(reason)
+      end
+    end
+
+    # A struct that `Warden.Ecto.all/5` loaded for this side and action is decided by the
+    # scope that admitted it, as `can/2` decides it: one step, no query.
+    defp admitted_or_planned(info, action, side, row, key, tenant, state) do
+      if Mark.admits?(row, info, action, side) do
+        step = %{rule: {:admitted_by_scope, action}, result: :ok, steps: []}
+        %Explanation{result: :ok, steps: [step]}
+      else
+        planned(info, action, side, key, tenant, state)
       end
     end
 

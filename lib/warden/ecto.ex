@@ -21,6 +21,8 @@ if Code.ensure_loaded?(Ecto) do
         Warden.Ecto.allowed?(actor, :write, {MyApp.Issues.Issue, id})        # by id: one EXISTS query
         Warden.Ecto.filter(actor, :read, issues)                             # one query, order kept
 
+        issues = Warden.Ecto.all(Repo, query, actor, :read)                  # scoped rows, trusted later
+
     Every function takes an actor or a context map, and `authorizer:` like the core API
     (`Warden`): the explicit option, else the actor's authorizer, else the configured
     default. The policy is the one the authorizer lists for the row's schema.
@@ -56,7 +58,7 @@ if Code.ensure_loaded?(Ecto) do
 
     ## Telemetry
 
-    `scope/4` (and `to_sql/4`, `dataloader_query/2`), `allowed?/4`, `authorize/4`,
+    `scope/4` (and `all/5`, `to_sql/4`, `dataloader_query/2`), `allowed?/4`, `authorize/4`,
     `filter/4` and `allowed_actors/4` emit `[:warden, :decision]` with `layer: :ecto`
     (`kind: :scope` for scopes, `:call` for checks). `explain/4`, `update_all/4`,
     `delete_all/3` and `preload_ids/4` emit none.
@@ -65,7 +67,7 @@ if Code.ensure_loaded?(Ecto) do
     import Ecto.Query, only: [dynamic: 1, where: 2]
 
     alias Warden.{Actor, Decision, Rule, Telemetry}
-    alias Warden.Ecto.{Audience, Explain, Guard, Info, Scope}
+    alias Warden.Ecto.{Audience, Explain, Guard, Info, Mark, Scope}
     alias Warden.Ecto.Policy.Graph
 
     @default_action :read
@@ -179,6 +181,51 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     @doc """
+    Runs `repo.all/2` over `scope/4` of `queryable` and returns the rows, each marked as
+    admitted by that scope for this actor and action:
+
+        issues = Warden.Ecto.all(Repo, MyApp.Issues.Issue, actor, :read, tenant: workspace_id)
+        Warden.Ecto.filter(actor, :read, issues)    # no query: every row is admitted
+
+    A later decision about a marked struct (`can(policy, action)` as a GraphQL object
+    rule, `allowed?/4`, `filter/4`, `Warden.filter/4`) allows it without running the
+    policy or a query, once the gates before the policy pass: the system kinds, the
+    actor's tenants (`c:Warden.Authorizer.tenants/2`) and a bound credential's tenant
+    (still `:tenant_binding` for another tenant). A mark is trusted only
+
+      * for the same actor instance: an actor built again (from the same context, in a
+        later request, by `Warden.on_behalf_of/3`) decides the row through its policy;
+      * for the same policy and action: rows loaded for `:read` are decided as usual for
+        `:write`;
+      * for the struct as loaded: a struct whose persisted fields or prefix changed is
+        decided as it is.
+
+    Pass an actor, not a context map, and use that actor for the decisions: a context map
+    builds a new actor on every call. In GraphQL that is the actor of the document
+    execution, which the object rules use.
+
+    Only structs of the policy's schema that the query returns as its root binding are
+    marked, never preloaded children (`scope/4` refuses preloads anyway), structs selected
+    from a join, a `select_merge`, or a struct whose `__meta__.context` is already set
+    (Postgres and MySQL leave it `nil`; other adapters may use it). Other rows come back
+    as they are.
+
+    Options: those of `scope/4` (`:authorizer`, `:context`, `:tenant`, `:prefix`); every
+    other option, and `:prefix`, goes to `repo.all/2`. Emits the telemetry of `scope/4`.
+    """
+    @spec all(module, Ecto.Queryable.t(), Warden.actor_or_context(), atom, opts) :: list
+    def all(repo, queryable, actor_or_context, action, opts \\ []) when is_list(opts) do
+      {scope_opts, repo_opts} = Keyword.split(opts, [:authorizer, :context, :tenant, :prefix])
+      {actor, context, authorizer} = Decision.setup(actor_or_context, scope_opts)
+      scope_opts = Keyword.merge(scope_opts, authorizer: authorizer, context: context)
+      scoped = scope(queryable, actor, action, scope_opts)
+      info = Info.policy_for!(authorizer, root_schema!(scoped))
+      repo_opts = Keyword.merge(repo_opts, Keyword.take(scope_opts, [:prefix]))
+      rows = repo.all(scoped, repo_opts)
+      Mark.mark_all(rows, info, action, actor, scoped)
+    end
+
+    @doc """
     Returns `true` when the actor may `action` the row: a loaded struct, or `{schema, id}`.
 
     For a struct, the policy's hand-written `allowed?/4` answers when it has one;
@@ -249,8 +296,10 @@ if Code.ensure_loaded?(Ecto) do
 
     A gate that denies before the clauses (a system actor of another kind, a tenant other
     than the bound one, a `NULL` tenant, a missing row) is one step `%{rule: {:gate,
-    reason}}`. A hand-written scope is one step `%{rule: {:scope, action}}`. For a
-    delegated actor, `delegator` explains the delegator's side.
+    reason}}`. A hand-written scope is one step `%{rule: {:scope, action}}`. A struct that
+    `all/5` loaded for this actor and action is one step `%{rule: {:admitted_by_scope,
+    action}, result: :ok}` after the gates, as `can/2` decides it; pass `{schema, id}` to
+    see its clauses. For a delegated actor, `delegator` explains the delegator's side.
 
     For development tools, tests and audit logs: it runs every clause and one query per
     actor side.
