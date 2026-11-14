@@ -40,6 +40,9 @@ defmodule Warden.Test do
     * membership in `Repo.all(WardenEcto.scope(...))`;
     * membership in `Warden.Ecto.filter/4` over all the rows.
 
+  Rows loaded with `Warden.Ecto.all/5` lose their mark first, so the policy itself
+  answers for them, not the scope that loaded them.
+
   For a `Warden.Policy`: `can(policy, action)` on the value alone and over the list
   (`Warden.allowed?/3` and `Warden.filter/4`).
 
@@ -96,7 +99,7 @@ defmodule Warden.Test do
   # there are no Ecto policies.
   if Code.ensure_loaded?(Ecto) do
     alias Warden.Ecto, as: WardenEcto
-    alias Warden.Ecto.Info
+    alias Warden.Ecto.{Info, Mark}
 
     defp observe(policy, action, actor, rows, authorizer, opts) do
       if Info.ecto_policy?(policy),
@@ -106,6 +109,7 @@ defmodule Warden.Test do
 
     defp observe_ecto(policy, action, actor, rows, authorizer, opts) do
       info = Info.fetch!(policy)
+      rows = Enum.map(rows, &Mark.unmark/1)
       repo = Keyword.get(opts, :repo) || Info.repo!(info)
       call_opts = [authorizer: authorizer]
       key = info.primary_key
