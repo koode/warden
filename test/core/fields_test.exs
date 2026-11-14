@@ -155,7 +155,7 @@ defmodule Warden.FieldsTest do
   end
 
   describe "redact/3 with deep: true" do
-    test "redacts nested registered structs, leaves others alone and keeps list order" do
+    test "redacts registered structs at any depth and keeps list order" do
       not_loaded = %Ecto.Association.NotLoaded{__field__: :cards, __owner__: Issue}
       inner = comment(9, trashed_at: @trashed)
       tag = %Tag{label: "keep", body: inner}
@@ -180,8 +180,9 @@ defmodule Warden.FieldsTest do
       assert Enum.map(redacted.issue.comments, & &1.body) == ["body 1", "", "body 3"]
       assert [{:comment, %Comment{body: ""}}] = redacted.extra
       assert redacted.count == 3
-      # Unregistered structs are left alone with their contents.
-      assert redacted.issue.tag == tag
+      # An unregistered struct stays the same struct, with registered structs inside it
+      # redacted; an association that was not loaded is left alone.
+      assert %Tag{label: "keep", body: %Comment{id: 9, body: ""}} = redacted.issue.tag
       assert redacted.issue.cards == not_loaded
     end
 

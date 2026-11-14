@@ -13,6 +13,10 @@ defmodule Warden.Fields.Redactor do
 
   @deep_option :deep
 
+  # Structs a deep walk never goes into: they hold no user structs (an association that
+  # was not loaded, dates, times and decimals).
+  @opaque_structs [Ecto.Association.NotLoaded, Date, Time, NaiveDateTime, DateTime, Decimal]
+
   @spec info!(term) :: map
   def info!(fields_module) when is_atom(fields_module) do
     if Code.ensure_loaded?(fields_module) and
@@ -132,17 +136,28 @@ defmodule Warden.Fields.Redactor do
     end
   end
 
-  # The outermost registered structs of a term, prepended to `acc` in walk order.
+  # The outermost registered structs of a term, prepended to `acc` in walk order. The
+  # walk goes into maps (keys and values), lists, tuples, MapSet elements and the fields
+  # of structs without a field policy; it skips the structs in @opaque_structs, which
+  # never hold user structs.
   defp collect(%module{} = struct, registry, acc) when is_map_key(registry, module),
     do: [struct | acc]
 
-  defp collect(%_module{}, _registry, acc), do: acc
+  defp collect(%module{}, _registry, acc) when module in @opaque_structs, do: acc
+
+  defp collect(%MapSet{} = set, registry, acc),
+    do: set |> MapSet.to_list() |> collect(registry, acc)
+
+  defp collect(%_module{} = struct, registry, acc),
+    do: struct |> Map.from_struct() |> collect(registry, acc)
 
   defp collect(map, registry, acc) when is_map(map),
     do:
       map
       |> :maps.to_list()
-      |> Enum.reduce(acc, fn {_key, value}, acc -> collect(value, registry, acc) end)
+      |> Enum.reduce(acc, fn {key, value}, acc ->
+        collect(value, registry, collect(key, registry, acc))
+      end)
 
   defp collect([head | tail], registry, acc),
     do: collect(tail, registry, collect(head, registry, acc))
@@ -159,13 +174,27 @@ defmodule Warden.Fields.Redactor do
   defp replace(%module{}, [redacted | rest], registry) when is_map_key(registry, module),
     do: {redacted, rest}
 
-  defp replace(%_module{} = struct, redacted, _registry), do: {struct, redacted}
+  defp replace(%module{} = struct, redacted, _registry) when module in @opaque_structs,
+    do: {struct, redacted}
+
+  defp replace(%MapSet{} = set, redacted, registry) do
+    {items, rest} = set |> MapSet.to_list() |> replace(redacted, registry)
+    {MapSet.new(items), rest}
+  end
+
+  # An unregistered struct is rebuilt as the same struct with its fields walked.
+  defp replace(%_module{} = struct, redacted, registry) do
+    {fields, rest} = struct |> Map.from_struct() |> replace(redacted, registry)
+    rebuilt = Map.merge(struct, fields)
+    {rebuilt, rest}
+  end
 
   defp replace(map, redacted, registry) when is_map(map) do
     {pairs, rest} =
       map
       |> :maps.to_list()
       |> Enum.map_reduce(redacted, fn {key, value}, redacted ->
+        {key, redacted} = replace(key, redacted, registry)
         {value, redacted} = replace(value, redacted, registry)
         {{key, value}, redacted}
       end)
