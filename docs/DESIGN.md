@@ -1229,7 +1229,13 @@ Paths are relative to `lib/warden/`.
   (each is a decision about a different actor). `explain/4`, `update_all/4` and
   `delete_all/3` emit none, like `Warden.explain/3`.
 - **`to_sql/4` placeholders** (`ecto/placeholders.ex`). Ecto's SQL is renumbered
-  after it is generated, skipping string literals and quoted identifiers.
+  after it is generated. The SQL is lexed as Postgres does: a `$n` is renumbered only in
+  code, never in a `--` or nested `/* */` comment, a standard, escape (`E'...'`) or
+  dollar-quoted string, a quoted identifier or an unquoted identifier (`col$1`). SQL
+  that ends inside one of these raises, since embedded in a host statement it would
+  swallow the host's text. After renumbering, the placeholders above `param_offset` must
+  be exactly `param_offset + 1..param_offset + length(params)` and those below it bound
+  keys, else it raises.
   `param_offset:` shifts every placeholder; with `bind:` (host placeholder number =>
   value) a param identical (`===`) to a bound value, as Ecto dumped it, becomes the
   host placeholder (the lowest when the host binds the value twice) and leaves the

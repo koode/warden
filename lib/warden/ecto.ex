@@ -438,6 +438,11 @@ if Code.ensure_loaded?(Ecto) do
       does not match and stays a new placeholder: never wrong, only not shared. A shared
       placeholder has one type in both statements, so bind the host's value to a
       placeholder of the type the scope compares it with.
+
+      Placeholders inside comments, strings, dollar quotes and identifiers are never
+      renumbered. SQL that ends inside one of them, or whose renumbered placeholders are
+      not exactly the host's bound ones and `$param_offset + 1..$param_offset +
+      length(params)`, raises `ArgumentError`.
       """
       @spec to_sql(Ecto.Queryable.t(), Warden.actor_or_context(), atom, opts) ::
               {String.t(), [term]}

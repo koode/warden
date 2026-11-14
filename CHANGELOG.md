@@ -49,6 +49,11 @@
 - `through: ..., resolve: :ids` kept the parent ids per policy, action, tenant and
   actor, not per parent column, so two `through:` clauses to one parent schema over
   different columns could share the ids of the other within one call.
+- `Warden.Ecto.to_sql/4` renumbered placeholders inside SQL comments, dollar-quoted and
+  escape strings, and kept old numbers after an apostrophe in them, so with
+  `param_offset:` or `bind:` a scope value could point at a host parameter. It now lexes
+  Postgres comments, strings, dollar quotes and identifiers, raises for SQL that ends
+  inside one, and checks the numbers it returns.
 
 ## 0.2.0 (2026-11-14)
 
