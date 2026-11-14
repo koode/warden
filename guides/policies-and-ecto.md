@@ -520,6 +520,29 @@ query = from(issue in MyApp.Issues.Issue, select: [issue.id, issue.title])
 {sql, params} = Warden.Ecto.to_sql(query, actor, :read, tenant: workspace.id)
 ```
 
+To embed the SQL in a raw statement with its own placeholders, pass `param_offset:`
+(the number of placeholders the host statement binds, with no gaps): the scope's
+placeholders then start at `$param_offset + 1`. When the host already binds a value the
+scope needs, such as the tenant or the user id, name it in `bind:` and the scope uses
+the host's placeholder instead of adding the value again:
+
+```elixir
+query = from(issue in MyApp.Issues.Issue, select: issue.id)
+bound = %{1 => workspace.id, 2 => user.id}
+opts = [tenant: workspace.id, param_offset: 2, bind: bound]
+{sql, params} = Warden.Ecto.to_sql(query, actor, :read, opts)
+
+Repo.query!(
+  "SELECT ... FROM issues WHERE workspace_id = $1 AND author_id <> $2 AND id IN (#{sql})",
+  [workspace.id, user.id | params]
+)
+```
+
+A value is shared only when it equals (`===`) the scope's value as Ecto dumps it for
+the query. A value that differs in type (a UUID string where the column is a
+`:binary_id`, which dumps to 16 bytes) does not match, and the scope keeps its own
+placeholder for it: the SQL is still right, the value is only passed twice.
+
 ## Search
 
 Scope every source of a search before you combine them, so each hit type uses its own

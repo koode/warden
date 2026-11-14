@@ -1180,6 +1180,15 @@ Paths are relative to `lib/warden/`.
   core decision code with `layer: :ecto`; `allowed_actors/4` emits one event per actor
   (each is a decision about a different actor). `explain/4`, `update_all/4` and
   `delete_all/3` emit none, like `Warden.explain/3`.
+- **`to_sql/4` placeholders** (`ecto/placeholders.ex`). Ecto's SQL is renumbered
+  after it is generated, skipping string literals and quoted identifiers.
+  `param_offset:` shifts every placeholder; with `bind:` (host placeholder number =>
+  value) a param identical (`===`) to a bound value, as Ecto dumped it, becomes the
+  host placeholder (the lowest when the host binds the value twice) and leaves the
+  params, and the rest are numbered from `param_offset + 1` with no gaps. Matching after
+  dumping, without casting, means a value of another type never matches: it stays a
+  separate parameter, which is always correct. `bind:` keys must lie in
+  `1..param_offset`; errors describe a bad key's shape.
 - **`repo:`.** The policy option names the repo for the queries Warden runs itself; the
   design's option list did not have one, but a `can/2` decision inside GraphQL has no
   other way to reach a repo.
