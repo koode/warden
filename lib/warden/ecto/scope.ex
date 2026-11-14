@@ -587,7 +587,7 @@ if Code.ensure_loaded?(Ecto) do
         other ->
           raise Warden.PolicyError, """
           #{inspect(info.policy)}: the actor's bounds[#{inspect(key)}] must be a list, got: \
-          #{inspect(other)}\
+          #{Info.shape(other)}\
           """
       end
     end
@@ -599,7 +599,7 @@ if Code.ensure_loaded?(Ecto) do
 
     def checked!(other, where) do
       raise Warden.PolicyError, """
-      #{where} must return an Ecto dynamic, true or false, got: #{inspect(other)}\
+      #{where} must return an Ecto dynamic, true or false, got: #{Info.shape(other)}\
       """
     end
 

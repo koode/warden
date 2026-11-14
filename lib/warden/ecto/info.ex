@@ -44,6 +44,26 @@ if Code.ensure_loaded?(Ecto) do
       end
     end
 
+    # What a value is, for error messages: its shape, never its contents (a callback's
+    # answer or a row may hold data that must not reach a log).
+    @spec shape(term) :: String.t()
+    def shape(%module{}), do: "a #{inspect(module)} struct"
+    def shape(value) when is_map(value), do: "a map"
+    def shape(value) when is_list(value), do: "a list of #{length(value)} elements"
+    def shape(value) when is_tuple(value), do: "a tuple of #{tuple_size(value)} elements"
+    def shape(value) when is_binary(value), do: "a string"
+    def shape(value) when is_integer(value), do: "an integer"
+    def shape(value) when is_float(value), do: "a float"
+    def shape(nil), do: "nil"
+    def shape(value) when is_atom(value), do: "an atom"
+    def shape(value) when is_function(value), do: "a function"
+    def shape(_value), do: "another term"
+
+    # The query prefix a loaded struct came from (`nil` for the default).
+    @spec prefix(term) :: String.t() | nil
+    def prefix(%{__meta__: %Ecto.Schema.Metadata{prefix: prefix}}), do: prefix
+    def prefix(_value), do: nil
+
     @spec repo!(map) :: module
     def repo!(%{repo: nil, policy: policy}) do
       raise Warden.PolicyError, """

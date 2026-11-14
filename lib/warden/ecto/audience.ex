@@ -10,7 +10,7 @@ if Code.ensure_loaded?(Ecto) do
     import Ecto.Query, only: [from: 2]
 
     alias Warden.{Actor, Decision, Rule, Telemetry}
-    alias Warden.Ecto.{Info, Memory, Scope}
+    alias Warden.Ecto.{Decide, Info, Memory, Scope}
     alias Warden.Ecto.Policy.Graph
 
     @spec allowed_actors([term], atom, term, keyword) :: [term]
@@ -97,7 +97,7 @@ if Code.ensure_loaded?(Ecto) do
       [answer] =
         if info.allowed?,
           do: [info.policy.allowed?(action, actor, struct, context)],
-          else: info.policy.allowed_many(action, actor, [struct], context)
+          else: Decide.many!(info, action, actor, [struct], context)
 
       Warden.Evaluator.verdict!(answer, info.policy, action) == :ok
     end

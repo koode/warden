@@ -288,16 +288,18 @@ if Code.ensure_loaded?(Ecto) do
          when is_atom(schema) and schema != nil,
          do: schema
 
-    defp root_schema!(%Ecto.Query{} = query) do
-      raise ArgumentError,
-            "Warden.Ecto needs a query whose root is an Ecto schema, got: #{inspect(query)}"
+    defp root_schema!(%Ecto.Query{}) do
+      raise ArgumentError, """
+      Warden.Ecto needs a query whose root is an Ecto schema, not a table name, subquery \
+      or fragment\
+      """
     end
 
     defp row_schema!(%schema{}), do: schema
     defp row_schema!({schema, _id}) when is_atom(schema), do: schema
 
     defp row_schema!(other) do
-      raise ArgumentError, "expected a loaded struct or {schema, id}, got: #{inspect(other)}"
+      raise ArgumentError, "expected a loaded struct or {schema, id}, got #{Info.shape(other)}"
     end
 
     # The root binding carries the policy's `as:` name, which scope dynamics refer to.

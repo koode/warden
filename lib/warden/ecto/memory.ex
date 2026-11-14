@@ -60,7 +60,7 @@ if Code.ensure_loaded?(Ecto) do
 
         other ->
           raise Warden.PolicyError,
-                "#{inspect(info.policy)}.allowed?/4 returned #{inspect(other)}"
+                "#{inspect(info.policy)}.allowed?/4 returned #{Info.shape(other)}"
       end
     end
 

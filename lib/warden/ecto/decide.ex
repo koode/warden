@@ -83,8 +83,25 @@ if Code.ensure_loaded?(Ecto) do
 
       cond do
         structs == [] -> []
-        info.allowed_many? -> info.policy.allowed_many(action, actor, structs, context)
+        info.allowed_many? -> many!(info, action, actor, structs, context)
         true -> Enum.map(structs, &info.policy.allowed?(action, actor, &1, context))
+      end
+    end
+
+    # One answer per struct, or a `Warden.PolicyError`: a longer or shorter list would
+    # shift every answer onto another row.
+    @spec many!(map, atom, Actor.t(), [struct], map) :: list
+    def many!(info, action, actor, structs, context) do
+      answers = info.policy.allowed_many(action, actor, structs, context)
+      expected = length(structs)
+
+      if is_list(answers) and length(answers) == expected do
+        answers
+      else
+        raise Warden.PolicyError, """
+        #{inspect(info.policy)}.allowed_many/4 must return one answer per struct for \
+        #{inspect(action)} (#{expected} structs), got #{Info.shape(answers)}\
+        """
       end
     end
 

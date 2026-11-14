@@ -427,6 +427,21 @@ defmodule Warden.Ecto.PolicyCompileTest do
   end
 
   describe "functions without a database" do
+    test "a hand-written allowed_many/4 with the wrong count raises, naming shapes only" do
+      note = %Note{id: 1, workspace_id: "t1", author_id: "sam"}
+      people = Warden.RedteamV2Ecto.People
+      context = people.context(people.sam(), %{extra_answers: [true]})
+
+      error =
+        assert_raise Warden.PolicyError, fn ->
+          WardenEcto.filter(context, :read, [note, note], authorizer: Warden.RedteamV2Ecto.Authz)
+        end
+
+      assert error.message =~ "(2 structs), got a list of 3 elements"
+      refute error.message =~ "sam"
+      refute error.message =~ "true"
+    end
+
     test "scope/4 needs a policy for the root schema" do
       assert_raise Warden.PolicyError,
                    ~r/lists no policy for Warden.Test.Ecto.TeamMembership/,
