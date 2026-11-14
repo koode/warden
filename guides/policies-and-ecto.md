@@ -426,6 +426,12 @@ In GraphQL, `can(MyApp.Authz.Issues, :read)` as an object rule asks the same pol
 once per list and tenant. `can(MyApp.Authz.Issues, :write, arg: [:id])` decides before
 the resolver runs.
 
+Rows a resolver loaded through `scope/4` are decided again by a `can/2` object rule:
+Warden does not know that a query was scoped, so the rule runs as for any other value,
+with one query per list (and tenant) for the clauses it cannot decide in memory. Preload
+the `through:` parent in the resolver's query (`preload: [:team]`) and Warden decides
+those rows in memory, without that query.
+
 ## Audiences
 
 `Warden.Ecto.allowed_actors(actors, :read, comment)` returns the actors that may see one
