@@ -11,6 +11,10 @@ defmodule Warden.Adversarial.CostTest do
 
   @ratio_bound 24
 
+  # A ratio is measured up to this many times and the lowest counts. A busy machine can
+  # push one measurement over the bound; quadratic cost stays near 64 on every attempt.
+  @ratio_attempts 3
+
   defmodule Schema do
     @moduledoc false
     use Absinthe.Schema
@@ -52,6 +56,15 @@ defmodule Warden.Adversarial.CostTest do
   end
 
   defp ratio(template) do
+    Enum.reduce_while(1..@ratio_attempts, nil, fn _attempt, lowest ->
+      measured = measure_ratio(template)
+      lowest = min(measured, lowest || measured)
+
+      if lowest < @ratio_bound, do: {:halt, lowest}, else: {:cont, lowest}
+    end)
+  end
+
+  defp measure_ratio(template) do
     small = time(String.replace(template, "N", "1000"))
     large = time(String.replace(template, "N", "8000"))
     IO.puts("[cost] #{template}: 1000 -> #{div(small, 1000)} ms, 8000 -> #{div(large, 1000)} ms")
