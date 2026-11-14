@@ -29,7 +29,11 @@
 - Absinthe: `covered()`, `authorize rule, on_deny: ...`, `can/2,3` as object, field
   and argument rules, and opt-in `batch_across_parents: true`.
 - The core API takes an `args:` option.
-- `guides/actors.md`.
+- `Warden.Phoenix.Channel` for Phoenix channels: a rule checked at join, before every
+  push (`recheck: :every_push`) and on a timer (`{:every, ms}`), with a fresh actor
+  from the new authorizer callback `socket_context/1` on every check. A denial stops the
+  channel with a reason the client can show.
+- `guides/actors.md` and `guides/channels.md`.
 
 ### Changed
 
