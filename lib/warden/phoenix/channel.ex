@@ -106,7 +106,7 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     """
 
     alias Phoenix.Socket
-    alias Warden.{Actor, Denial, Rule}
+    alias Warden.{Actor, Decision, Denial, Rule}
     alias Warden.Authorizer.Callbacks
 
     require Logger
@@ -558,7 +558,8 @@ if Code.ensure_loaded?(Phoenix.Channel) do
     # No cache: the actor always reflects the socket as it is now.
     defp check(socket, rule, authorizer, value) do
       context = Callbacks.socket_context(authorizer, socket)
-      Warden.authorize(context, rule, authorizer: authorizer, value: value)
+      decision_opts = [authorizer: authorizer, value: value]
+      Decision.authorize(context, rule, decision_opts, :channel)
     end
 
     defp default_reply(%Denial{actor: actor}) do

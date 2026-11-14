@@ -5,7 +5,8 @@ defmodule Warden.Phoenix.ChannelTest do
 
   alias Warden.{Denial, PolicyError, Rule}
   alias Warden.Phoenix.Channel
-  alias Warden.Test.{ChannelAuthz, DefaultChannel, ManualChannel, RoomChannel, TimerChannel}
+  alias Warden.Test.{ChannelAuthz, Decisions, DefaultChannel, ManualChannel, RoomChannel}
+  alias Warden.Test.TimerChannel
   alias Warden.Test.UserSocket
 
   @endpoint Warden.Test.Endpoint
@@ -55,6 +56,13 @@ defmodule Warden.Phoenix.ChannelTest do
                subscribe_and_join(member_socket(roles_agent), RoomChannel, "room:2")
 
       refute_received :user_join_ran
+    end
+
+    test "join decisions report telemetry layer :channel", %{roles_agent: roles_agent} do
+      Decisions.attach()
+      subscribe_and_join(member_socket(roles_agent), RoomChannel, "room:1")
+
+      assert_received {:decision, %{count: 1}, %{layer: :channel, result: :ok}}
     end
 
     test "an anonymous socket is refused as unauthorized" do
