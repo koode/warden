@@ -80,6 +80,32 @@ field :issues, list_of(:issue) do
 end
 ```
 
+The actor is read-only in a resolver. To warm it once per execution (tenants, tenant
+roles, `Warden.Ecto.preload_ids/4`), name a function with `warm_actor:`; Warden calls it
+right after it builds the actor, and every rule and resolver of the execution then uses
+the warmed actor:
+
+```elixir
+use Warden.Absinthe, authorizer: MyApp.Authz, warm_actor: &MyApp.Authz.warm/2
+
+# in MyApp.Authz
+def warm(actor, context) do
+  {tenants, actor} = Warden.Actor.cached_tenants(actor, context)
+
+  actor
+  |> Warden.Actor.preload_tenant_roles(tenants, context)
+  |> Warden.Ecto.preload_ids(MyApp.Teams.Team, :read)
+end
+```
+
+It takes `{module, function}` or a `&Module.function/2` capture, and runs once per
+execution: before resolution, at the first field rule in the cases below that skip that
+step, at subscribe time for the subscription's own checks, and on every subscription
+publish. It may only fill the actor's cache: an answer that is not a `%Warden.Actor{}`,
+or an actor whose instance, subject, kind, roles, permissions, credential, system flag,
+context, delegator or bounds differ from the one it was given, raises
+`Warden.PolicyError`.
+
 Use it rather than building an actor from `resolution.context`: rows that
 `Warden.Ecto.all/5` loads are trusted by the object rules only for the actor instance
 that loaded them (see the policies guide). It raises `ArgumentError` for a schema
@@ -171,7 +197,8 @@ key. A value without a tenant denies every tenant-role rule.
 actor struct itself, never in the process dictionary or ETS:
 
 - in GraphQL the actor lives for one document execution (one per subscription publish),
-  and Warden keeps the updated actor in `resolution.acc`;
+  and Warden keeps the updated actor in `resolution.acc`; to read them once up front,
+  warm it with the schema's `warm_actor:` option;
 - in the core API one call reads each tenant once; to share the cache across calls,
   warm it with `Warden.Actor.preload_tenant_roles/3` and pass that actor on;
 - `Warden.Plug` builds a new actor on every check.

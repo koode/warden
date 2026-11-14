@@ -13,6 +13,12 @@
   `{:admitted_by_scope, action}`.
 - `Warden.Absinthe.actor/1`: the actor of the document execution, for resolvers (for
   example to load rows with `Warden.Ecto.all/5` that the object rules then trust).
+  `use Warden.Absinthe, warm_actor: &MyApp.Authz.warm/2` (or `{module, function}`)
+  warms that actor once per execution, right after Warden builds it (also in the lazy
+  build of batch mode and `plugin_callbacks: false`, at subscribe time and on every
+  publish), so tenants, tenant roles and `preload_ids/4` are read once and shared by
+  the rules and the resolvers. The function may only fill the cache: a non-actor answer
+  or an actor that differs in anything but its cache raises `Warden.PolicyError`.
 - `Warden.Ecto.preload_ids/4` reads the parent ids of `through: {assoc, action,
   resolve: :ids}` once and caches them in the actor, so later scopes of the request
   with the same actor, tenant and prefix, under the same (`===`) context as the preload,

@@ -455,7 +455,9 @@ them from literals, module attributes or compile-time expressions.
 
 Warden builds one actor per document execution, before resolution, and decides every
 rule of that execution for it. `Warden.Absinthe.actor(resolution)` returns it, for a
-resolver that loads rows with `Warden.Ecto.all/5` (see the
+resolver that loads rows with `Warden.Ecto.all/5`. The `warm_actor:` option of
+`use Warden.Absinthe` fills that actor's cache (tenants, tenant roles, preloaded ids)
+once per execution, since a resolver cannot hand a warmed actor back (see the
 [actors guide](guides/actors.md#the-actor-in-a-graphql-resolver)).
 
 #### SDL schemas

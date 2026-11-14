@@ -9,8 +9,8 @@ if Code.ensure_loaded?(Absinthe) do
     # after the resolution phase, which attaches each error to the (already null) item.
     #
     # Before resolution it builds the actor of the document execution from its context,
-    # once, and stores it in `acc` where every field rule and `Warden.Absinthe.actor/1`
-    # read it. Absinthe calls this before every resolution pass; a later pass finds the
+    # once, warms it with the schema's `warm_actor:` function, and stores it in `acc`
+    # where every field rule and `Warden.Absinthe.actor/1` read it. Absinthe calls this before every resolution pass; a later pass finds the
     # actor already there. A schema cannot add a phase to the document pipeline, which
     # the caller builds, and this callback is Absinthe's hook for setting `acc` before
     # resolution starts. A subscription publish is a new execution with an empty `acc`,
@@ -33,8 +33,9 @@ if Code.ensure_loaded?(Absinthe) do
     def before_resolution(%{schema: schema, acc: acc, context: context} = exec)
         when is_atom(schema) and schema != nil do
       if function_exported?(schema, :__warden__, 1) do
-        authorizer = schema.__warden__(:options).authorizer
-        %{exec | acc: Middleware.with_actor(acc, context, authorizer)}
+        options = schema.__warden__(:options)
+        acc = Middleware.with_actor(acc, context, options.authorizer, options.warm_actor)
+        %{exec | acc: acc}
       else
         exec
       end

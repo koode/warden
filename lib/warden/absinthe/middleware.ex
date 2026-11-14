@@ -22,6 +22,8 @@ if Code.ensure_loaded?(Absinthe) do
     alias Warden.Fields.Redactor
 
     @acc_key Warden
+
+    @type warm_actor :: {module, atom} | nil
     @decided :__warden_decided__
     @admit :__warden_admit__
 
@@ -37,31 +39,75 @@ if Code.ensure_loaded?(Absinthe) do
     # Evaluations return it with the tenant roles they read; `put_actor/2` stores that
     # back, so `tenant_roles/3` runs at most once per tenant per execution. A pipeline
     # that runs resolution without plugin callbacks has no actor yet, and the first field
-    # rule builds it here.
-    def actor(%Resolution{acc: acc, context: context} = res, authorizer) do
+    # rule builds it here, warmed by the schema's `warm_actor:` like the one the plugin
+    # builds.
+    def actor(%Resolution{acc: acc, context: context, schema: schema} = res, authorizer) do
       case stored_actor(acc) do
         %Actor{} = actor ->
           {actor, res}
 
         nil ->
-          actor = Actor.build(authorizer, context)
+          warm_actor = schema.__warden__(:options).warm_actor
+          actor = build_actor(authorizer, context, warm_actor)
           {actor, put_actor(res, actor)}
       end
     end
 
     # `acc` with the execution's actor, built from `context` when it has none yet.
-    @spec with_actor(map, map, module) :: map
-    def with_actor(acc, context, authorizer) do
+    @spec with_actor(map, map, module, warm_actor) :: map
+    def with_actor(acc, context, authorizer, warm_actor) do
       case stored_actor(acc) do
         %Actor{} ->
           acc
 
         nil ->
           state = Map.get(acc, @acc_key, %{})
-          actor = Actor.build(authorizer, context)
+          actor = build_actor(authorizer, context, warm_actor)
           Map.put(acc, @acc_key, Map.put(state, :actor, actor))
       end
     end
+
+    # Builds an execution's actor and hands it to the schema's `warm_actor:` function, if
+    # any. Warming may only fill the actor's cache (tenant roles, tenants, preloaded ids):
+    # an answer that is not an actor, or an actor that differs from the one passed in
+    # anywhere but its cache (its delegator's cache included), raises, so a warm function
+    # can never swap the identity every rule of the execution is decided for.
+    @spec build_actor(module, map, warm_actor) :: Actor.t()
+    def build_actor(authorizer, context, nil), do: Actor.build(authorizer, context)
+
+    def build_actor(authorizer, context, {module, function} = warm_actor) do
+      actor = Actor.build(authorizer, context)
+      warmed = apply(module, function, [actor, context])
+      checked_warm!(warmed, actor, warm_actor)
+    end
+
+    defp checked_warm!(%Actor{} = warmed, actor, warm_actor) do
+      if uncached(warmed) === uncached(actor) do
+        warmed
+      else
+        raise Warden.PolicyError, """
+        the warm_actor function #{describe_warm(warm_actor)} returned another actor: it may \
+        only fill the actor's cache, never change its identity, instance, credential, \
+        delegator or bounds\
+        """
+      end
+    end
+
+    defp checked_warm!(other, _actor, warm_actor) do
+      shape = Shape.describe(other)
+
+      raise Warden.PolicyError, """
+      the warm_actor function #{describe_warm(warm_actor)} must return a %Warden.Actor{}, \
+      got: #{shape}\
+      """
+    end
+
+    defp uncached(%Actor{delegator: nil} = actor), do: %{actor | cache: %{}}
+
+    defp uncached(%Actor{delegator: %Actor{} = delegator} = actor),
+      do: %{actor | cache: %{}, delegator: uncached(delegator)}
+
+    defp describe_warm({module, function}), do: "#{inspect(module)}.#{function}/2"
 
     # The execution's actor in `acc`, or `nil`.
     @spec stored_actor(map) :: Actor.t() | nil

@@ -12,7 +12,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Type
     alias Warden.Absinthe.Middleware
-    alias Warden.{Actor, Authorizer, Check, Denial, Rule, Shape}
+    alias Warden.{Authorizer, Check, Denial, Rule, Shape}
 
     def config_ref(field_ident, original, spec) do
       {:ref, __MODULE__, {:config, field_ident, original, spec}}
@@ -26,7 +26,7 @@ if Code.ensure_loaded?(Absinthe) do
     defp config(field_ident, original, spec, args, info) do
       authorizer = spec.authorizer
       context = Map.get(info, :context, %{})
-      actor = Actor.build(authorizer, context)
+      actor = Middleware.build_actor(authorizer, context, spec.warm_actor)
 
       base = %Check{
         actor: actor,

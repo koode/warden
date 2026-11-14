@@ -42,6 +42,18 @@ if Code.ensure_loaded?(Absinthe) do
         An object type is linked to a schema by `warden_schema Schema` or by a `can/2`
         rule whose policy is for it; a listed schema no object type is linked to fails
         compilation too.
+      * `:warm_actor` - `{module, function}` or a `&Module.function/2` capture, called as
+        `function(actor, context)` right after Warden builds the actor of a document
+        execution, to fill its cache once: `Warden.Actor.preload_tenant_roles/3`,
+        `Warden.Actor.cached_tenants/2`, `Warden.Ecto.preload_ids/4`. The actor it returns
+        is the one every rule and `actor/1` of that execution use. It runs once per
+        execution: before resolution, at the first field rule where Absinthe runs
+        resolution without plugin callbacks, for the subscribe-time checks of a
+        subscription, and on every subscription publish. It must return the actor it was
+        given with only its cache changed: any other answer, or an actor with another
+        instance, subject, kind, roles, permissions, credential, system flag, context,
+        delegator or bounds, raises `Warden.PolicyError`. An anonymous function fails
+        compilation, since the options are compiled into the schema.
 
     At compile time Warden validates every rule against the authorizer's catalogs,
     attaches its middleware to every field that needs it, and then verifies the compiled
@@ -128,8 +140,13 @@ if Code.ensure_loaded?(Absinthe) do
     @doc """
     Returns the actor of the document execution that `resolution` belongs to: the actor
     every Warden rule in that execution is decided for. Warden builds it once, before
-    resolution starts, from the execution's context; every subscription publish builds
-    a new one from the subscriber's context.
+    resolution starts, from the execution's context, and warms it with the schema's
+    `:warm_actor` function; every subscription publish builds a new one from the
+    subscriber's context.
+
+    The actor is read-only here: a resolver cannot hand a warmed actor back. Warm it
+    with `:warm_actor` instead, so the rules and the resolvers share one cache and the
+    tenants, tenant roles and preloaded ids are read once per execution.
 
     Use it in a resolver to load rows that the object rules then trust:
 

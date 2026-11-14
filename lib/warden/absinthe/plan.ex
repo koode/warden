@@ -745,6 +745,7 @@ if Code.ensure_loaded?(Absinthe) do
 
       %{
         authorizer: config.authorizer,
+        warm_actor: config.warm_actor,
         pre: pre,
         return: return_spec(named, abstract_rule, members, object_rules)
       }

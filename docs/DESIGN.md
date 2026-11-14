@@ -1296,6 +1296,22 @@ Paths are relative to `lib/warden/`.
   `Warden.Absinthe.actor/1` raises `Warden.PolicyError` when called before it. As a
   consequence `subject/1`, `roles/2` and `permissions/2` now run once per execution
   even for a document whose fields have no rules.
+- **Warming the execution's actor** (`absinthe/middleware.ex`, `build_actor/3`).
+  `Warden.Absinthe.actor/1` is read-only, so an app that warms its actor (tenants,
+  tenant roles, `preload_ids/4`) could not hand the result back and read everything
+  twice. `use Warden.Absinthe, warm_actor:` names a function `(actor, context)` that
+  Warden calls on every actor it builds for an execution: in `before_resolution/1`, in
+  the lazy build of `Middleware.actor/2` (batch mode, `plugin_callbacks: false`; read
+  from the schema's options), in the subscribe-time checks of
+  `SubscriptionConfig` (that path builds its own actor, so it is warmed too, from the
+  subscription spec), and on every publish (a new execution). The option is kept as
+  `{module, function}`: a capture is turned into one at compile time and an anonymous
+  function fails compilation, since only a named function can be compiled into the
+  schema. The answer must be an actor equal (`===`) to the one passed in once both
+  caches (and their delegators' caches) are emptied; anything else raises
+  `Warden.PolicyError` with the answer's shape only. Warming may fill the cache, never
+  swap the actor (goal 5: the instance, subject and bounds stay those the execution
+  was built with).
 
 ### Implementation notes: policy matrix
 

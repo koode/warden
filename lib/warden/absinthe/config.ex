@@ -8,6 +8,8 @@ if Code.ensure_loaded?(Absinthe) do
     alias Warden.Absinthe.Rules
     alias Warden.Rule
 
+    @warm_actor_shape "`:warm_actor` must be {module, function} or a &Module.function/2 capture"
+
     @option_keys [
       :authorizer,
       :strict_mode,
@@ -15,7 +17,8 @@ if Code.ensure_loaded?(Absinthe) do
       :introspection,
       :list_policy,
       :batch_across_parents,
-      :require_can_for
+      :require_can_for,
+      :warm_actor
     ]
 
     @spec validate_options(keyword) :: {:ok, map} | {:error, [String.t()]}
@@ -27,6 +30,7 @@ if Code.ensure_loaded?(Absinthe) do
       policy = Keyword.get(opts, :list_policy, :null_item)
       across_parents = Keyword.get(opts, :batch_across_parents, :auto)
       require_can_for = Keyword.get(opts, :require_can_for, [])
+      warm_actor = Keyword.get(opts, :warm_actor)
 
       errors =
         unknown_option_errors(opts) ++
@@ -37,7 +41,8 @@ if Code.ensure_loaded?(Absinthe) do
           rule_option_errors(:introspection, introspection) ++
           list_policy_errors(policy) ++
           batch_across_parents_errors(across_parents) ++
-          require_can_for_errors(require_can_for, strict)
+          require_can_for_errors(require_can_for, strict) ++
+          warm_actor_errors(warm_actor)
 
       case errors do
         [] ->
@@ -49,7 +54,8 @@ if Code.ensure_loaded?(Absinthe) do
              introspection: introspection,
              list_policy: policy,
              batch_across_parents: across_parents,
-             require_can_for: require_can_for
+             require_can_for: require_can_for,
+             warm_actor: warm_actor(warm_actor)
            }}
 
         errors ->
@@ -106,6 +112,32 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp require_can_for_errors(_schemas, _strict),
       do: ["`:require_can_for` must be a list of modules"]
+
+    # `warm_actor:` is kept as `{module, function}`: a `&Mod.fun/2` capture is turned into
+    # one, and an anonymous function is refused, since the options are compiled into the
+    # schema and only a named function survives that.
+    defp warm_actor_errors(nil), do: []
+
+    defp warm_actor_errors({module, function})
+         when is_atom(module) and module != nil and is_atom(function) and function != nil,
+         do: []
+
+    defp warm_actor_errors(fun) when is_function(fun, 2) do
+      case Function.info(fun, :type) do
+        {:type, :external} -> []
+        {:type, :local} -> [@warm_actor_shape]
+      end
+    end
+
+    defp warm_actor_errors(_other), do: [@warm_actor_shape]
+
+    defp warm_actor(fun) when is_function(fun, 2) do
+      {:module, module} = Function.info(fun, :module)
+      {:name, name} = Function.info(fun, :name)
+      {module, name}
+    end
+
+    defp warm_actor(other), do: other
 
     defp batch_across_parents_errors(value) when value in [:auto, true, false], do: []
 
