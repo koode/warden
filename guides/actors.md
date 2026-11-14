@@ -250,9 +250,13 @@ checks: [email_visible: [batch: true, single: true]]
 ```
 
 In GraphQL, an object rule on a single object under a list (each issue's `assignee`) is
-decided per parent by default. `use Warden.Absinthe, batch_across_parents: true`
-defers those decisions through `Absinthe.Middleware.Batch`, so every parent's value at
-one level is decided in one call. Checks deferred this way have no `resolution`.
+deferred through `Absinthe.Middleware.Batch` by default (`batch_across_parents: :auto`),
+so every parent's value at one level is decided in one call. `:auto` does this for rules
+with a `batch: true` check or a `can/2` over a policy with `allowed_many/4` (or an Ecto
+policy), when the schema has the Batch plugin (Absinthe's default plugins include it).
+`batch_across_parents: false` decides per parent; `true` defers every rule with a
+batched leaf and fails compilation without the plugin. Checks deferred this way have no
+`resolution`.
 
 ### Timeouts
 

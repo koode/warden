@@ -34,6 +34,9 @@ if Code.ensure_loaded?(Absinthe) do
       * `:introspection` - rule that guards `__schema` and `__type`. Default `public()`.
       * `:list_policy` - default list policy: `:null_item` (default), `:filter` or
         `:fail_list`.
+      * `:batch_across_parents` - `:auto` (default), `true` or `false`: whether the object
+        rule of a single object under a list is decided for every parent at once through
+        `Absinthe.Middleware.Batch`. See the actors guide.
       * `:require_can_for` - schemas (or struct modules) whose object types must use
         `can/2` with that schema's policy in their object rule. Needs `strict_mode: :all`.
         An object type is linked to a schema by `warden_schema Schema` or by a `can/2`

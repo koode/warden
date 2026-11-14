@@ -25,7 +25,7 @@ if Code.ensure_loaded?(Absinthe) do
       default_rule = Keyword.get(opts, :default_object_rule)
       introspection = Keyword.get(opts, :introspection, :public)
       policy = Keyword.get(opts, :list_policy, :null_item)
-      across_parents = Keyword.get(opts, :batch_across_parents, false)
+      across_parents = Keyword.get(opts, :batch_across_parents, :auto)
       require_can_for = Keyword.get(opts, :require_can_for, [])
 
       errors =
@@ -107,8 +107,10 @@ if Code.ensure_loaded?(Absinthe) do
     defp require_can_for_errors(_schemas, _strict),
       do: ["`:require_can_for` must be a list of modules"]
 
-    defp batch_across_parents_errors(value) when is_boolean(value), do: []
-    defp batch_across_parents_errors(_value), do: ["`:batch_across_parents` must be a boolean"]
+    defp batch_across_parents_errors(value) when value in [:auto, true, false], do: []
+
+    defp batch_across_parents_errors(_value),
+      do: ["`:batch_across_parents` must be :auto, true or false"]
 
     defp list_policy_errors(policy) do
       if policy in Rules.list_policies(),
@@ -135,7 +137,14 @@ if Code.ensure_loaded?(Absinthe) do
               Enum.map_join(extra_errors, "\n", &("  * " <> &1))
       end
 
-      Map.put(options, :catalog, catalog)
+      options
+      |> Map.put(:catalog, catalog)
+      |> Map.put(:batch_plugin?, batch_plugin?(schema))
+    end
+
+    # Cross-parent batching resumes deferred fields through `Absinthe.Middleware.Batch`.
+    defp batch_plugin?(schema) do
+      function_exported?(schema, :plugins, 0) and Absinthe.Middleware.Batch in schema.plugins()
     end
 
     defp schema_options!(schema) do

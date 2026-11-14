@@ -149,9 +149,9 @@ child fields both read the redacted struct, so no field can reach the original v
 It applies wherever object rules apply: per list item (one decision per rule and list),
 in nested lists, behind interfaces and unions, on Dataloader, `Async` and `Batch`
 values, in mutation payloads, and on every subscription publish with the subscriber's
-actor, so a role revoked between two events redacts the next one. With
-`batch_across_parents: true`, a single comment under each item of a list is decided and
-redacted for all items at once.
+actor, so a role revoked between two events redacts the next one. With cross-parent
+batching (`batch_across_parents: :auto`, the default, for batched rules), a single
+comment under each item of a list is decided and redacted for all items at once.
 
 Compile-time checks:
 

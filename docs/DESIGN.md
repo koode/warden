@@ -787,9 +787,16 @@ actors fail every
   once, then evaluates the rule per value from those results. Short-circuiting is kept
   for unbatched rules.
 * Cross-parent batching in Absinthe (object rules on single-object fields under a list,
-  deferred through `Absinthe.Middleware.Batch`) is opt-in in 0.2:
-  `use Warden.Absinthe, batch_across_parents: true`. Default off: it touches the
-  item-error phase and the batch resolver, which is where 0.1's red-team found a hang.
+  deferred through `Absinthe.Middleware.Batch`): `use Warden.Absinthe,
+  batch_across_parents: :auto | true | false`. The default `:auto` defers object rules
+  with a leaf that gains from a batch (a check with `batch: true`, or `can/2` over a
+  policy with `allowed_many/4` or an Ecto policy) when the schema has the Batch plugin;
+  `true` defers every rule with a batched leaf and requires the plugin; `false` decides
+  per parent. It was off by default at first because it touches the item-error phase and
+  the batch resolver, where 0.1's red-team found a hang; the Absinthe red-team fixes
+  (linear cost whatever the context size, the batch timeout covering check timeouts,
+  admissions by path, no BatchResolver loop) made that path safe, and deciding per
+  parent was an N+1 for every app with batched rules.
 
 ### Denials, explain, telemetry
 

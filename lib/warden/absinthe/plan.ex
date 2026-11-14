@@ -492,22 +492,51 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp return_rules(_type, _named, _object_rules, _object_type_rules), do: {nil, %{}, nil}
 
-    # `batch_across_parents: true`: the object rule of a single object (not a list, not
-    # an abstract type) is deferred through `Absinthe.Middleware.Batch` when the rule has
-    # batched leaves, so the values of every parent at one level are decided together.
-    defp with_across_parents(
-           %{abstract: nil, shape: shape} = spec,
-           %{batch_across_parents: true} = config
-         )
+    # Cross-parent batching: the object rule of a single object (not a list, not an
+    # abstract type) is deferred through `Absinthe.Middleware.Batch`, so the values of
+    # every parent at one level are decided together.
+    #
+    #   * `:auto` (default): for rules with a leaf that gains from a batch (a check with
+    #     `batch: true`, or `can/2` over a policy with `allowed_many/4` or an Ecto
+    #     policy), when the schema has the Batch plugin;
+    #   * `true`: for every rule with a batched leaf (the verifier requires the plugin);
+    #   * `false`: never.
+    defp with_across_parents(%{abstract: nil, shape: shape} = spec, config)
          when shape in [:named, {:non_null, :named}] do
       rule = Map.get(spec.rules, spec.named)
 
-      if Warden.Evaluator.batched?(rule, config.catalog),
+      if across_parents?(rule, config),
         do: Map.put(spec, :across_parents, true),
         else: spec
     end
 
     defp with_across_parents(spec, _config), do: spec
+
+    defp across_parents?(rule, %{batch_across_parents: true} = config),
+      do: Warden.Evaluator.batched?(rule, config.catalog)
+
+    defp across_parents?(rule, %{batch_across_parents: :auto} = config),
+      do: Map.get(config, :batch_plugin?, false) and batch_gain?(rule, config.catalog)
+
+    defp across_parents?(_rule, _config), do: false
+
+    defp batch_gain?({tag, rules}, catalog) when tag in [:all, :any] and is_list(rules),
+      do: Enum.any?(rules, &batch_gain?(&1, catalog))
+
+    defp batch_gain?({:check, _name, _opts} = leaf, catalog),
+      do: Warden.Evaluator.batched?(leaf, catalog)
+
+    defp batch_gain?({:can, policy, _action, opts}, _catalog) when is_list(opts),
+      do: not Keyword.has_key?(opts, :arg) and many_policy?(policy)
+
+    defp batch_gain?(_rule, _catalog), do: false
+
+    # A policy that answers a list at once: `allowed_many/4` or an Ecto policy.
+    defp many_policy?(policy) do
+      Code.ensure_loaded?(policy) and
+        (function_exported?(policy, :allowed_many, 4) or
+           function_exported?(policy, :__warden_ecto__, 1))
+    end
 
     # `redact_with`: the field policy of every object type the value may have. Only set
     # when there is one, so the specs of schemas without redaction stay as they were.

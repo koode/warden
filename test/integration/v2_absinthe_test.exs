@@ -50,14 +50,10 @@ defmodule Warden.V2AbsintheTest do
       assert messages(:check_many) == [{:check_many, :visible, 3}]
     end
 
-    test "across parents, one call per parent without batch_across_parents" do
+    # Changed for the `:auto` default: a batched object rule is decided across parents.
+    test "across parents, one call for every parent by default" do
       run("{ docs { owner { name } } }", abby())
-
-      assert messages(:check_many) == [
-               {:check_many, :visible, 1},
-               {:check_many, :visible, 1},
-               {:check_many, :visible, 1}
-             ]
+      assert messages(:check_many) == [{:check_many, :visible, 3}]
     end
   end
 
@@ -217,6 +213,35 @@ defmodule Warden.V2AbsintheTest do
         )
 
       %{schema: schema}
+    end
+
+    test "batch_across_parents: false decides per parent" do
+      schema =
+        compile_schema(
+          """
+            object :person do
+              authorize check(:visible)
+              field :name, :string
+            end
+
+            object :doc do
+              field :owner, :person do
+                resolve fn doc, _args, _resolution -> {:ok, Warden.Test.V2.Data.person(doc.owner_id)} end
+              end
+            end
+
+            query do
+              field :docs, list_of(:doc) do
+                resolve fn _args, _resolution -> {:ok, Warden.Test.V2.Doc.all()} end
+              end
+            end
+          """,
+          "authorizer: Warden.Test.V2.Authz, batch_across_parents: false"
+        )
+
+      run("{ docs { owner { name } } }", abby(), %{}, schema: schema)
+      assert [one, one, one, one, one] = messages(:check_many)
+      assert one == {:check_many, :visible, 1}
     end
 
     test "decides every parent's value at one level with one call", %{schema: schema} do
