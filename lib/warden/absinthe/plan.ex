@@ -31,13 +31,15 @@ if Code.ensure_loaded?(Absinthe) do
     def build(types, config) do
       catalog = config.catalog
       object_rules = object_rules(types, config)
+      # Redaction rules read the effective object rule of a type.
+      linked_config = Map.put(config, :object_rules, object_rules)
       redactors = redactors(types)
 
       errors =
         validate_meta(types, catalog) ++
           covered_errors(types, object_rules) ++
-          redact_errors(types, config) ++
-          missing_redaction_errors(types, config) ++ argument_leaf_errors(types)
+          redact_errors(types, linked_config) ++
+          missing_redaction_errors(types, linked_config) ++ argument_leaf_errors(types)
 
       inputs = input_plans(types)
 
@@ -585,7 +587,7 @@ if Code.ensure_loaded?(Absinthe) do
       for {ident, %Type.Object{} = object} <- Enum.sort_by(types, &elem(&1, 0)),
           not introspection_type?(object),
           ident not in @root_types,
-          struct_module <- linked_structs(object),
+          struct_module <- linked_structs(object, config),
           module = Map.get(registry, struct_module),
           module != nil,
           meta(object, :warden_redact_with) != module,
@@ -611,7 +613,7 @@ if Code.ensure_loaded?(Absinthe) do
         {:ok, info} ->
           root_errors(ident, object) ++
             redactor_authorizer_errors(object, module, info, config) ++
-            struct_errors(object, module, info) ++ nil_errors(object, module, info)
+            struct_errors(object, module, info, config) ++ nil_errors(object, module, info)
 
         :error ->
           error = """
@@ -647,11 +649,12 @@ if Code.ensure_loaded?(Absinthe) do
       if info.authorizer == config.authorizer, do: [], else: [error]
     end
 
-    # The structs the object type is linked to: the `for:` of every policy its own rule
-    # names with `can/2,3`, and its `warden_schema`. A field policy for another struct
-    # fails compilation.
-    defp struct_errors(object, module, info) do
-      linked = linked_structs(object)
+    # The structs the object type is linked to: the `for:` of every policy its effective
+    # object rule (its own rule or `default_object_rule`, and its interfaces' rules) names
+    # with `can/2,3`, and its `warden_schema`. A field policy for another struct fails
+    # compilation.
+    defp struct_errors(object, module, info, config) do
+      linked = linked_structs(object, config)
 
       if linked == [] or info.for in linked do
         []
@@ -667,9 +670,11 @@ if Code.ensure_loaded?(Absinthe) do
       end
     end
 
-    defp linked_structs(object) do
+    defp linked_structs(object, config) do
+      rule = Map.get(config.object_rules, object.identifier)
+
       from_policies =
-        for {:can, policy, _action, _opts} <- rule_leaves(meta(object, :warden_rule)),
+        for {:can, policy, _action, _opts} <- rule_leaves(rule),
             {:ok, struct_module} <- [policy_struct(policy)],
             do: struct_module
 
