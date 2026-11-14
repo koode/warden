@@ -34,6 +34,7 @@ if Code.ensure_loaded?(Absinthe) do
       values = value |> flatten(spec.shape, []) |> Enum.reverse()
       {outcomes, types, actor} = decide_values(values, spec, ctx)
       {values, actor} = redact(values, outcomes, types, spec, %{ctx | actor: actor})
+      outcomes = same_type_after_redaction(values, outcomes, types, spec, %{ctx | actor: actor})
       admits = admits(outcomes, types, spec, ctx)
       {decided, []} = rebuild(value, spec.shape, Enum.zip([values, outcomes, admits]))
       denials = for {:deny, denial} <- outcomes, do: denial
@@ -96,6 +97,29 @@ if Code.ensure_loaded?(Absinthe) do
         redacted = values |> Enum.with_index() |> Enum.map(&replaced_value(&1, replaced))
         {redacted, actor}
       end
+    end
+
+    # Absinthe resolves the concrete type of an abstract value again, on the value the
+    # walk hands it: the redacted one. When redaction changed what `resolve_type` reads,
+    # the value would run as a type whose rules were not decided for it, so it is denied.
+    # The type is never pinned to the one decided.
+    defp same_type_after_redaction(_values, outcomes, _types, %{abstract: nil}, _ctx),
+      do: outcomes
+
+    defp same_type_after_redaction(values, outcomes, types, spec, ctx) do
+      redactors = redactors(spec)
+
+      [values, outcomes]
+      |> Enum.zip()
+      |> Enum.with_index()
+      |> Enum.map(fn {{value, outcome}, index} ->
+        type = Map.get(types, index)
+
+        if outcome == :ok and Map.has_key?(redactors, type) and
+             Middleware.resolve_concrete(spec.abstract, spec.named, value, ctx.res) != type,
+           do: {:deny, denial(:deny, @undetermined, type, ctx)},
+           else: outcome
+      end)
     end
 
     defp value_type(_index, _types, %{abstract: nil} = spec), do: spec.named
