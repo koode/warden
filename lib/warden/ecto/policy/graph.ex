@@ -71,7 +71,7 @@ if Code.ensure_loaded?(Ecto) do
 
     # `{label, related_schema | {:policy, module}, action}` for every part that leads to
     # another policy.
-    defp targets(info, {:through, assoc, through_action, _if_nil}, action),
+    defp targets(info, {:through, assoc, through_action, _if_nil, _opts}, action),
       do: [{"through: #{inspect(assoc)}", related(info, assoc), through_action || action}]
 
     defp targets(info, {:through_any, assoc, through_action}, action),

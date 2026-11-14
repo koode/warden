@@ -195,6 +195,21 @@ schema cannot go through an untenanted one (or the other way round).
 A `nil` foreign key denies (`if_nil: :deny`, the default). `if_nil: :tenant` admits it
 for actors with any tenant role in the row's tenant.
 
+Options go in a third element (or the second, without an action):
+`through: {:team, :read, resolve: :ids, system: :inherit}`.
+
+* `resolve: :ids` runs the parent's scope once per actor, tenant and call, and compares
+  the foreign key with the ids it returns: `team_id = ANY($ids)` instead of a correlated
+  `EXISTS`. The ids are read from the same tenant, so the tenant condition holds. Use it
+  when the parent set is small per actor (the teams a member can see), where it is
+  faster than `EXISTS` on large child tables; keep the default for parents an actor sees
+  thousands of. The ids are read when the scope is built, so `scope/4` takes `prefix:`
+  for a query you will run with a prefix. `to_sql/4` shows the result.
+* `system: :inherit` makes the clause apply to system actors without its `rule:` naming
+  their kind: the parent policy decides them, so the clause admits only the system kinds
+  the parent admits (and the child must still list the kind in `system_kinds:`). It
+  applies to that clause only.
+
 ### `through_any:`
 
 At least one row of a `has_many` or `many_to_many` association is allowed under its own
@@ -210,8 +225,11 @@ allow :read, rule: tenant_role(:guest), through_any: {:linked_issues, :read}
 The association has no rows at all (any tenant):
 
 ```elixir
-allow :read, rule: tenant_role(:member), none: :project_teams
+allow :read, rule: tenant_role(:member), none: :teams
 ```
+
+Over a `many_to_many` it asks the join table alone (`NOT EXISTS (SELECT 1 FROM
+project_teams ...)`), without joining the far table.
 
 ### `actor_in:`
 
@@ -383,6 +401,18 @@ allow :read, rule: kind(:webhook), within: {:team_ids, :id}
 allow :read, rule: kind(:webhook), through: :team, where: [trashed_at: nil]
 
 Warden.Ecto.allowed?(hook, :read, issue)
+```
+
+When a child should follow its parent for system actors, `through: {:team, :read,
+system: :inherit}` saves naming the kinds again (see `through:`). To name them once, keep
+them in a module attribute set before `use`; options and clause values read it:
+
+```elixir
+@system_kinds [:automation, :unfurl]
+
+use Warden.Ecto.Policy, ..., system_kinds: @system_kinds
+
+allow :read, rule: kind(@system_kinds), through: :team
 ```
 
 ## Delegation

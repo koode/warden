@@ -18,13 +18,15 @@ if Code.ensure_loaded?(Ecto) do
     alias Warden.{Actor, Check, Evaluator}
     alias Warden.Ecto.Info
 
-    defstruct context: %{}, memo: %{}, stack: []
+    defstruct context: %{}, memo: %{}, stack: [], prefix: nil
 
-    @type t :: %__MODULE__{context: map, memo: map, stack: [{module, atom}]}
+    # `prefix` is the query prefix the scope runs in, for the parent ids that
+    # `through: {assoc, action, resolve: :ids}` reads while the scope is built.
+    @type t :: %__MODULE__{context: map, memo: map, stack: [{module, atom}], prefix: term}
     @type verdict :: Ecto.Query.dynamic_expr() | boolean
 
     @spec new(map) :: t
-    def new(context), do: %__MODULE__{context: context}
+    def new(context, prefix \\ nil), do: %__MODULE__{context: context, prefix: prefix}
 
     # The scope over the rows of one tenant (`{:tenant, tenant}`) or of every tenant the
     # actor may act in (`:all`), tenant conditions included.
@@ -230,9 +232,11 @@ if Code.ensure_loaded?(Ecto) do
 
     # A system actor passes only allow clauses whose `rule:` names its kind.
     @spec applicable([map], Actor.t()) :: [map]
+    # A clause with `through: {assoc, action, system: :inherit}` applies too: the parent
+    # policy then decides the system actor, and admits only the kinds it admits.
     def applicable(allows, %Actor{system?: true} = actor) do
       kind = Actor.kind(actor)
-      Enum.filter(allows, &names_kind?(&1, kind))
+      Enum.filter(allows, &(names_kind?(&1, kind) or inherits_system?(&1)))
     end
 
     def applicable(allows, %Actor{}), do: allows
@@ -242,6 +246,13 @@ if Code.ensure_loaded?(Ecto) do
         {:rule, rule} -> rule_names_kind?(rule, kind)
         _part -> false
       end)
+    end
+
+    defp inherits_system?(clause) do
+      Enum.any?(
+        clause.parts,
+        &match?({:through, _assoc, _action, _if_nil, %{system: :inherit}}, &1)
+      )
     end
 
     defp rule_names_kind?({:kind, kinds}, kind), do: kind in kinds
@@ -312,14 +323,23 @@ if Code.ensure_loaded?(Ecto) do
       {verdict, actor, state}
     end
 
-    def part(info, clause, {:through, assoc, through_action, if_nil}, actor, tenant, state) do
+    def part(info, clause, {:through, assoc, through_action, if_nil, opts}, actor, tenant, state) do
       association = info.schema.__schema__(:association, assoc)
       parent = Info.policy_for!(info.authorizer, association.related)
       action = through_action || clause.action
       {parent_verdict, actor, state} = verdict(parent, action, actor, tenant, state)
-      exists = parent_exists(info, parent, association, parent_verdict, tenant)
+
+      {parent_condition, state} =
+        case opts.resolve do
+          :exists ->
+            {parent_exists(info, parent, association, parent_verdict, tenant), state}
+
+          :ids ->
+            parent_in(info, parent, action, association, parent_verdict, actor, tenant, state)
+        end
+
       {nil_branch, actor} = nil_branch(info, association, if_nil, actor, tenant, state.context)
-      {any(exists, nil_branch), actor, state}
+      {any(parent_condition, nil_branch), actor, state}
     end
 
     def part(info, clause, {:through_any, assoc, through_action}, actor, tenant, state) do
@@ -456,6 +476,43 @@ if Code.ensure_loaded?(Ecto) do
       dynamic(exists(query))
     end
 
+    # `resolve: :ids`: the parent's scope runs once per actor, tenant and call, and the
+    # row's foreign key is compared with the ids it returns (`fk = ANY($ids)`). The ids are
+    # the parent rows of the same tenant, so the tenant condition holds as with EXISTS.
+    defp parent_in(_info, _parent, _action, _association, false, _actor, _tenant, state),
+      do: {false, state}
+
+    defp parent_in(info, parent, action, association, verdict, actor, tenant, state) do
+      key = {:ids, parent.policy, action, tenant, identity(actor), state.prefix}
+
+      {ids, state} =
+        case Map.fetch(state.memo, key) do
+          {:ok, ids} -> {ids, state}
+          :error -> read_ids(parent, association.related_key, verdict, tenant, key, state)
+        end
+
+      condition =
+        if ids == [],
+          do: false,
+          else: dynamic([{^info.as, row}], field(row, ^association.owner_key) in ^ids)
+
+      {condition, state}
+    end
+
+    defp read_ids(parent, related_key, verdict, tenant, key, state) do
+      query =
+        from(parent_row in parent.schema,
+          as: ^parent.as,
+          select: field(parent_row, ^related_key)
+        )
+
+      query = query |> restrict(tenant_condition(parent, tenant)) |> restrict(verdict)
+      query = %{query | prefix: state.prefix}
+      repo = Info.repo!(parent)
+      ids = repo.all(query)
+      {ids, %{state | memo: Map.put(state.memo, key, ids)}}
+    end
+
     defp typed_parent_exists(_info, _parent, _id_field, false, _tenant), do: false
 
     defp typed_parent_exists(info, parent, id_field, verdict, tenant) do
@@ -486,6 +543,21 @@ if Code.ensure_loaded?(Ecto) do
 
       restricted = child_restrict(query, child, verdict, tenant)
       dynamic(exists(restricted))
+    end
+
+    # `none:` over a many_to_many asks the join table alone: any link row counts, so the
+    # far table is never joined.
+    defp children_exist(info, %ManyToMany{} = association, nil, _verdict, _tenant) do
+      [{join_owner_key, owner_key} | _related] = association.join_keys
+      join_through = association.join_through
+
+      query =
+        from(link in join_through,
+          where: field(link, ^join_owner_key) == field(parent_as(^info.as), ^owner_key),
+          select: 1
+        )
+
+      dynamic(exists(query))
     end
 
     defp children_exist(info, %ManyToMany{} = association, child, verdict, tenant) do

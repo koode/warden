@@ -220,7 +220,7 @@ if Code.ensure_loaded?(Ecto) do
       tenant ++ through
     end
 
-    defp part_fields(info, {:through, assoc, _action, _if_nil}),
+    defp part_fields(info, {:through, assoc, _action, _if_nil, _opts}),
       do: [info.schema.__schema__(:association, assoc).owner_key]
 
     defp part_fields(_info, {:through_type, {type_field, id_field, _targets}}),

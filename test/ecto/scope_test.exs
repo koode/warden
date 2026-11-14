@@ -534,7 +534,10 @@ defmodule Warden.Ecto.ScopeTest do
       assert %{rule: {:allow, :read, _index}, result: :ok} = through
 
       assert [
-               %{rule: {:through, :team, nil, :tenant}, result: :ok},
+               %{
+                 rule: {:through, :team, nil, :tenant, %{resolve: :exists, system: :deny}},
+                 result: :ok
+               },
                %{rule: {:where, [trashed_at: nil]}, result: :ok}
              ] = through.steps
 
@@ -606,6 +609,64 @@ defmodule Warden.Ecto.ScopeTest do
       narrowed = where(query, [issue: issue], issue.id == ^world.i1_public.id)
       assert {1, nil} = WardenEcto.delete_all(Repo, narrowed, [])
       assert Repo.get(Issue, world.i1_public.id) == nil
+    end
+  end
+
+  describe "through options" do
+    test "resolve: :ids compares the foreign key with the parent ids, once per tenant" do
+      world = world()
+      user = Map.put(sam(), :memberships, %{"t1" => [:member], "t2" => [:member]})
+
+      {sql, _params} = WardenEcto.to_sql(Issue, actor(user), :read_ids, [])
+      assert sql =~ ~s("team_id" = ANY($)
+      refute sql =~ ~s(FROM "teams")
+
+      {_query, count} = count_queries(fn -> WardenEcto.scope(Issue, actor(user), :read_ids) end)
+      assert count == 2
+
+      read_ids = assert_agrees(Issue, actor(user), :read_ids, [:team])
+
+      expected =
+        Enum.sort([
+          world.i1_public.id,
+          world.i1_private.id,
+          world.teamless.id,
+          world.i2_public.id
+        ])
+
+      assert read_ids == expected
+    end
+
+    test "resolve: :ids keeps the tenant condition" do
+      world = world()
+      # A t2 issue on a t1 team that Sam may read.
+      crossing = insert!(%Issue{workspace_id: "t2", team_id: world.t1_public.id})
+      user = Map.put(sam(), :memberships, %{"t1" => [:member], "t2" => [:guest]})
+
+      refute crossing.id in assert_agrees(Issue, actor(user), :read_ids, [:team])
+    end
+
+    test "system: :inherit admits the system actors the parent admits, through that clause only" do
+      world = world()
+      hook = webhook(tenant: "t1", bounds: %{team_ids: [world.t1_private.id]})
+
+      job =
+        Warden.system_actor(Authz,
+          kind: :job,
+          tenant: "t1",
+          bounds: %{team_ids: [world.t1_private.id]}
+        )
+
+      assert assert_agrees(Issue, hook, :read_ids, [:team]) == [world.i1_private.id]
+      assert assert_agrees(Issue, job, :read_ids, [:team]) == []
+      assert scope_ids(Issue, job, :read) == []
+      assert scope_ids(Issue, job, :write) == []
+    end
+
+    test "none: over a many_to_many reads the join table only" do
+      _world = world()
+      {sql, _params} = WardenEcto.to_sql(Project, actor(sam()), :read, tenant: "t1")
+      assert sql =~ ~r/NOT \(exists\(\(SELECT 1 FROM "project_teams" AS \w+ WHERE/
     end
   end
 

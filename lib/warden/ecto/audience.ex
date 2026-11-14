@@ -42,7 +42,7 @@ if Code.ensure_loaded?(Ecto) do
       info = Info.policy_for!(authorizer, row_schema(row))
       Info.ensure_action!(info, action)
       Graph.ensure_valid!(info.policy)
-      {verdict, actor} = verdict(info, action, actor, row, Scope.new(context))
+      {verdict, actor} = verdict(info, action, actor, row, Scope.new(context, Info.prefix(row)))
       {element, actor, info, verdict, index}
     end
 

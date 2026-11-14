@@ -72,7 +72,9 @@ if Code.ensure_loaded?(Ecto) do
 
     @typedoc """
     Options: `:authorizer`, `:context` (the context for policy callbacks when the first
-    argument is an actor) and, for `scope/4` and `to_sql/4`, `:tenant`.
+    argument is an actor) and, for `scope/4` and `to_sql/4`, `:tenant` and `:prefix`
+    (the query prefix the scope will run in, for the parent ids that
+    `through: {assoc, action, resolve: :ids}` reads while the scope is built).
     """
     @type opts :: keyword
 
@@ -108,7 +110,8 @@ if Code.ensure_loaded?(Ecto) do
       Graph.ensure_valid!(info.policy)
 
       which = if Keyword.has_key?(opts, :tenant), do: {:tenant, opts[:tenant]}, else: :all
-      {verdict, actor, _state} = Scope.scope(info, action, actor, which, Scope.new(context))
+      state = Scope.new(context, Keyword.get(opts, :prefix))
+      {verdict, actor, _state} = Scope.scope(info, action, actor, which, state)
 
       emit_scope(info, action, actor, Keyword.get(opts, :tenant), verdict)
 

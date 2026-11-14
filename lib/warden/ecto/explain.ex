@@ -17,7 +17,7 @@ if Code.ensure_loaded?(Ecto) do
 
       case locate(info, row) do
         {:ok, key, tenant} ->
-          state = Scope.new(context)
+          state = Scope.new(context, Info.prefix(row))
           own = side(info, action, %{actor | delegator: nil}, key, tenant, state)
           delegator = actor.delegator && side(info, action, actor.delegator, key, tenant, state)
 

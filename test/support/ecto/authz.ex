@@ -88,9 +88,9 @@ defmodule Warden.Test.Ecto.Issues do
     as: :issue,
     tenant: :workspace_id,
     repo: Warden.Test.Repo,
-    actions: [:read, :read_trashed, :write],
+    actions: [:read, :read_ids, :read_trashed, :write],
     write_actions: [:write],
-    system_kinds: [:webhook]
+    system_kinds: [:webhook, :job]
 
   alias Warden.Test.Ecto.Share
 
@@ -102,6 +102,13 @@ defmodule Warden.Test.Ecto.Issues do
 
   allow :read, rule: kind(:agent), within: {:issue_ids, :id}
   allow :read, rule: kind(:webhook), through: :team, where: [trashed_at: nil]
+  # Teams' scope as an id list, and system actors admitted as the team policy admits
+  # them (webhooks within their bounds, never jobs).
+  allow :read_ids,
+    through: {:team, :read, resolve: :ids, system: :inherit},
+    if_nil: :tenant,
+    where: [trashed_at: nil]
+
   allow :read_trashed, tenant_role(:admin)
   allow :write, rule: tenant_role(:member), through: {:team, :read}, where: [trashed_at: nil]
   allow :write, actor_in: [:author_id], where: [trashed_at: nil]
@@ -141,7 +148,7 @@ defmodule Warden.Test.Ecto.Projects do
 
   alias Warden.Test.Ecto.ProjectMember
 
-  allow :read, rule: tenant_role(:member), none: :project_teams
+  allow :read, rule: tenant_role(:member), none: :teams
   allow :read, through_any: :teams
   allow :read, rule: tenant_role(:guest), actor_in: [:lead_id, :creator_id]
   allow :read, rule: tenant_role(:guest), member_of: {ProjectMember, :project_id, :user_id}

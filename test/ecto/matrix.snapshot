@@ -7,12 +7,12 @@ resource          agent  api_key_read  guest  member  outsider  owner  webhook
 comment_teamless  read   read          read   read    -         read   -
 
 policy Warden.Test.Ecto.Issues
-actions read read_trashed write
-resource        agent  api_key_read  guest  member      outsider  owner                    webhook
-issue_private   -      read          -      read,write  -         read_trashed             read
-issue_public    read   read          -      read,write  -         read,read_trashed,write  -
-issue_teamless  read   read          read   read        -         read,read_trashed        -
-issue_trashed   -      -             -      -           -         read_trashed             -
+actions read read_ids read_trashed write
+resource        agent          api_key_read   guest          member               outsider  owner                             webhook
+issue_private   -              read,read_ids  -              read,read_ids,write  -         read_trashed                      read,read_ids
+issue_public    read           read,read_ids  -              read,read_ids,write  -         read,read_ids,read_trashed,write  -
+issue_teamless  read,read_ids  read,read_ids  read,read_ids  read,read_ids        -         read,read_ids,read_trashed        -
+issue_trashed   -              -              -              -                    -         read_trashed                      -
 
 policy Warden.Test.Ecto.Notes
 actions read write

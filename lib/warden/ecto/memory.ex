@@ -138,7 +138,7 @@ if Code.ensure_loaded?(Ecto) do
     defp part(
            info,
            clause,
-           {:through, assoc, through_action, if_nil},
+           {:through, assoc, through_action, if_nil, _opts},
            actor,
            tenant,
            struct,

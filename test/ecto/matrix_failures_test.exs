@@ -93,7 +93,7 @@ defmodule Warden.Ecto.MatrixFailuresTest do
 
       assert cells[{"actor 1", "row 1", :read}] == true
       assert cells[{"actor 2", "row 1", :read}] == false
-      assert map_size(cells) == 6
+      assert map_size(cells) == 8
     end
 
     test "a plain Warden.Policy gets the checks that apply" do
@@ -168,8 +168,8 @@ defmodule Warden.Ecto.MatrixFailuresTest do
       [_title | lines] = error.message |> String.split("\n") |> Enum.drop(-1)
 
       assert error.message =~ ~r/differs from .* in \d+ cell\(s\)/
-      assert "  resource issue, actor member: snapshot read,write, now -" in lines
-      assert "  resource issue, actor guest: snapshot -, now read,write" in lines
+      assert "  resource issue, actor member: snapshot read,read_ids,write, now -" in lines
+      assert "  resource issue, actor guest: snapshot -, now read,read_ids,write" in lines
       assert Enum.all?(lines, &(&1 =~ ~r/^  resource \w+, actor (member|guest)/))
       refute error.message =~ "client"
     end

@@ -213,7 +213,7 @@ defmodule Warden.Ecto.PropertyTest do
       rows = insert_world!(world)
       {actor, context} = actor!(spec, rows)
 
-      for action <- [:read, :read_trashed, :write] do
+      for action <- [:read, :read_ids, :read_trashed, :write] do
         expected = assert_one_answer(Issue, actor, action, [:team])
 
         if action == :read and context != nil do
@@ -231,7 +231,13 @@ defmodule Warden.Ecto.PropertyTest do
       rows = insert_world!(world)
       {effective, nil} = actor!(spec, rows)
 
-      for {schema, action} <- [{Issue, :read}, {Issue, :write}, {Comment, :read}, {Team, :read}] do
+      for {schema, action} <- [
+            {Issue, :read},
+            {Issue, :read_ids},
+            {Issue, :write},
+            {Comment, :read},
+            {Team, :read}
+          ] do
         own = scoped(schema, %{effective | delegator: nil}, action)
         theirs = scoped(schema, effective.delegator, action)
         assert scoped(schema, effective, action) == Enum.filter(own, &(&1 in theirs))
