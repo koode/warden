@@ -92,6 +92,7 @@ defmodule Warden.MixProject do
         "Absinthe.Type.function/2",
         "Warden.Absinthe.Hydrator",
         "Warden.Absinthe.Phase.ItemErrors",
+        "Warden.Absinthe.Phase.Publish",
         "Warden.Absinthe.Plugin",
         "Warden.Absinthe.SubscriptionConfig",
         "Warden.Policy.Dispatch",

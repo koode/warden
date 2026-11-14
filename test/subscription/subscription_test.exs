@@ -90,7 +90,7 @@ defmodule Warden.SubscriptionTest do
   end
 
   describe "publish time" do
-    test "two subscribers with different roles on the same topic each get their own view" do
+    test "two subscribers with different roles on the same topic: only the allowed one is pushed" do
       # User: viewer or self (value-dependent, so both may subscribe).
       {:ok, admin_topic} = subscribe("subscription { sharedUser { id email } }", admin())
       {:ok, nobody_topic} = subscribe("subscription { sharedUser { id email } }", nobody())
@@ -102,9 +102,7 @@ defmodule Warden.SubscriptionTest do
                data: %{"sharedUser" => %{"id" => "u2", "email" => "bob@example.com"}}
              }
 
-      nobody_data = receive_data(nobody_topic)
-      assert nobody_data.data == %{"sharedUser" => nil}
-      assert [%{message: "Forbidden"}] = nobody_data.errors
+      refute_receive {:subscription_data, ^nobody_topic, _data}, 200
     end
 
     test "a return type whose value-independent rule denies refuses the subscription" do
@@ -127,7 +125,7 @@ defmodule Warden.SubscriptionTest do
 
       Agent.update(store, fn _ -> [:viewer] end)
       publish(secret(), secret_rotated: "secrets")
-      assert receive_data(topic).data == %{"secretRotated" => nil}
+      refute_receive {:subscription_data, ^topic, _data}, 200
 
       Agent.update(store, fn _ -> [:admin] end)
       publish(secret(), secret_rotated: "secrets")
@@ -144,9 +142,7 @@ defmodule Warden.SubscriptionTest do
 
       Agent.update(store, fn _ -> [] end)
       publish("hello", admin_feed: "admin")
-      data = receive_data(topic)
-      assert data.data == %{"adminFeed" => nil}
-      assert [%{path: ["adminFeed"]}] = data.errors
+      refute_receive {:subscription_data, ^topic, _data}, 200
     end
 
     test "the publisher's identity is never used" do
@@ -157,9 +153,8 @@ defmodule Warden.SubscriptionTest do
       result = run("mutation { rotateSecret }", admin(), context: %{pubsub: Pubsub})
       assert result.data == %{"rotateSecret" => true}
 
-      data = receive_data(topic)
-      assert data.data == %{"sharedUser" => nil}
-      assert [%{message: "Forbidden"}] = data.errors
+      # Resolved with the admin's identity, the subscriber would be pushed the user.
+      refute_receive {:subscription_data, ^topic, _data}, 200
     end
   end
 
@@ -181,7 +176,7 @@ defmodule Warden.SubscriptionTest do
                "sharedUser" => %{"id" => "u1", "email" => nil}
              }
 
-      assert receive_data(nobody_topic).data == %{"sharedUser" => nil}
+      refute_receive {:subscription_data, ^nobody_topic, _data}, 200
     end
 
     test "a config returned as a map loses its context_id too" do

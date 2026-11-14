@@ -31,7 +31,7 @@ defmodule Warden.Adversarial.SubscriptionTest do
     :ok = Absinthe.Subscription.publish(Pubsub, Data.user("u2"), shared_user: "users")
 
     assert receive_data(admin_topic).data == %{"sharedUser" => %{"email" => "bob@example.com"}}
-    assert receive_data(nobody_topic).data == %{"sharedUser" => nil}
+    refute_receive {:subscription_data, ^nobody_topic, _data}, 200
   end
 
   test "subscribing to a type the actor can never see (event-timing oracle)" do

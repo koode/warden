@@ -11,6 +11,8 @@ if Code.ensure_loaded?(Absinthe) do
     #
     # Both are attached by `Warden.Absinthe.Phase.Attach` at schema compile time.
 
+    require Logger
+
     alias Absinthe.Middleware.Batch
     alias Absinthe.Resolution
     alias Absinthe.Type.{Interface, Union}
@@ -92,6 +94,7 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     def pre(%Resolution{} = res, %{authorizer: authorizer, checks: checks} = spec) do
+      check_publish_loop(res)
       {actor, res} = actor(res, authorizer)
 
       base = %Check{
@@ -323,9 +326,12 @@ if Code.ensure_loaded?(Absinthe) do
           |> Resolution.put_result({:error, term})
           |> Map.put(:middleware, [])
           |> maybe_record_fold()
+          |> mark_root_denied()
 
         :null ->
-          maybe_record_fold(%{res | state: :resolved, value: nil, middleware: []})
+          %{res | state: :resolved, value: nil, middleware: []}
+          |> maybe_record_fold()
+          |> mark_root_denied()
 
         {:replace, value} when kind == :field ->
           # Object rules still apply to the replacement value.
@@ -407,6 +413,7 @@ if Code.ensure_loaded?(Absinthe) do
     def post(res, _spec), do: res
 
     defp decide_and_walk(%Resolution{value: value} = res, spec) do
+      check_publish_loop(res)
       {actor, res} = actor(res, spec.authorizer)
 
       base = %Check{
@@ -607,7 +614,7 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     defp finish_post({tag, pending}, res, _spec) when tag in [:null, :bubble] do
-      res |> null_field(pending) |> maybe_record_fold()
+      res |> null_field(pending) |> maybe_record_fold() |> mark_root_denied()
     end
 
     # Only produced inside lists; unreachable at the top level.
@@ -616,10 +623,14 @@ if Code.ensure_loaded?(Absinthe) do
     defp finish_post({:fail_list, denial}, res, spec) do
       case call_deny(spec.authorizer, denial) do
         {:error, term} ->
-          maybe_record_fold(%{res | value: nil, errors: [normalize_error!(term, spec)]})
+          %{res | value: nil, errors: [normalize_error!(term, spec)]}
+          |> maybe_record_fold()
+          |> mark_root_denied()
 
         :null ->
-          maybe_record_fold(%{res | value: nil})
+          %{res | value: nil}
+          |> maybe_record_fold()
+          |> mark_root_denied()
 
         other ->
           object_replace_error!(spec, other)
@@ -892,6 +903,56 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     def maybe_record_fold(res), do: res
+
+    # A denial that nulls a subscription root field marks the execution: the subscriber
+    # may not learn that the event happened, so `Warden.Absinthe.Subscription.run_docset/3`
+    # pushes nothing for this document. Denials deeper in the payload keep their nulls.
+    # The mark lives in `resolution.acc`, which is never part of the pushed result.
+    defp mark_root_denied(%Resolution{parent_type: %{identifier: :subscription}} = res) do
+      state = res.acc |> Map.get(@acc_key, %{}) |> Map.put(:root_denied, true)
+      %{res | acc: Map.put(res.acc, @acc_key, state)}
+    end
+
+    defp mark_root_denied(res), do: res
+
+    def root_denied?(%{@acc_key => %{root_denied: true}}), do: true
+    def root_denied?(_acc), do: false
+
+    # Set by `Warden.Absinthe.Phase.Publish`, which only Warden's publish loop inserts.
+    def mark_published(acc) do
+      state = acc |> Map.get(@acc_key, %{}) |> Map.put(:published, true)
+      Map.put(acc, @acc_key, state)
+    end
+
+    # A subscription root field resolves only when a subscription is published. Without
+    # the mark of Warden's publish loop, a denied root would still be pushed as `null`.
+    defp check_publish_loop(%Resolution{parent_type: %{identifier: :subscription}} = res) do
+      case res.acc do
+        %{@acc_key => %{published: true}} -> :ok
+        _other -> warn_unwired(res.context)
+      end
+    end
+
+    defp check_publish_loop(_res), do: :ok
+
+    # Logs once per pubsub module; the flag lives in `:persistent_term`, written once.
+    defp warn_unwired(context) do
+      pubsub = Map.get(context, :pubsub)
+      key = {__MODULE__, :unwired_pubsub, pubsub}
+
+      if not :persistent_term.get(key, false) do
+        :persistent_term.put(key, true)
+
+        Logger.warning("""
+        Warden: #{inspect(pubsub)} publishes subscriptions without Warden's loop, so a \
+        subscriber whose subscription Warden denies at publish time is still pushed the \
+        event (as null). Add to #{inspect(pubsub)}: defdelegate run_docset(pubsub, docs, \
+        mutation_result), to: Warden.Absinthe.Subscription\
+        """)
+      end
+
+      :ok
+    end
 
     defp split_error!(term, _res) when is_binary(term), do: {term, %{}}
 

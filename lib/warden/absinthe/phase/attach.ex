@@ -76,12 +76,14 @@ if Code.ensure_loaded?(Absinthe) do
       :ok
     end
 
-    # A subscription whose return type has a value-dependent object rule nulls the payload
-    # of a denied publish, but the subscriber still gets an event: that an object exists,
-    # and when it changes. Warn about subscriptions with nothing to refuse the subscribe
-    # (no field or argument rule; an explicit `authorize public()` acknowledges it);
-    # `can(Policy, :read, arg: [:id])` on the field refuses it for an object the
-    # subscriber may not read.
+    # A subscription whose return type has a value-dependent object rule is decided only
+    # at publish time. Absinthe's own publish loop pushes a denied payload as `null`, so
+    # the subscriber still learns that an object exists, and when it changes; only a
+    # pubsub that delegates `run_docset/3` to `Warden.Absinthe.Subscription` pushes
+    # nothing, and the schema cannot tell which pubsub an app uses. Warn about
+    # subscriptions with nothing to refuse the subscribe (no field or argument rule; an
+    # explicit `authorize public()` acknowledges it); `can(Policy, :read, arg: [:id])` on
+    # the field refuses it for an object the subscriber may not read.
     defp warn_unguarded_subscriptions(schema, types, plan) do
       subscription = Map.get(types, :subscription)
       fields = if subscription, do: Enum.sort_by(subscription.fields, &elem(&1, 0)), else: []
@@ -93,7 +95,8 @@ if Code.ensure_loaded?(Absinthe) do
         IO.warn(
           """
           Warden: subscription #{inspect(field.name)} in #{inspect(schema)} is protected \
-          only by the object rule of its return type, which reads the value: a subscriber \
+          only by the object rule of its return type, which reads the value: unless the \
+          pubsub delegates `run_docset/3` to `Warden.Absinthe.Subscription`, a subscriber \
           who may not see an object still gets an event (with no data) whenever it is \
           published. Add a field rule that refuses the subscribe, such as \
           `authorize can(Policy, :read, arg: [:id])`.\

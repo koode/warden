@@ -82,6 +82,14 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
       end
     end
 
+    defp pushed(topic) do
+      receive do
+        {:subscription_data, ^topic, data} -> data
+      after
+        200 -> nil
+      end
+    end
+
     defp cleanup(topics) do
       for topic <- Enum.uniq(topics) do
         Registry.unregister(Pubsub.Topics, topic)
@@ -114,7 +122,7 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
       cleanup([admin_topic])
     end
 
-    test "a value-dependent return-type rule subscribes, then delivers null per subscriber" do
+    test "a value-dependent return-type rule subscribes, then pushes only to allowed subscribers" do
       # Account: any_of([role(:admin), check(:self)]). The check needs the payload, so
       # both members may subscribe; each publish is checked per subscriber.
       doc = "subscription { accountChanged { id email } }"
@@ -128,9 +136,7 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
                "accountChanged" => %{"id" => "a1", "email" => "alice@secret.example"}
              }
 
-      bob_data = receive_data(bob)
-      assert bob_data.data == %{"accountChanged" => nil}
-      refute contains?(bob_data, "alice@secret.example")
+      refute_receive {:subscription_data, ^bob, _data}, 200
       cleanup([alice, bob])
     end
 
@@ -147,7 +153,7 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
                "accountChanged" => %{"id" => "a1", "email" => "alice@secret.example"}
              }
 
-      assert receive_data(bob).data == %{"accountChanged" => nil}
+      refute_receive {:subscription_data, ^bob, _data}, 200
       cleanup([alice, bob])
     end
 
@@ -164,15 +170,17 @@ defmodule Warden.RedteamFuzz.RajskaRegressionsTest do
           tenant_doc_changed: "rf_tenant"
         )
 
+      # A denied subscription root is not pushed: t2 gets nothing unless it shares t1's
+      # resolution.
       t1_data = receive_data(t1)
-      t2_data = if t1 == t2, do: t1_data, else: receive_data(t2)
+      t2_data = if t1 == t2, do: t1_data, else: pushed(t2)
       cleanup([t1, t2])
 
       assert t1_data.data == %{
                "tenantDocChanged" => %{"id" => "td-t1", "body" => "TENANT-SECRET-t1"}
              }
 
-      refute contains?(t2_data.data, "TENANT-SECRET-t1"),
+      refute contains?(t2_data, "TENANT-SECRET-t1"),
              "the tenant t2 subscriber received tenant t1's document (shared topic: #{t1 == t2})"
     end
   end

@@ -1100,6 +1100,14 @@ defmodule Warden.RedteamFuzz.FuzzTest do
     assert Map.get(stats, :executed, 0) > div(@runs, 4), inspect(stats)
   end
 
+  defp pushed(topic) do
+    receive do
+      {:subscription_data, ^topic, data} -> data
+    after
+      0 -> nil
+    end
+  end
+
   @tag timeout: :infinity
   property "subscriptions: each subscriber gets its own view, even with a shared context_id" do
     check all(
@@ -1137,14 +1145,14 @@ defmodule Warden.RedteamFuzz.FuzzTest do
       published = Data.entity(published_id)
       :ok = Absinthe.Subscription.publish(Warden.Test.Pubsub, published, [{field, channel}])
 
+      # Publishing resolves every document in this process, so every push is already in
+      # the mailbox. A subscriber whose subscription root Warden denies gets none.
       payloads =
-        Map.new(topics, fn topic ->
-          receive do
-            {:subscription_data, ^topic, data} -> {topic, data}
-          after
-            1000 -> flunk("no data published to #{topic}\n#{doc}")
-          end
-        end)
+        for topic <- topics,
+            data = pushed(topic),
+            data != nil,
+            into: %{},
+            do: {topic, data}
 
       shared? = length(topics) < Enum.count(subs, &match?({_, %{"subscribed" => _}}, &1))
 
@@ -1158,7 +1166,19 @@ defmodule Warden.RedteamFuzz.FuzzTest do
             take_stats()
             expected = %{key => expect_root(name, args, oracle_sel(elem(root, 5)), o, published)}
             flags = take_stats()
-            got = payloads[topic].data
+
+            got =
+              case Map.fetch(payloads, topic) do
+                {:ok, payload} ->
+                  payload.data
+
+                :error ->
+                  assert Map.fetch!(expected, key) == nil,
+                         "MISSING PUSH (subscription)\n" <>
+                           describe(o, doc, vars, "expected: #{inspect(expected)}")
+
+                  normalize(expected)
+              end
 
             assert safe?(got, expected),
                    "LEAK (subscription#{if shared?, do: ", shared context_id"})\n" <>

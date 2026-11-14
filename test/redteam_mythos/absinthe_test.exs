@@ -12,6 +12,18 @@ defmodule Warden.RedteamMythos.FeedSchema do
     field :note, :string
   end
 
+  # A value-dependent rule that differs per subscriber: members of the card's workspace.
+  object :member_card do
+    authorize tenant_role(:member)
+    field :id, non_null(:integer)
+  end
+
+  # Raises for a subscriber whose context asks for it, to prove one failing document does
+  # not stop the others.
+  def resolve_published(card, _args, %{context: context}) do
+    if Map.get(context, :raise_on_publish), do: raise("publish failed"), else: {:ok, card}
+  end
+
   query do
     field :card, :card do
       arg :id, non_null(:integer)
@@ -27,7 +39,39 @@ defmodule Warden.RedteamMythos.FeedSchema do
       config fn args, _info -> {:ok, topic: "card:#{args.id}"} end
       resolve fn card, _args, _resolution -> {:ok, card} end
     end
+
+    field :card_published, :card do
+      authorize public()
+      config fn _args, _info -> {:ok, topic: "cards"} end
+      resolve &__MODULE__.resolve_published/3
+    end
+
+    # Only the object rule of the payload decides; `public()` acknowledges that.
+    field :member_card_changed, :member_card do
+      authorize public()
+      arg :id, non_null(:integer)
+      config fn args, _info -> {:ok, topic: "member_card:#{args.id}"} end
+    end
   end
+end
+
+defmodule Warden.RedteamMythos.PlainPubsub do
+  @moduledoc false
+  # A pubsub that does not delegate `run_docset/3` to Warden, so Absinthe's own publish
+  # loop runs. Delivers through the registry of `Warden.Test.Pubsub`.
+  @behaviour Absinthe.Subscription.Pubsub
+
+  @impl true
+  def node_name, do: to_string(node())
+
+  @impl true
+  def subscribe(topic), do: Warden.Test.Pubsub.subscribe(topic)
+
+  @impl true
+  def publish_mutation(_proxy_topic, _mutation_result, _subscribed_fields), do: :ok
+
+  @impl true
+  def publish_subscription(topic, data), do: Warden.Test.Pubsub.publish_subscription(topic, data)
 end
 
 defmodule Warden.RedteamMythos.AbsintheTest do
@@ -35,9 +79,10 @@ defmodule Warden.RedteamMythos.AbsintheTest do
   # test is an open hole. Not async: subscriptions share the test Pubsub registry.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
   import Warden.Test.CompileHelpers
 
-  alias Warden.RedteamMythos.FeedSchema
+  alias Warden.RedteamMythos.{FeedSchema, PlainPubsub}
   alias Warden.Test.Pubsub
   alias Warden.Test.RedteamV2.{Card, People}
 
@@ -87,10 +132,10 @@ defmodule Warden.RedteamMythos.AbsintheTest do
     error in CompileError -> {:refused, Exception.message(error)}
   end
 
-  defp subscribe(document, user) do
-    context = People.context(user, %{pubsub: Pubsub})
+  defp subscribe(document, user, schema \\ FeedSchema, pubsub \\ Pubsub) do
+    context = People.context(user, %{pubsub: pubsub})
 
-    case Absinthe.run(document, FeedSchema, context: context) do
+    case Absinthe.run(document, schema, context: context) do
       {:ok, %{"subscribed" => topic}} ->
         :ok = Pubsub.subscribe(topic)
         {:ok, topic}
@@ -132,9 +177,10 @@ defmodule Warden.RedteamMythos.AbsintheTest do
   end
 
   # Changed to match the decision: an unguarded subscription is a compile-time warning,
-  # and `can(Policy, :read, arg: [:id])` on the field refuses the subscribe.
+  # `can(Policy, :read, arg: [:id])` on the field refuses the subscribe, and a payload
+  # whose root object is denied at publish time is not pushed at all.
   describe "HOLE: a subscriber is pushed an event for a payload it may not see" do
-    test "a subscription guarded only by a value-dependent object rule warns at compile time" do
+    test "a subscription guarded only by a value-dependent object rule pushes nothing for a hidden card" do
       unguarded = """
         alias Warden.Test.RedteamV2.{CardFields, Cards}
 
@@ -157,9 +203,23 @@ defmodule Warden.RedteamMythos.AbsintheTest do
         end
       """
 
-      warnings = ExUnit.CaptureIO.capture_io(:stderr, fn -> compile_outcome(unguarded) end)
+      warnings =
+        ExUnit.CaptureIO.capture_io(:stderr, fn -> send(self(), compile_outcome(unguarded)) end)
+
+      assert_received {:ok, schema}
       assert warnings =~ ~s|subscription "card_changed"|
       assert warnings =~ "can(Policy, :read, arg: [:id])"
+
+      document = "subscription { cardChanged(id: 2) { id } }"
+      {:ok, topic} = subscribe(document, People.abby(), schema)
+      :ok = Absinthe.Subscription.publish(Pubsub, Card.get(2), card_changed: "card:2")
+      assert pushes(topic, []) == []
+
+      {:ok, visible_topic} =
+        subscribe("subscription { cardChanged(id: 1) { id } }", People.abby(), schema)
+
+      :ok = Absinthe.Subscription.publish(Pubsub, Card.get(1), card_changed: "card:1")
+      assert [%{data: %{"cardChanged" => %{"id" => 1}}}] = pushes(visible_topic, [])
 
       guarded =
         String.replace(
@@ -202,6 +262,77 @@ defmodule Warden.RedteamMythos.AbsintheTest do
 
       assert [%{data: %{"cardChanged" => %{"note" => "[hidden]"}}}] = pushes(reader_topic, [])
       assert [%{data: %{"cardChanged" => %{"note" => "note 1"}}}] = pushes(staff_topic, [])
+    end
+  end
+
+  describe "publish-time denial of the subscription root" do
+    @document "subscription { memberCardChanged(id: 3) { id } }"
+
+    test "two subscribers on one topic: only the allowed one receives" do
+      member = %{id: "sam", memberships: %{"t2" => [:member]}}
+      {:ok, member_topic} = subscribe(@document, member)
+      {:ok, outsider_topic} = subscribe(@document, People.abby())
+
+      :ok =
+        Absinthe.Subscription.publish(Pubsub, Card.get(3), member_card_changed: "member_card:3")
+
+      assert [%{data: %{"memberCardChanged" => %{"id" => 3}}}] = pushes(member_topic, [])
+      assert pushes(outsider_topic, []) == []
+    end
+
+    test "a pubsub that does not delegate run_docset/3 keeps pushing null, and is warned about once" do
+      start_supervised!({Absinthe.Subscription, PlainPubsub})
+      {:ok, topic} = subscribe(@document, People.abby(), FeedSchema, PlainPubsub)
+
+      first =
+        capture_log(fn ->
+          :ok =
+            Absinthe.Subscription.publish(PlainPubsub, Card.get(3),
+              member_card_changed: "member_card:3"
+            )
+        end)
+
+      second =
+        capture_log(fn ->
+          :ok =
+            Absinthe.Subscription.publish(PlainPubsub, Card.get(3),
+              member_card_changed: "member_card:3"
+            )
+        end)
+
+      assert [%{data: %{"memberCardChanged" => nil}}, %{data: %{"memberCardChanged" => nil}}] =
+               pushes(topic, [])
+
+      assert first =~ "run_docset"
+      assert first =~ inspect(PlainPubsub)
+      refute second =~ "run_docset"
+    end
+
+    test "a document that raises is logged and the other subscribers are still pushed" do
+      document = "subscription { cardPublished { id } }"
+      {:ok, topic} = subscribe(document, People.abby())
+      context = People.context(People.abby(), %{pubsub: Pubsub, raise_on_publish: true})
+
+      {:ok, %{"subscribed" => failing_topic}} =
+        Absinthe.run(document, FeedSchema, context: context)
+
+      :ok = Pubsub.subscribe(failing_topic)
+
+      log =
+        capture_log(fn ->
+          :ok = Absinthe.Subscription.publish(Pubsub, Card.get(1), card_published: "cards")
+        end)
+
+      assert [%{data: %{"cardPublished" => %{"id" => 1}}}] = pushes(topic, [])
+      assert pushes(failing_topic, []) == []
+      assert log =~ "publish failed"
+    end
+
+    test "the publish loop mirrors the Absinthe release it was compared against" do
+      # `Warden.Absinthe.Subscription.run_docset/3` copies Absinthe's own loop. A new
+      # Absinthe release fails this test until the two loops are compared again.
+      version = :absinthe |> Application.spec(:vsn) |> to_string()
+      assert Version.match?(version, "~> 1.12.0")
     end
   end
 end

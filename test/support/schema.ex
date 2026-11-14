@@ -431,6 +431,10 @@ defmodule Warden.Test.Pubsub do
   @impl true
   def publish_mutation(_proxy_topic, _mutation_result, _subscribed_fields), do: :ok
 
+  # Warden's publish loop: a subscriber whose subscription root Warden denies gets no push.
+  @impl true
+  defdelegate run_docset(pubsub, docs, mutation_result), to: Warden.Absinthe.Subscription
+
   @impl true
   def publish_subscription(topic, data) do
     for {pid, _} <- Registry.lookup(__MODULE__.Topics, topic) do

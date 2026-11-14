@@ -66,8 +66,9 @@ defmodule Warden.V2SubscriptionTest do
     publish(Doc.get(2))
     assert receive_data(topic) == %{data: %{"docUpdated" => %{"id" => 2, "body" => "doc body"}}}
 
+    # A denied subscription root is not pushed at all.
     publish(Doc.get(1))
-    assert receive_data(topic) == %{data: %{"docUpdated" => nil}}
+    refute_receive {:subscription_data, ^topic, _data}, 200
   end
 
   test "the tenant-role cache does not survive into the next publish" do
