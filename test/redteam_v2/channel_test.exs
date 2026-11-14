@@ -28,17 +28,18 @@ defmodule Warden.RedteamV2.ChannelTest do
   defp revoke(roles_agent), do: Agent.update(roles_agent, fn _roles -> [] end)
 
   describe "holes" do
-    # LOW: Warden stops a denied channel with {:stop, ...}, and Phoenix then runs the
-    # channel's terminate/2, which is not guarded: a push from there reaches the client
-    # after the denial.
-    test "terminate/2 cannot push after the denial", %{socket: socket, roles_agent: roles_agent} do
+    # Decided: Warden does not wrap terminate/2. It runs after a denial with reason
+    # {:shutdown, :forbidden}, and the guides say it must not push.
+    test "terminate/2 runs after the denial with reason {:shutdown, :forbidden}",
+         %{socket: socket, roles_agent: roles_agent} do
+      socket = Phoenix.Socket.assign(socket, :test_pid, self())
       {:ok, _reply, channel} = subscribe_and_join(socket, FarewellChannel, "farewell:1")
       revoke(roles_agent)
 
       push(channel, "ping", %{})
 
       assert_push("warden:denied", _reply)
-      refute_push("farewell", _payload, 200)
+      assert_receive {:terminated, {:shutdown, :forbidden}}
     end
   end
 

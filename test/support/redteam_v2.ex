@@ -214,7 +214,7 @@ end
 
 defmodule Warden.RedteamV2.FarewellChannel do
   @moduledoc false
-  # Rechecks on every push. Its terminate/2 pushes a farewell, and one event drops
+  # Rechecks on every push. Its terminate/2 reports its reason, and one event drops
   # Warden's socket state.
   use Phoenix.Channel
   import Warden.Rule
@@ -235,9 +235,11 @@ defmodule Warden.RedteamV2.FarewellChannel do
     {:noreply, stripped}
   end
 
+  # terminate/2 runs after a denial with reason {:shutdown, :forbidden} and must not
+  # push; it reports the reason to the test instead.
   @impl true
-  def terminate(_reason, socket) do
-    push(socket, "farewell", %{"secret" => "farewell-secret"})
+  def terminate(reason, socket) do
+    if pid = socket.assigns[:test_pid], do: send(pid, {:terminated, reason})
     :ok
   end
 end

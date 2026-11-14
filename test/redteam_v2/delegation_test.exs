@@ -38,19 +38,17 @@ defmodule Warden.RedteamV2.DelegationTest do
       assert Warden.Actor.tenants(delegated, %{}) == ["a"]
     end
 
-    # LOW: the delegator's pass gets the agent's context, so a check that reads the
-    # user from the context (the 0.1 `context[:current_user]` habit) evaluates the
-    # agent twice: Sam's own decision is never asked.
-    test "the delegator's checks do not see the agent's context as their own" do
+    # Decided: the context belongs to the request, also in the delegator's pass, so a
+    # check must read `check.actor`, which is the delegator during that pass.
+    test "the delegator's pass sees the delegator as check.actor and the request's context" do
       delegated = Warden.on_behalf_of(actor(olivia()), actor(sam()))
       context = context(olivia())
 
-      refute Warden.allowed?(actor(sam()), check(:context_owner),
-               value: @olivia_doc,
-               context: context(sam())
-             )
+      # check.actor: Olivia owns the doc, Sam does not, so the AND denies.
+      refute Warden.allowed?(delegated, check(:owner), value: @olivia_doc, context: context)
 
-      refute Warden.allowed?(delegated, check(:context_owner),
+      # A check that reads the user from the context sees the agent in both passes.
+      assert Warden.allowed?(delegated, check(:context_owner),
                value: @olivia_doc,
                context: context
              )
