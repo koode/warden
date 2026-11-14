@@ -161,6 +161,26 @@ if Code.ensure_loaded?(Ecto) do
         else: errors
     end
 
+    # True when a policy of `authorizer` has a `through: {assoc, action, resolve: :ids}`
+    # whose parent is `policy` with `action`: the ids `Warden.Ecto.preload_ids/4` would
+    # cache for that parent are read by some scope. Read from the compiled plans on every
+    # call (no cache), so a recompiled policy is seen at once.
+    @spec ids_parent?(module, module, atom) :: boolean
+    def ids_parent?(authorizer, policy, action) do
+      parents =
+        for child <- authorizer.__warden_catalog__().policies,
+            Info.ecto_policy?(child),
+            info = Info.fetch!(child),
+            {_action, {:clauses, requires, allows}} <- info.actions,
+            clause <- requires ++ allows,
+            {:through, assoc, through_action, _if_nil, %{resolve: :ids}} <- clause.parts,
+            do:
+              {Warden.Policy.policy_for(authorizer, related(info, assoc)),
+               through_action || clause.action}
+
+      {policy, action} in parents
+    end
+
     defp describe(path) do
       Enum.map_join(path, " -> ", fn {policy, action} ->
         "#{inspect(policy)} #{inspect(action)}"

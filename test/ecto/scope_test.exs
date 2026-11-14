@@ -949,6 +949,29 @@ defmodule Warden.Ecto.ScopeTest do
       assert cells[{:preloaded, :i1_public, :read_ids}]
     end
 
+    test "without a resolve: :ids clause for the parent, reads nothing and warns once" do
+      _world = world()
+      plain = actor(sam())
+
+      # No policy of the authorizer has `through: ..., resolve: :ids` to issues.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {returned, count} = count_queries(fn -> WardenEcto.preload_ids(plain, Issue, :read) end)
+          assert returned == plain
+          assert count == 0
+        end)
+
+      assert log =~ "Warden.Ecto.preload_ids/4 for Warden.Test.Ecto.Issues :read read nothing"
+      assert log =~ "resolve: :ids"
+
+      again =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert WardenEcto.preload_ids(plain, Warden.Test.Ecto.Issues, :read) == plain
+        end)
+
+      refute again =~ "preload_ids"
+    end
+
     test "takes the policy or its schema, and refuses a policy the authorizer does not list" do
       _world = world()
 

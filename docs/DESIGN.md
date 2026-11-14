@@ -1188,6 +1188,12 @@ Paths are relative to `lib/warden/`.
   the cache, so the ids are as fresh as the actor, like tenant roles. The entry holds the
   context of the preload call, which the ids were read with, and a scope uses it only
   when its own context is `===` to it: a parent's scope may read the context.
+  `preload_ids/4` for a parent and action that no `through: ..., resolve: :ids` of the
+  authorizer's policies names (`Graph.ids_parent?/3`, read from the compiled plans on
+  every call, so a recompiled policy counts at once) returns the actor unchanged, runs
+  no query and logs a warning once per authorizer, policy and action (a
+  `:persistent_term` flag): the ids would never be read, and the call is most likely a
+  wrong parent or action.
 - **Errors across policies.** A policy only names other policies at runtime (through
   the authorizer's `policies:`), so a `through` target without a policy, a cycle over
   several policies, a parent of another authorizer or without the action, and mixed

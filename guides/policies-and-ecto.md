@@ -218,7 +218,9 @@ Options go in a third element (or the second, without an action):
   every tenant of the actor), query prefix and actor, and only by a scope under the same
   context (`context:`, else the actor's own) as the preload; for a delegated actor each
   side keeps its own. They are as fresh as the actor: a team created later in the request is
-  not in them, so keep the actor for one request.
+  not in them, so keep the actor for one request. A `preload_ids/4` for a parent and
+  action that no `through: ..., resolve: :ids` clause of the authorizer names runs no
+  query and returns the actor unchanged, with a warning logged once.
 * `system: :inherit` makes the clause apply to system actors without its `rule:` naming
   their kind: the parent policy decides them, so the clause admits only the system kinds
   the parent admits (and the child must still list the kind in `system_kinds:`). It

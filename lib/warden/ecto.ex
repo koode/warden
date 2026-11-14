@@ -66,6 +66,8 @@ if Code.ensure_loaded?(Ecto) do
 
     import Ecto.Query, only: [dynamic: 1, where: 2]
 
+    require Logger
+
     alias Warden.{Actor, Decision, Rule, Telemetry}
     alias Warden.Ecto.{Audience, Explain, Guard, Info, Mark, Scope}
     alias Warden.Ecto.Policy.Graph
@@ -148,6 +150,11 @@ if Code.ensure_loaded?(Ecto) do
     this call (`context:`, else the actor's own), which the ids were read with; anything
     else reads the ids as before. The ids are as fresh as the actor: keep the actor for
     one request, as with tenant roles.
+
+    When no policy of the authorizer has a `through:` with `resolve: :ids` whose parent
+    is this policy and action, no scope would read the ids: the actor is returned
+    unchanged, no query runs, and Warden logs a warning once per authorizer, policy and
+    action.
     """
     @spec preload_ids(Actor.t(), module, atom, opts) :: Actor.t()
     def preload_ids(%Actor{} = actor, policy_or_schema, action, opts \\ [])
@@ -155,10 +162,35 @@ if Code.ensure_loaded?(Ecto) do
       {actor, context, authorizer} = Decision.setup(actor, opts)
       info = ids_policy!(authorizer, policy_or_schema)
       Graph.ensure_valid!(info.policy)
+      Info.ensure_action!(info, action)
 
-      which = if Keyword.has_key?(opts, :tenant), do: {:tenant, opts[:tenant]}, else: :all
-      state = Scope.new(context, Keyword.get(opts, :prefix))
-      Scope.preload_ids(info, action, actor, which, state)
+      if Graph.ids_parent?(authorizer, info.policy, action) do
+        which = if Keyword.has_key?(opts, :tenant), do: {:tenant, opts[:tenant]}, else: :all
+        state = Scope.new(context, Keyword.get(opts, :prefix))
+        Scope.preload_ids(info, action, actor, which, state)
+      else
+        warn_no_ids_user(authorizer, info.policy, action)
+        actor
+      end
+    end
+
+    # Logs once per authorizer, policy and action; the flag lives in `:persistent_term`,
+    # written once.
+    defp warn_no_ids_user(authorizer, policy, action) do
+      key = {__MODULE__, :no_ids_user, authorizer, policy, action}
+
+      if not :persistent_term.get(key, false) do
+        :persistent_term.put(key, true)
+
+        Logger.warning("""
+        Warden: Warden.Ecto.preload_ids/4 for #{inspect(policy)} #{inspect(action)} read \
+        nothing: no policy of #{inspect(authorizer)} has a `through:` with `resolve: :ids` \
+        whose parent is #{inspect(policy)} with #{inspect(action)}, so no scope would read \
+        the ids. The actor is returned unchanged.\
+        """)
+      end
+
+      :ok
     end
 
     # The policy the authorizer lists for a schema, or for the schema of a policy; a
