@@ -206,6 +206,29 @@ lists at once (`batch: true` and `check_many/2`) and can have a timeout. Every d
 emits a `[:warden, :decision]` telemetry event, and `Warden.explain/3` shows every step of
 a rule. See the [actors guide](guides/actors.md).
 
+## Field redaction
+
+A field policy says which fields of a struct an actor may read. It is declared once per
+struct and applied wherever the struct leaves the app: GraphQL (`redact_with`), REST,
+webhooks, exports.
+
+```elixir
+defmodule MyApp.Authz.CommentFields do
+  use Warden.Fields, authorizer: MyApp.Authz, for: MyApp.Comment
+
+  redact :body, with: "", unless: check(:live)
+end
+
+Warden.redact(actor, comments)                  # one batched decision per rule
+Warden.redact(actor, payload, deep: true)        # nested registered structs too
+
+object :comment do
+  redact_with MyApp.Authz.CommentFields          # child fields see the redacted struct
+end
+```
+
+See the [fields guide](guides/fields.md).
+
 ## Plug
 
 Needs the `plug` dependency.
