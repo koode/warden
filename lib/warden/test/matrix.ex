@@ -149,9 +149,11 @@ if Code.ensure_loaded?(Ecto) do
       end
 
       function = :"__warden_matrix_#{kind}_#{name}__"
-      Module.put_attribute(env.module, :warden_matrix_fixtures, {kind, name, function})
+      location = "#{Path.relative_to_cwd(env.file)}:#{env.line}"
+      Module.put_attribute(env.module, :warden_matrix_fixtures, {kind, name, function, location})
 
-      quote do
+      # At the declaration's line, so a stacktrace through the fixture points there.
+      quote line: env.line do
         # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
         @doc false
         def unquote(function)(context), do: unquote(fun_ast).(context)
@@ -224,9 +226,10 @@ if Code.ensure_loaded?(Ecto) do
     def build(module, options, context) do
       {built, _fixtures} =
         module.__warden_matrix__(:fixtures)
-        |> Enum.map_reduce(%{}, fn {kind, name, function}, fixtures ->
-          value = apply(module, function, [Map.put(context, :warden_fixtures, fixtures)])
-          check_fixture!(kind, name, value)
+        |> Enum.map_reduce(%{}, fn {kind, name, function, location}, fixtures ->
+          fixture_context = Map.put(context, :warden_fixtures, fixtures)
+          value = run_fixture!(module, function, fixture_context, {kind, name, location})
+          check_fixture!(kind, name, location, value)
           {{kind, name, value}, Map.put(fixtures, name, value)}
         end)
 
@@ -236,17 +239,32 @@ if Code.ensure_loaded?(Ecto) do
       struct(__MODULE__, Map.merge(fields, %{actors: actors, resources: resources}))
     end
 
-    defp check_fixture!(:resource, _name, %_struct{}), do: :ok
-    defp check_fixture!(:actor, _name, %Warden.Actor{}), do: :ok
+    # A fixture that raises fails with its name and declaration, and the original
+    # stacktrace.
+    defp run_fixture!(module, function, context, {kind, name, location}) do
+      apply(module, function, [context])
+    rescue
+      error ->
+        message = """
+        #{kind} fixture #{inspect(name)} (#{location}) raised \
+        #{inspect(error.__struct__)}: #{Exception.message(error)}\
+        """
 
-    defp check_fixture!(:actor, _name, context) when is_map(context) and not is_struct(context),
-      do: :ok
+        reraise ExUnit.AssertionError, [message: message], __STACKTRACE__
+    end
 
-    defp check_fixture!(kind, name, _value) do
+    defp check_fixture!(:resource, _name, _location, %_struct{}), do: :ok
+    defp check_fixture!(:actor, _name, _location, %Warden.Actor{}), do: :ok
+
+    defp check_fixture!(:actor, _name, _location, context)
+         when is_map(context) and not is_struct(context),
+         do: :ok
+
+    defp check_fixture!(kind, name, location, _value) do
       expected = if kind == :actor, do: "an actor or a context map", else: "a struct"
 
       raise ExUnit.AssertionError,
-        message: "#{kind} fixture #{inspect(name)} must return #{expected}"
+        message: "#{kind} fixture #{inspect(name)} (#{location}) must return #{expected}"
     end
 
     @doc """
