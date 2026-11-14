@@ -950,6 +950,14 @@ Paths are relative to `lib/warden/`.
   are atoms starting with `$`) and `$callers`; on timeout it is killed, Warden waits for
   its `:DOWN`, then flushes any reply it sent, so none arrives late. A raise inside `check_many/2` (with or without a timeout) becomes a
   `Warden.PolicyError`; a raise inside `check/2` propagates as in 0.1.
+- **Timeouts per call.** A check leaf that timed out is kept in the evaluation state and
+  denies the remaining values of that decision call (and the delegator's pass) with
+  `:unavailable` without being called again, so a list waits one timeout.
+- **One policy per struct.** `Warden.Policy.policy_for/2` builds the struct => policy
+  registry once per compiled authorizer (`:persistent_term`, keyed by the authorizer's
+  md5) and raises `Warden.PolicyError` for a `policies:` list with two policies for one
+  struct, so the policy (and the `tenant:` field the binding reads) never depends on
+  the order of the list.
 - **Batching.** `Evaluator.many/3` first decides every batched leaf (checks with
   `batch: true`, and `can/2` without `arg:`) for all values at once, then evaluates the
   rule per value with those results, short-circuiting over the other leaves.

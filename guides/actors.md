@@ -270,7 +270,10 @@ batched leaf and fails compilation without the plugin. Checks deferred this way 
 
 `timeout: ms` runs the check (single or batched) in a separate process. When it takes
 longer, the process is killed and every value it was asked about is denied with reason
-`:unavailable`. A timeout never grants.
+`:unavailable`. A timeout never grants. Within one call (`Warden.filter/4`, a GraphQL
+list, a delegated actor's two passes), a check that timed out is not called again: it
+denies the remaining values with `:unavailable` at once, so a list waits one timeout,
+not one per value.
 
 The process gets a copy of the caller's whole process dictionary (a tenant prefix, a
 dynamic repo), except keys that are atoms starting with `$`, which belong to the
