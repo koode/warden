@@ -31,7 +31,8 @@ defmodule Warden.Evaluator do
     trace: [],
     tenant: nil,
     decided: %{},
-    foreign?: nil
+    foreign?: nil,
+    timed_out: %{}
   ]
 
   @type outcome :: :ok | {:deny, term, [atom], [term], term}
@@ -53,7 +54,9 @@ defmodule Warden.Evaluator do
 
     case {outcome, actor.delegator} do
       {:ok, %Actor{} = delegator} ->
-        {delegated, delegator_state} = run(rule, %{check | actor: delegator}, authorizer, %{})
+        # A check that timed out for the actor is not waited for again for the delegator.
+        delegator_check = %{check | actor: delegator}
+        {delegated, delegator_state} = run(rule, delegator_check, authorizer, state.timed_out)
         actor = %{actor | delegator: delegator_state.check.actor}
         trace = trace ++ Enum.reverse(delegator_state.trace)
         result = result(delegated, trace)
@@ -75,21 +78,23 @@ defmodule Warden.Evaluator do
   def many(_rule, [], _authorizer), do: {[], nil}
 
   def many(rule, [%Check{actor: %Actor{} = actor} | _rest] = checks, authorizer) do
-    {results, actor} = many_pass(rule, checks, actor, authorizer)
+    {results, actor, timed_out} = many_pass(rule, checks, actor, authorizer, %{})
 
     case actor.delegator do
       nil ->
         {results, actor}
 
       %Actor{} = delegator ->
-        {results, delegator} = delegated_pass(rule, checks, results, delegator, authorizer)
+        {results, delegator} =
+          delegated_pass(rule, checks, results, delegator, authorizer, timed_out)
+
         {results, %{actor | delegator: delegator}}
     end
   end
 
-  defp delegated_pass(rule, checks, results, delegator, authorizer) do
+  defp delegated_pass(rule, checks, results, delegator, authorizer, timed_out) do
     passed = for {check, :ok} <- Enum.zip(checks, results), do: check
-    {delegated, delegator} = many_pass(rule, passed, delegator, authorizer)
+    {delegated, delegator, _timed_out} = many_pass(rule, passed, delegator, authorizer, timed_out)
     merged = merge_delegated(results, delegated, [])
     {merged, delegator}
   end
@@ -102,9 +107,11 @@ defmodule Warden.Evaluator do
   defp merge_delegated([denied | rest], delegated, acc),
     do: merge_delegated(rest, delegated, [denied | acc])
 
-  defp many_pass(_rule, [], actor, _authorizer), do: {[], actor}
+  defp many_pass(_rule, [], actor, _authorizer, timed_out), do: {[], actor, timed_out}
 
-  defp many_pass(rule, checks, actor, authorizer) do
+  # `timed_out` holds the check leaves that timed out in this decision call: they deny the
+  # remaining values with :unavailable without being called (and waited for) again.
+  defp many_pass(rule, checks, actor, authorizer, timed_out) do
     catalog = authorizer.__warden_catalog__()
 
     # A bound actor's batch callbacks never see values of another tenant: those values
@@ -124,14 +131,18 @@ defmodule Warden.Evaluator do
         {{leaf, spread(verdicts, foreign)}, actor}
       end)
 
-    checks
-    |> Enum.with_index()
-    |> Enum.map_reduce(actor, fn {check, index}, actor ->
-      decided = Map.new(tables, fn {leaf, verdicts} -> {leaf, elem(verdicts, index)} end)
-      {outcome, state} = run(rule, %{check | actor: actor}, authorizer, decided)
-      result = result(outcome, Enum.reverse(state.trace))
-      {result, state.check.actor}
-    end)
+    {results, {actor, timed_out}} =
+      checks
+      |> Enum.with_index()
+      |> Enum.map_reduce({actor, timed_out}, fn {check, index}, {actor, timed_out} ->
+        decided = Map.new(tables, fn {leaf, verdicts} -> {leaf, elem(verdicts, index)} end)
+        decided = Map.merge(timed_out, decided)
+        {outcome, state} = run(rule, %{check | actor: actor}, authorizer, decided)
+        result = result(outcome, Enum.reverse(state.trace))
+        {result, {state.check.actor, Map.merge(timed_out, state.timed_out)}}
+      end)
+
+    {results, actor, timed_out}
   end
 
   # The `timeout:` of every check in the rule.
@@ -487,8 +498,16 @@ defmodule Warden.Evaluator do
 
       true ->
         check = %{state.check | name: name, opts: opts}
-        verdict = call_check(state.authorizer, name, check, spec)
-        decided(verdict, rule, state)
+
+        case call_check(state.authorizer, name, check, spec) do
+          :timeout ->
+            unavailable = {:deny, @unavailable}
+            state = %{state | timed_out: Map.put(state.timed_out, rule, unavailable)}
+            decided(unavailable, rule, state)
+
+          verdict ->
+            decided(verdict, rule, state)
+        end
     end
   end
 
@@ -592,7 +611,7 @@ defmodule Warden.Evaluator do
   defp call_check(authorizer, name, check, spec) do
     case with_timeout(fn -> single_check(authorizer, name, check, spec) end, spec.timeout) do
       {:ok, result} -> verdict!(result, authorizer, name)
-      :timeout -> {:deny, @unavailable}
+      :timeout -> :timeout
       {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
     end
   end
