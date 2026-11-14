@@ -427,17 +427,32 @@ defmodule Warden.Ecto.ScopeTest do
   describe "single checks and lists" do
     test "loaded structs are decided in memory when the clauses allow it" do
       world = world()
-      issue = Repo.preload(world.i1_public, :team)
 
-      {allowed, count} = count_queries(fn -> WardenEcto.allowed?(actor(sam()), :read, issue) end)
+      # `where: [private: false]` on a loaded team is exact in memory.
+      {allowed, count} =
+        count_queries(fn -> WardenEcto.allowed?(actor(sam()), :read, world.t1_public) end)
+
       assert allowed
       assert count == 0
 
-      {allowed, count} =
-        count_queries(fn -> WardenEcto.allowed?(actor(sam()), :read, world.i1_public) end)
-
+      # `where: [trashed_at: nil]` matches a `nil`, which may be an unselected column, so
+      # the database decides, even with the team preloaded.
+      issue = Repo.preload(world.i1_public, :team)
+      {allowed, count} = count_queries(fn -> WardenEcto.allowed?(actor(sam()), :read, issue) end)
       assert allowed
       assert count == 1
+    end
+
+    test "a partially selected row is decided by the database" do
+      world = world()
+
+      trashed_query =
+        from(issue in Issue, where: issue.id == ^world.trashed.id, select: [:id, :workspace_id])
+
+      [partial] = Repo.all(trashed_query)
+
+      refute WardenEcto.allowed?(actor(sam()), :read, partial)
+      assert WardenEcto.filter(actor(sam()), :read, [partial]) == []
     end
 
     test "a hand-written allowed?/4 answers structs; ids go to the database" do

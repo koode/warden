@@ -458,7 +458,10 @@ database for the rest:
 The database part is one query per tenant: `WHERE id = ANY($1) AND workspace_id = $2
 AND scope`. `{schema, id}` values are one query inside the scope of every tenant of the
 actor. In-memory answers trust the struct: a struct you changed but did not save is
-decided as it is.
+decided as it is. A struct loaded with a partial `select` has `nil` in the columns it did
+not load, so a clause that would admit because of a `nil` (`where: [trashed_at: nil]`, a
+`nil` foreign key under `if_nil: :tenant`) is never decided in memory: the database
+decides those rows.
 
 In GraphQL, `can(MyApp.Authz.Issues, :read)` as an object rule asks the same policy,
 once per list and tenant. `can(MyApp.Authz.Issues, :write, arg: [:id])` decides before

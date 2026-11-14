@@ -11,11 +11,18 @@ defmodule Warden.RedteamMythos.EctoMemoryTest do
   alias Warden.Test.Ecto.{Comment, Issue}
 
   # `true` only when Warden granted from the struct alone. A denial, and a decision that
-  # went to the database (which is not running in this suite), are both `false`.
+  # went to the database (which is not running in this suite), are both `false`. A raise
+  # inside a policy decision reaches the caller as a `Warden.PolicyError` (goal 12).
   defp granted_without_database?(fun) do
     fun.() == true
   rescue
-    _repo_not_started in [RuntimeError, ArgumentError, DBConnection.ConnectionError] -> false
+    _repo_not_started in [
+      RuntimeError,
+      ArgumentError,
+      DBConnection.ConnectionError,
+      Warden.PolicyError
+    ] ->
+      false
   end
 
   # What `from(issue in Issue, select: [:id, :workspace_id, :title])` returns for a

@@ -8,7 +8,10 @@ if Code.ensure_loaded?(Ecto) do
     #
     #   * `rule:` is about the actor only;
     #   * `where:`, `actor_in:` and `within:` compare fields whose Elixir equality is the
-    #     database's (ids, integers, booleans, strings, enums, `nil`);
+    #     database's (ids, integers, booleans, strings, enums); a match on `nil` is never
+    #     exact, because a column the query did not select is `nil` too, so `where:
+    #     [field: nil]` and a `nil` foreign key under `if_nil: :tenant` go to the database
+    #     (a mismatch caused by `nil` still denies);
     #   * `through:` uses the loaded parent when its key matches the foreign key;
     #   * `through_any:` over a has_many is `true` when a loaded child whose foreign key
     #     points at this row is allowed, else unknown (a preload may have been filtered, or
@@ -164,7 +167,12 @@ if Code.ensure_loaded?(Ecto) do
       case {association, Map.get(struct, association.field)} do
         {%Has{}, children} when is_list(children) ->
           owner_key = Map.get(struct, association.owner_key)
-          mine = Enum.filter(children, &(Map.get(&1, association.related_key) == owner_key))
+          # An owner key the query did not select is `nil`; no child is matched on it.
+          mine =
+            if owner_key == nil,
+              do: [],
+              else: Enum.filter(children, &(Map.get(&1, association.related_key) == owner_key))
+
           any_child(info, association.related, action, actor, tenant, mine, state)
 
         _not_loaded_or_many_to_many ->
@@ -221,9 +229,12 @@ if Code.ensure_loaded?(Ecto) do
 
     defp part(_info, _clause, _part, actor, _tenant, _struct, state), do: {:unknown, actor, state}
 
+    # A `nil` in the struct may be a column the query did not select, so a match on
+    # `nil` is never exact: the database decides. A mismatch caused by `nil` may still
+    # deny here.
     defp field_equals(info, struct, field, value) do
       cond do
-        value == nil -> Map.get(struct, field) == nil
+        value == nil -> if Map.get(struct, field) == nil, do: :unknown, else: false
         exact?(info, field) -> Map.get(struct, field) == value
         true -> :unknown
       end
@@ -233,9 +244,12 @@ if Code.ensure_loaded?(Ecto) do
 
     defp if_nil(_info, :deny, actor, _tenant, state), do: {false, actor, state}
 
+    # A `nil` foreign key may be unselected, so admitting it as "no parent" is left to
+    # the database; a non-member is denied either way.
     defp if_nil(info, :tenant, actor, tenant, state) do
       {roles, actor} = Actor.tenant_roles(actor, tenant, state.context, info.authorizer)
-      {MapSet.size(roles) > 0, actor, state}
+      answer = if MapSet.size(roles) > 0, do: :unknown, else: false
+      {answer, actor, state}
     end
 
     # A loaded parent in another tenant is not the parent the scope would find.
