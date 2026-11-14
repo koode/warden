@@ -53,7 +53,7 @@ defmodule Warden.MixProject do
       name: "warden",
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE docs/DESIGN.md .formatter.exs)
+      files: ~w(lib guides mix.exs README.md CHANGELOG.md LICENSE docs/DESIGN.md .formatter.exs)
     ]
   end
 
@@ -72,7 +72,15 @@ defmodule Warden.MixProject do
       main: "readme",
       source_url: @source_url,
       source_ref: "v#{@version}",
-      extras: ["README.md", "docs/DESIGN.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"],
+      extras: [
+        "README.md",
+        "guides/actors.md",
+        "docs/DESIGN.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "LICENSE"
+      ],
+      groups_for_extras: [Guides: ~r"guides/"],
       # Internal names that the README and the design notes mention on purpose. They are
       # hidden from the docs, so ExDoc must not try to link them.
       skip_code_autolink_to: [
@@ -81,7 +89,12 @@ defmodule Warden.MixProject do
         "Warden.Absinthe.Hydrator",
         "Warden.Absinthe.Phase.ItemErrors",
         "Warden.Absinthe.Plugin",
-        "Warden.Plug.init/1"
+        "Warden.Policy.Dispatch",
+        "Warden.Plug.init/1",
+        # Functions the design notes describe for layers that are not built yet.
+        "Warden.redact/2",
+        "Warden.redact/3",
+        "Warden.visible_fields/2"
       ]
     ]
   end

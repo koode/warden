@@ -8,8 +8,11 @@ defmodule Warden do
     * `Warden.Absinthe`, for Absinthe GraphQL schemas (needs `absinthe`).
 
   Building blocks: `Warden.Authorizer` (the behaviour for your authorizer module),
-  `Warden.Rule` (the rule builders), `Warden.Actor`, `Warden.Check`, `Warden.Denial`,
-  `Warden.PolicyError` and `Warden.ForbiddenError`.
+  `Warden.Rule` (the rule builders), `Warden.Policy` (one declaration per resource and
+  action), `Warden.Actor`, `Warden.Credential`, `Warden.Check`, `Warden.Denial`,
+  `Warden.Explanation`, `Warden.Telemetry`, `Warden.PolicyError` and
+  `Warden.ForbiddenError`. The actors guide covers kinds, credentials, tenant roles,
+  system actors, delegation, batched checks and policies.
 
   ## Choosing the authorizer
 

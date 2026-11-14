@@ -13,8 +13,8 @@ integrations. One authorizer module, two front ends:
 
 Common guarantees:
 
-- Only a literal `true` from a check grants access. Anything else that is not `false`
-  raises `Warden.PolicyError`.
+- Only a literal `true` from a check grants access. Anything else that is not `false` or
+  `{:deny, reason}` raises `Warden.PolicyError`.
 - Rules that name an unknown role, permission or check fail: at compile time for
   schemas and plugs, at call time (with `Warden.PolicyError`) for the core API.
 - The default denial says only "Forbidden". Revealing missing roles is opt-in.
@@ -185,6 +185,26 @@ Warden.allowed?(actor, role(:admin), authorizer: MyApp.Authz)
   as a 403 without Warden depending on Plug. Its message is `"Forbidden"`, and names the
   missing roles and permissions only when the authorizer sets
   `expose_denial_reasons: true`.
+
+## Actors, checks and policies
+
+Actors carry a kind (`:user`, `:agent`, ...), a credential (a session, an API key with
+scopes, bound to one tenant or not) and roles per tenant. System actors
+(`Warden.system_actor/2`) are never anonymous and never users, and
+`Warden.on_behalf_of/3` gives an agent the AND of its own and its user's access.
+
+```elixir
+authorize tenant_role(:member)                     # in the tenant of the value
+authorize all_of([session(), kind(:user)])         # people with a full session
+authorize credential_scope("issues:write")
+authorize can(MyApp.Authz.Issues, :read)           # a Warden.Policy, batched over lists
+authorize can(MyApp.Authz.Issues, :write, arg: [:id])
+```
+
+Checks take typed options, deny with reasons (`{:deny, :not_member}`), answer whole
+lists at once (`batch: true` and `check_many/2`) and can have a timeout. Every decision
+emits a `[:warden, :decision]` telemetry event, and `Warden.explain/3` shows every step of
+a rule. See the [actors guide](guides/actors.md).
 
 ## Plug
 

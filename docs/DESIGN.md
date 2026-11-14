@@ -889,3 +889,89 @@ hand-written `allowed?/4` agree for every cell, records results and visible fiel
 compares with a readable snapshot that holds fixture names only. A policy without a
 resource fixture fails. `Warden.Test.assert_policy_consistent/3`,
 `Warden.Test.Absinthe.assert_matrix_matches/2`, `mix warden.matrix [--update]`.
+
+### Implementation notes: v0.2 core
+
+Paths are relative to `lib/warden/`.
+
+- **One evaluator.** `evaluator.ex` evaluates rules for every layer: `one/3` (a value),
+  `many/3` (a list) and `explain/3`. It threads the actor through the evaluation, so
+  tenant roles read by one leaf are cached for the next, and returns the updated actor.
+  `Warden.Rule.evaluate/3` keeps its 0.1 result shape; the failure map gains `reason` and
+  `trace`.
+- **Delegation is ANDed at the top.** A delegated actor's rule is evaluated for the actor
+  and then (only when it passed) for the delegator; the decision is the AND of the two
+  whole-rule decisions, never of single leaves, so `any_of` cannot be split between them.
+  Over a list the delegator is asked only about the values the actor passed. Delegation
+  is one level deep: an actor that already acts on behalf of another can neither delegate
+  nor be delegated to (`ArgumentError`).
+- **System actors** have a credential with `method: :system` and no scopes, which carries
+  the `tenant:` binding and the `reason:`. So `session()` and `credential_scope/1` deny
+  them too, and the binding code is the same as for bound credentials. An anonymous
+  actor also fails `session()` and `credential_scope/1`. An unbound system actor has no
+  tenants (`Warden.Actor.tenants/2`).
+- **Checks.** A batched check's single value goes to `check/2` when it has a clause for
+  the name (a `FunctionClauseError` raised by the authorizer's own `check/2` falls back to
+  `check_many/2` with one element). `timeout:` runs the call in a process started with
+  `spawn_monitor/1` that carries `$callers`; on timeout it is killed and a late reply is
+  flushed. A raise inside `check_many/2` (with or without a timeout) becomes a
+  `Warden.PolicyError`; a raise inside `check/2` propagates as in 0.1.
+- **Batching.** `Evaluator.many/3` first decides every batched leaf (checks with
+  `batch: true`, and `can/2` without `arg:`) for all values at once, then evaluates the
+  rule per value with those results, short-circuiting over the other leaves.
+- **Policy entry points.** `can/2,3` dispatches to any module that exports:
+  - `__warden_policy__(:info)` returning `%{authorizer: module, for: module,
+    actions: [atom], tenant: atom | nil, system_kinds: [atom],
+    enforces_binding: boolean}`;
+  - `__warden_decide__(action, actor, values, context)` returning one
+    `true | false | {:deny, reason}` per value, in order.
+
+  `use Warden.Policy` generates both (`__warden_decide__/4` is overridable and calls
+  `allowed_many/4` or `allowed?/4`); `Warden.Ecto.Policy` implements them too.
+  `Warden.Policy.Dispatch` (`policy/dispatch.ex`) screens every value before calling
+  `__warden_decide__/4`: `nil` values, system actors of kinds not in `system_kinds`, and,
+  for a bound actor, values whose tenant is another one or unknown (`{schema, id}` from
+  `arg:` included) are denied without a call. A policy that applies the binding itself
+  (a query scope with the bound tenant) sets `enforces_binding: true` and then also gets
+  values of unknown tenant. Dispatch then checks the answer: a raise, a non-list, a wrong
+  length or a bad element is a `Warden.PolicyError`. The policy is resolved from the rule
+  term at runtime; the authorizer only names its policies in `policies:`, so it never
+  depends on them at compile time, while `use Warden.Policy` checks at compile time that
+  its authorizer lists it. `Warden.Policy.policy_for/2` finds the policy of a struct
+  through that list, and the default `tenant_of/1` uses its `tenant:` field.
+- **`can(..., arg: path)`** asks about `{for_module, id}` for the id at the path, or for
+  every id of a list there. A missing id, an empty list or a `nil` value denies.
+- **GraphQL post middleware in two passes.** `absinthe/decide.ex` collects the values of
+  a field in walk order, groups them by the rule that applies (abstract rule first, then
+  the concrete type's rule for the values that passed), decides each group with
+  `Evaluator.many/3` and wraps every value with its outcome; the 0.1 walk
+  (`absinthe/middleware.ex`) then applies list policies, item errors and folds from those
+  outcomes. Both passes are linear (`test/adversarial/batching_test.exs`).
+- **Admitted values.** The pre middleware decides the parent object rule again for every
+  field (defense in depth). For a value that this execution's post middleware admitted
+  under a batched rule, it does not: that would turn one batched call per list into one
+  call per value and field. Admissions live in `resolution.acc`, keyed by the type, the
+  actor (without its cache) and the exact value; any other value is decided again.
+- **Cross-parent batching** (`batch_across_parents: true`) applies to object rules with
+  batched leaves on fields that return one object (not a list, not an abstract type)
+  inside a list. The post middleware hands the check to `Absinthe.Middleware.Batch` with a
+  reference and resumes in `post_decided/2`; the batch function groups the deferred checks
+  by actor and context (a batch can span documents) and decides each group with one
+  `Evaluator.many/3` call. Such checks have no `resolution`, and tenant roles read there
+  are not written back to `resolution.acc`. The verifier fails compilation when the
+  schema's `plugins/0` has no `Absinthe.Middleware.Batch`.
+- **`on_deny:`** is stored as `:warden_on_deny` meta and copied into the field's pre spec.
+  It decides only denials of the field rule (`kind: :field`); argument and object denials
+  still go through `deny/1`.
+- **`covered()`** is dropped from the plan like `public()`; `Plan` rejects it anywhere but
+  as the whole rule of a field of an object type or interface with an object rule. The
+  core API and `Warden.Plug` refuse it.
+- **Telemetry.** The core API and `Warden.Plug` emit one event per call; the Absinthe pre
+  middleware one per field resolution (`kind` of the denial, or `:field` with the list of
+  rules it ran), the post middleware one per field with values (`kind: :object`, `count`
+  = values decided), a subscribe-time check one with `kind: :subscribe`. `tenant` is the
+  first tenant a `tenant_role` rule resolved, else the actor's bound tenant.
+- **`default_actor_key/1`** keeps the 0.1 term for a plain user or anonymous actor and
+  adds the kind, `system?`, the credential (method, sorted scopes, tenant, bounds), the
+  actor's bounds and the delegator's key otherwise. Bounds are included because policies
+  read them: two actors with different bounds must not share a subscription payload.

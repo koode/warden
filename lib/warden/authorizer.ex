@@ -54,7 +54,8 @@ defmodule Warden.Authorizer do
     * `:policies` - the `Warden.Policy` modules of this authorizer. A `can/2` rule may
       only name a listed policy, and Warden finds the policy of a struct through this list.
     * `:expose_denial_reasons` - when `true`, the default `c:deny/1` adds
-      `missing_roles` and `missing_permissions` to the error extensions. Default `false`.
+      `missing_roles`, `missing_permissions` and the check's `reason` (atoms only) to the
+      error extensions. Default `false`.
     * `:spec_compliant_errors` - set to `true` when you run Absinthe with
       `spec_compliant_errors: true`, so the default error puts `code` in `extensions`
       only once. Default `false`.
