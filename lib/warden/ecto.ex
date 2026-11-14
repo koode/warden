@@ -58,8 +58,8 @@ if Code.ensure_loaded?(Ecto) do
 
     `scope/4` (and `to_sql/4`, `dataloader_query/2`), `allowed?/4`, `authorize/4`,
     `filter/4` and `allowed_actors/4` emit `[:warden, :decision]` with `layer: :ecto`
-    (`kind: :scope` for scopes, `:call` for checks). `explain/4`, `update_all/4` and
-    `delete_all/3` emit none.
+    (`kind: :scope` for scopes, `:call` for checks). `explain/4`, `update_all/4`,
+    `delete_all/3` and `preload_ids/4` emit none.
     """
 
     import Ecto.Query, only: [dynamic: 1, where: 2]
@@ -123,6 +123,59 @@ if Code.ensure_loaded?(Ecto) do
 
       Guard.ctes!(scoped)
       scoped
+    end
+
+    @doc """
+    Reads the ids that `through: {assoc, action, resolve: :ids}` compares a foreign key
+    with, and returns the actor with them cached, like
+    `Warden.Actor.preload_tenant_roles/3`. Pass the returned actor to later calls of the
+    request: their scopes read the ids from the actor instead of running the parent's
+    scope again.
+
+        actor = Warden.Ecto.preload_ids(actor, MyApp.Teams.Team, :read)
+        issues = MyApp.Issues.Issue |> Warden.Ecto.scope(actor, :read) |> Repo.all()
+
+    `policy_or_schema` is the parent (the policy, or the schema the authorizer lists it
+    for) and `action` the parent's action that the `through:` names. Takes `tenant:`
+    (else every tenant of the actor, as `scope/4`), `prefix:`, `authorizer:` and
+    `context:`. The parent's scope runs once per tenant, on its primary key; for a
+    delegated actor once for each side, each cached in that side's own struct.
+
+    A cached entry is used only for the same parent policy, action, tenant, query prefix
+    and actor side; anything else reads the ids as before. The ids are as fresh as the
+    actor: keep the actor for one request, as with tenant roles. They were read with the
+    context of this call.
+    """
+    @spec preload_ids(Actor.t(), module, atom, opts) :: Actor.t()
+    def preload_ids(%Actor{} = actor, policy_or_schema, action, opts \\ [])
+        when is_atom(policy_or_schema) and is_list(opts) do
+      {actor, context, authorizer} = Decision.setup(actor, opts)
+      info = ids_policy!(authorizer, policy_or_schema)
+      Graph.ensure_valid!(info.policy)
+
+      which = if Keyword.has_key?(opts, :tenant), do: {:tenant, opts[:tenant]}, else: :all
+      state = Scope.new(context, Keyword.get(opts, :prefix))
+      Scope.preload_ids(info, action, actor, which, state)
+    end
+
+    # The policy the authorizer lists for a schema, or for the schema of a policy; a
+    # policy the authorizer does not list for its schema would never be asked.
+    defp ids_policy!(authorizer, policy_or_schema) do
+      if Info.ecto_policy?(policy_or_schema) do
+        schema = Info.fetch!(policy_or_schema).schema
+        info = Info.policy_for!(authorizer, schema)
+
+        if info.policy != policy_or_schema do
+          raise Warden.PolicyError, """
+          #{inspect(authorizer)} lists #{inspect(info.policy)} for #{inspect(schema)}, not \
+          #{inspect(policy_or_schema)}\
+          """
+        end
+
+        info
+      else
+        Info.policy_for!(authorizer, policy_or_schema)
+      end
     end
 
     @doc """

@@ -10,7 +10,8 @@ if Code.ensure_loaded?(Ecto) do
     # hand-written `scope/4` or the clauses. Results are memoized per policy, action,
     # tenant and actor in the state, so every callback runs at most once per call, and a
     # `through` parent's scope is built once and reused. `scope/5` adds the tenant
-    # conditions and, for a delegated actor, ANDs both sides.
+    # conditions and, for a delegated actor, ANDs both sides. `preload_ids/5` puts the
+    # parent ids of `resolve: :ids` in the actor's cache, so later calls read them there.
 
     import Ecto.Query, only: [dynamic: 1, dynamic: 2, from: 2, where: 2, where: 3]
 
@@ -132,7 +133,8 @@ if Code.ensure_loaded?(Ecto) do
       end
     end
 
-    # The actor without what changes during a call (the tenant-role cache).
+    # The actor without its cache (tenant roles, tenants and preloaded parent ids), which
+    # changes while the actor is used.
     @spec identity(Actor.t()) :: Actor.t()
     def identity(%Actor{} = actor), do: %{actor | cache: %{}}
 
@@ -487,12 +489,13 @@ if Code.ensure_loaded?(Ecto) do
       do: {false, state}
 
     defp parent_in(info, parent, action, association, verdict, actor, tenant, state) do
-      key = {:ids, parent.policy, action, tenant, identity(actor), state.prefix}
+      related_key = association.related_key
+      key = ids_key(parent, action, related_key, tenant, actor, state)
 
       {ids, state} =
-        case Map.fetch(state.memo, key) do
+        case fetch_ids(key, actor, state) do
           {:ok, ids} -> {ids, state}
-          :error -> read_ids(parent, association.related_key, verdict, tenant, key, state)
+          :error -> read_ids(parent, related_key, verdict, tenant, key, state)
         end
 
       condition =
@@ -501,6 +504,76 @@ if Code.ensure_loaded?(Ecto) do
           else: dynamic([{^info.as, row}], field(row, ^association.owner_key) in ^ids)
 
       {condition, state}
+    end
+
+    # The key of one side's parent ids, in the call's memo and in the actor's cache: the
+    # parent policy, the action, the column read, the tenant, the side (without its cache)
+    # and the query prefix. A side's cache entry is never used for the other side, nor for
+    # another tenant, prefix or action.
+    defp ids_key(parent, action, related_key, tenant, actor, state),
+      do: {:ids, parent.policy, action, related_key, tenant, identity(actor), state.prefix}
+
+    # The ids from the call's memo, else from the side's cache (`preload_ids/5`).
+    defp fetch_ids(key, actor, state) do
+      with :error <- Map.fetch(state.memo, key), do: Map.fetch(actor.cache, key)
+    end
+
+    # Reads the ids that `resolve: :ids` compares a foreign key with (the primary key of
+    # `info`'s rows), for each tenant (as `scope/5` lists them) and each side of the
+    # actor, and returns the actor with each side's ids in that side's own cache. A
+    # delegator whose actor sees no parent row is not asked, as in `scope/5`.
+    @spec preload_ids(map, atom, Actor.t(), :all | {:tenant, term}, t) :: Actor.t()
+    def preload_ids(info, action, %Actor{} = actor, which, state) do
+      Info.ensure_action!(info, action)
+
+      {tenants, state} =
+        case tenants(info, actor, which, state) do
+          {:untenanted, state} -> {[nil], state}
+          listed -> listed
+        end
+
+      {actor, _state} =
+        Enum.reduce(tenants, {actor, state}, fn tenant, {actor, state} ->
+          both_sides_ids(info, action, actor, tenant, state)
+        end)
+
+      actor
+    end
+
+    defp both_sides_ids(info, action, %Actor{delegator: nil} = actor, tenant, state) do
+      {_verdict, actor, state} = side_ids(info, action, actor, tenant, state)
+      {actor, state}
+    end
+
+    defp both_sides_ids(info, action, %Actor{delegator: delegator} = actor, tenant, state) do
+      {own, side, state} = side_ids(info, action, %{actor | delegator: nil}, tenant, state)
+
+      if own == false do
+        {%{side | delegator: delegator}, state}
+      else
+        {_theirs, delegator, state} = side_ids(info, action, delegator, tenant, state)
+        {%{side | delegator: delegator}, state}
+      end
+    end
+
+    # One side's verdict, then its ids in its cache (none to read when it is `false`).
+    defp side_ids(info, action, side, tenant, state) do
+      {verdict, side, state} = verdict(info, action, side, tenant, state)
+
+      if verdict == false do
+        {false, side, state}
+      else
+        key = ids_key(info, action, info.primary_key, tenant, side, state)
+
+        {ids, state} =
+          case fetch_ids(key, side, state) do
+            {:ok, ids} -> {ids, state}
+            :error -> read_ids(info, info.primary_key, verdict, tenant, key, state)
+          end
+
+        cached = %{side | cache: Map.put(side.cache, key, ids)}
+        {verdict, cached, state}
+      end
     end
 
     defp read_ids(parent, related_key, verdict, tenant, key, state) do

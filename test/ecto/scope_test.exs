@@ -783,6 +783,185 @@ defmodule Warden.Ecto.ScopeTest do
     end
   end
 
+  describe "preload_ids/4" do
+    alias Warden.Test.Ecto.Teams
+
+    # The cache entries `preload_ids/4` added: the ids, without tenant roles and tenants.
+    defp ids_entries(actor) do
+      Map.filter(actor.cache, fn {key, _ids} -> is_tuple(key) and elem(key, 0) == :ids end)
+    end
+
+    defp with_entries(actor, entries), do: %{actor | cache: Map.merge(actor.cache, entries)}
+
+    test "scopes after preload_ids/4 read the parent ids from the actor" do
+      world = world()
+      user = Map.put(sam(), :memberships, %{"t1" => [:member], "t2" => [:member]})
+      plain = actor(user)
+
+      {preloaded, preload_count} =
+        count_queries(fn -> WardenEcto.preload_ids(plain, Team, :read) end)
+
+      assert preload_count == 2
+
+      {_queries, count} =
+        count_queries(fn ->
+          for tenant <- [[], [tenant: "t1"], [tenant: "t2"]] do
+            WardenEcto.scope(Issue, preloaded, :read_ids, tenant)
+          end
+        end)
+
+      assert count == 0
+
+      {_queries, uncached} =
+        count_queries(fn ->
+          for _call <- 1..3, do: WardenEcto.scope(Issue, plain, :read_ids, tenant: "t1")
+        end)
+
+      assert uncached == 3
+
+      assert scope_ids(Issue, preloaded, :read_ids) == scope_ids(Issue, plain, :read_ids)
+      assert world.i1_private.id in scope_ids(Issue, preloaded, :read_ids)
+      assert WardenEcto.preload_ids(plain, Teams, :read) == preloaded
+    end
+
+    test "another tenant, prefix or action reads the ids again" do
+      _world = world()
+      user = Map.put(sam(), :memberships, %{"t1" => [:member], "t2" => [:member]})
+      preloaded = WardenEcto.preload_ids(actor(user), Team, :read, tenant: "t1")
+
+      count = fn opts ->
+        {_query, count} =
+          count_queries(fn -> WardenEcto.scope(Issue, preloaded, :read_ids, opts) end)
+
+        count
+      end
+
+      assert count.(tenant: "t1") == 0
+      assert count.(tenant: "t2") == 1
+      assert count.(tenant: "t1", prefix: "public") == 1
+
+      authorizer = unique("Warden.Test.Compiled.IdsActionAuthz")
+      teams = unique("Warden.Test.Compiled.IdsActionTeams")
+      issues = unique("Warden.Test.Compiled.IdsActionIssues")
+
+      compile!("""
+      defmodule #{authorizer} do
+        use Warden.Authorizer,
+          roles: [:admin],
+          tenant_roles: [:member],
+          policies: [#{teams}, #{issues}]
+
+        def subject(context), do: context[:current_user]
+        def roles(_user, _context), do: []
+        def tenant_roles(_user, _tenant, _context), do: [:member]
+        def tenants(_actor, _context), do: ["t1"]
+      end
+
+      defmodule #{teams} do
+        use Warden.Ecto.Policy,
+          authorizer: #{authorizer}, schema: Warden.Test.Ecto.Team, as: :team,
+          tenant: :workspace_id, repo: Warden.Test.Repo, actions: [:read, :manage]
+
+        allow :read, rule: tenant_role(:member)
+        allow :manage, rule: tenant_role(:member), where: [private: true]
+      end
+
+      defmodule #{issues} do
+        use Warden.Ecto.Policy,
+          authorizer: #{authorizer}, schema: Warden.Test.Ecto.Issue, as: :issue,
+          tenant: :workspace_id, repo: Warden.Test.Repo, actions: [:read]
+
+        allow :read, through: {:team, :read, resolve: :ids}
+      end
+      """)
+
+      authorizer = Module.concat([authorizer])
+      member = Warden.actor(%{current_user: %{id: "sam"}}, authorizer: authorizer)
+      managed = WardenEcto.preload_ids(member, Team, :manage)
+      read = WardenEcto.preload_ids(member, Team, :read)
+
+      {managed_ids, managed_count} = count_queries(fn -> scope_ids(Issue, managed, :read) end)
+      {read_ids, read_count} = count_queries(fn -> scope_ids(Issue, read, :read) end)
+
+      assert managed_count == 2
+      assert read_count == 1
+      assert managed_ids == read_ids
+    end
+
+    test "each side of a delegated actor has its own ids, never used for the other" do
+      world = world()
+      agent = actor(olivia())
+      user = actor(abby())
+      effective = Warden.on_behalf_of(agent, user)
+      preloaded = WardenEcto.preload_ids(effective, Team, :read)
+
+      # Olivia sees no team, so only the teamless issue of t1 (`if_nil: :tenant`).
+      expected = scope_ids(Issue, effective, :read_ids)
+      assert expected == [world.teamless.id]
+
+      {ids, count} = count_queries(fn -> scope_ids(Issue, preloaded, :read_ids) end)
+      assert count == 1
+      assert ids == expected
+
+      # The agent's entries in the user's struct and the other way round: both sides read
+      # their ids again.
+      own = ids_entries(preloaded)
+      theirs = ids_entries(preloaded.delegator)
+      assert map_size(own) == 1 and map_size(theirs) == 1
+      swapped = with_entries(effective, theirs)
+      swapped = %{swapped | delegator: with_entries(user, own)}
+
+      {ids, count} = count_queries(fn -> scope_ids(Issue, swapped, :read_ids) end)
+      assert count == 3
+      assert ids == expected
+
+      # The agent alone decides like the agent's side without delegation bounds, but not
+      # like the side narrowed by `bounds:`.
+      alone = WardenEcto.preload_ids(agent, Team, :read)
+      delegated = Warden.on_behalf_of(alone, user)
+      bounded = Warden.on_behalf_of(alone, user, bounds: %{issue_ids: [world.i1_public.id]})
+
+      {_ids, count} = count_queries(fn -> scope_ids(Issue, delegated, :read_ids) end)
+      assert count == 2
+      {_ids, count} = count_queries(fn -> scope_ids(Issue, bounded, :read_ids) end)
+      assert count == 3
+    end
+
+    test "assert_policy_consistent/4 agrees for a preloaded actor" do
+      world = world()
+      user = Map.put(sam(), :memberships, %{"t1" => [:member], "t2" => [:guest]})
+      plain = actor(user)
+      preloaded = WardenEcto.preload_ids(plain, Team, :read)
+      rows = [i1_public: world.i1_public, i1_private: world.i1_private, i2: world.i2_public]
+
+      cells =
+        Warden.Test.assert_policy_consistent(
+          Warden.Test.Ecto.Issues,
+          [plain: plain, preloaded: preloaded],
+          rows,
+          actions: [:read_ids]
+        )
+
+      for {row, _struct} <- rows do
+        assert cells[{:plain, row, :read_ids}] == cells[{:preloaded, row, :read_ids}]
+      end
+
+      assert cells[{:preloaded, :i1_public, :read_ids}]
+    end
+
+    test "takes the policy or its schema, and refuses a policy the authorizer does not list" do
+      _world = world()
+
+      assert_raise Warden.PolicyError, ~r/lists no policy/, fn ->
+        WardenEcto.preload_ids(actor(sam()), TeamMembership, :read)
+      end
+
+      assert_raise Warden.PolicyError, ~r/has no action :write/, fn ->
+        WardenEcto.preload_ids(actor(sam()), Team, :write)
+      end
+    end
+  end
+
   describe "values of another type" do
     test "within: bounds of another type are cast like the query casts them" do
       world = world()
