@@ -73,6 +73,27 @@ defmodule MyApp.AuthzMatrixTest do
 end
 ```
 
+`import_deps: [:warden]` does not export `actor/2` and `resource/2`: they are common
+names, and keeping them out stops the formatter from dropping parentheses from your own
+functions. To write them without parentheses in tests only, give `test/` its own
+formatter file and list it in the root one:
+
+```elixir
+# .formatter.exs
+[
+  import_deps: [:warden],
+  subdirectories: ["test"],
+  inputs: ["{mix,.formatter}.exs", "{config,lib}/**/*.{ex,exs}"]
+]
+
+# test/.formatter.exs (a subdirectory file inherits nothing, so import :warden again)
+[
+  import_deps: [:warden],
+  inputs: ["**/*.{ex,exs}"],
+  locals_without_parens: [actor: 2, resource: 2]
+]
+```
+
 The module is an `ExUnit.Case` with one test, `"policy matrix"`, tagged
 `:warden_matrix`. It:
 
