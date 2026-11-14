@@ -15,7 +15,7 @@ if Code.ensure_loaded?(Absinthe) do
     alias Absinthe.Resolution
     alias Absinthe.Type.{Interface, Union}
     alias Warden.Absinthe.Decide
-    alias Warden.{Actor, Check, Denial, Evaluator}
+    alias Warden.{Actor, Check, Denial, Evaluator, Shape}
     alias Warden.Authorizer.Callbacks
     alias Warden.Fields.Redactor
 
@@ -295,7 +295,7 @@ if Code.ensure_loaded?(Absinthe) do
 
         other ->
           raise Warden.PolicyError,
-                "#{inspect(authorizer)}.deny/1 returned #{inspect(other)} for a #{inspect(kind)} " <>
+                "#{inspect(authorizer)}.deny/1 returned #{Shape.describe(other)} for a #{inspect(kind)} " <>
                   "denial; expected {:error, term} or :null" <>
                   if(kind == :field, do: " or {:replace, value}", else: "")
       end
@@ -330,7 +330,8 @@ if Code.ensure_loaded?(Absinthe) do
           result
 
         other ->
-          raise Warden.PolicyError, "#{inspect(authorizer)}.deny/1 returned #{inspect(other)}"
+          raise Warden.PolicyError,
+                "#{inspect(authorizer)}.deny/1 returned #{Shape.describe(other)}"
       end
     end
 
@@ -735,7 +736,7 @@ if Code.ensure_loaded?(Absinthe) do
     @spec object_replace_error!(map, term) :: no_return()
     defp object_replace_error!(spec, other) do
       raise Warden.PolicyError,
-            "#{inspect(spec.authorizer)}.deny/1 returned #{inspect(other)} for an object " <>
+            "#{inspect(spec.authorizer)}.deny/1 returned #{Shape.describe(other)} for an object " <>
               "denial; expected {:error, term} or :null"
     end
 
@@ -819,7 +820,7 @@ if Code.ensure_loaded?(Absinthe) do
 
         :error ->
           raise Warden.PolicyError,
-                "a denial error must have a :message, got #{inspect(term)} for " <>
+                "a denial error must have a :message, got #{Shape.describe(term)} for " <>
                   "#{inspect(Resolution.path(res))}"
       end
     end

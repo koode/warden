@@ -69,7 +69,7 @@ if Code.ensure_loaded?(Plug) do
 
     import Plug.Conn
 
-    alias Warden.{Actor, Decision, Denial, Rule}
+    alias Warden.{Actor, Decision, Denial, Rule, Shape}
 
     @option_keys [:rule, :authorizer, :on_deny]
 
@@ -235,7 +235,7 @@ if Code.ensure_loaded?(Plug) do
 
           other ->
             raise Warden.PolicyError,
-                  "#{inspect(authorizer)}.conn_context/1 must return a map, got: #{inspect(other)}"
+                  "#{inspect(authorizer)}.conn_context/1 must return a map, got: #{Shape.describe(other)}"
         end
       else
         Map.put(conn.assigns, :conn, conn)

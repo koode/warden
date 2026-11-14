@@ -38,7 +38,7 @@ defmodule Warden.Actor do
   """
 
   alias Warden.Authorizer.Callbacks
-  alias Warden.Credential
+  alias Warden.{Credential, Shape}
 
   require Logger
 
@@ -341,10 +341,13 @@ defmodule Warden.Actor do
     end
   end
 
+  defp kind_shape(kind) when is_atom(kind), do: inspect(kind)
+  defp kind_shape(kind), do: Shape.describe(kind)
+
   @spec undeclared_kind!(module, term) :: no_return()
   defp undeclared_kind!(authorizer, kind) do
     raise Warden.PolicyError, """
-    #{inspect(authorizer)}.kind/2 returned #{inspect(kind)}, which is not a kind in its \
+    #{inspect(authorizer)}.kind/2 returned #{kind_shape(kind)}, which is not a kind in its \
     `kinds:` catalog\
     """
   end
@@ -362,7 +365,7 @@ defmodule Warden.Actor do
       other ->
         raise Warden.PolicyError, """
         #{inspect(authorizer)}.credential/1 must return a %Warden.Credential{} or nil, \
-        got: #{inspect(other)}\
+        got: #{Shape.describe(other)}\
         """
     end
   end
@@ -411,7 +414,7 @@ defmodule Warden.Actor do
 
   defp ensure_list!(other, authorizer, callback, arity) do
     raise Warden.PolicyError,
-          "#{inspect(authorizer)}.#{callback}/#{arity} must return a list, got: #{inspect(other)}"
+          "#{inspect(authorizer)}.#{callback}/#{arity} must return a list, got: #{Shape.describe(other)}"
   end
 
   defp known_roles(roles, catalog, authorizer) do

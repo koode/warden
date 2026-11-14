@@ -5,7 +5,7 @@ defmodule Warden.Authorizer.Callbacks do
   # by `use Warden.Authorizer`; dispatching here keeps the user's module free of
   # generated public functions.)
 
-  alias Warden.{Actor, Check, Denial, Policy}
+  alias Warden.{Actor, Check, Denial, Policy, Shape}
   alias Warden.Policy.Dispatch
 
   @default_kind :user
@@ -33,7 +33,7 @@ defmodule Warden.Authorizer.Callbacks do
 
         other ->
           raise Warden.PolicyError,
-                "#{inspect(authorizer)}.socket_context/1 must return a map, got: #{inspect(other)}"
+                "#{inspect(authorizer)}.socket_context/1 must return a map, got: #{Shape.describe(other)}"
       end
     else
       socket.assigns
@@ -83,7 +83,7 @@ defmodule Warden.Authorizer.Callbacks do
 
         other ->
           raise Warden.PolicyError,
-                "#{inspect(authorizer)}.tenants/2 must return a list, got: #{inspect(other)}"
+                "#{inspect(authorizer)}.tenants/2 must return a list, got: #{Shape.describe(other)}"
       end
     else
       []

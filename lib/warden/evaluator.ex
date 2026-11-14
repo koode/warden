@@ -15,7 +15,7 @@ defmodule Warden.Evaluator do
   # An outcome is `:ok` or `{:deny, failed_rule, missing_roles, missing_permissions,
   # reason}`. `trace` collects `{leaf_rule, :ok | {:deny, reason}}` in evaluation order.
 
-  alias Warden.{Actor, Check, Credential, Explanation}
+  alias Warden.{Actor, Check, Credential, Explanation, Shape}
   alias Warden.Authorizer.{Callbacks, Catalog}
   alias Warden.Policy.Dispatch
 
@@ -181,7 +181,7 @@ defmodule Warden.Evaluator do
   defp batch_results!(other, _count, authorizer, name) do
     raise Warden.PolicyError, """
     #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return a list, \
-    got: #{inspect(other)}\
+    got: #{Shape.describe(other)}\
     """
   end
 
@@ -189,7 +189,7 @@ defmodule Warden.Evaluator do
   defp batch_raised!(kind, reason, authorizer, name) do
     raise Warden.PolicyError, """
     #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) failed, so every value \
-    is denied: #{Exception.format_banner(kind, reason)}\
+    is denied: #{Shape.failure(kind, reason)}\
     """
   end
 
@@ -544,7 +544,7 @@ defmodule Warden.Evaluator do
       {:ok, other} ->
         raise Warden.PolicyError, """
         #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return one result \
-        per check, got: #{inspect(other)}\
+        per check, got: #{Shape.describe(other)}\
         """
     end
   end
@@ -563,7 +563,7 @@ defmodule Warden.Evaluator do
   @spec bad_result!(term, module, atom) :: no_return()
   defp bad_result!(result, authorizer, name) do
     raise Warden.PolicyError,
-          "#{inspect(authorizer)}.check(#{inspect(name)}, ...) #{@check_contract}, got: #{inspect(result)}"
+          "#{inspect(authorizer)}.check(#{inspect(name)}, ...) #{@check_contract}, got: #{Shape.describe(result)}"
   end
 
   @spec valid_reason?(term) :: boolean

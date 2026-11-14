@@ -16,7 +16,7 @@ defmodule Warden.Policy.Dispatch do
   # query scope can). The result is checked here, so every implementation fails closed
   # the same way.
 
-  alias Warden.{Actor, Evaluator}
+  alias Warden.{Actor, Evaluator, Shape}
   alias Warden.Authorizer.Callbacks
 
   @spec info!(term) :: map
@@ -29,7 +29,8 @@ defmodule Warden.Policy.Dispatch do
     end
   end
 
-  def info!(other), do: raise(Warden.PolicyError, "not a Warden policy: #{inspect(other)}")
+  def info!(other),
+    do: raise(Warden.PolicyError, "not a Warden policy: #{Shape.describe(other)}")
 
   # The default `__warden_decide__/4` of `use Warden.Policy`.
   @spec callbacks_decide(module, atom, Actor.t(), [term], map) :: term
@@ -108,6 +109,10 @@ defmodule Warden.Policy.Dispatch do
     answers =
       try do
         policy.__warden_decide__(action, actor, values, context)
+      rescue
+        # A policy layer built on Warden (Warden.Ecto.Policy) reports its own contract
+        # errors, which already name shapes only.
+        error in Warden.PolicyError -> reraise error, __STACKTRACE__
       catch
         kind, reason -> decide_failed!(policy, action, kind, reason)
       end
@@ -117,7 +122,7 @@ defmodule Warden.Policy.Dispatch do
     else
       raise Warden.PolicyError, """
       #{inspect(policy)} must return one result per value for #{inspect(action)} \
-      (#{count} values), got: #{inspect(answers)}\
+      (#{count} values), got: #{Shape.describe(answers)}\
       """
     end
   end
@@ -126,7 +131,7 @@ defmodule Warden.Policy.Dispatch do
   defp decide_failed!(policy, action, kind, reason) do
     raise Warden.PolicyError, """
     #{inspect(policy)} failed deciding #{inspect(action)}, so nothing is allowed: \
-    #{Exception.format_banner(kind, reason)}\
+    #{Shape.failure(kind, reason)}\
     """
   end
 
@@ -143,7 +148,7 @@ defmodule Warden.Policy.Dispatch do
   defp bad_answer!(answer, policy, action) do
     raise Warden.PolicyError, """
     #{inspect(policy)} must return true, false or {:deny, reason} for \
-    #{inspect(action)}, got: #{inspect(answer)}\
+    #{inspect(action)}, got: #{Shape.describe(answer)}\
     """
   end
 

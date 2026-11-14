@@ -12,7 +12,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Type
     alias Warden.Absinthe.Middleware
-    alias Warden.{Actor, Authorizer, Check, Denial, Rule}
+    alias Warden.{Actor, Authorizer, Check, Denial, Rule, Shape}
 
     def config_ref(field_ident, original, spec) do
       {:ref, __MODULE__, {:config, field_ident, original, spec}}
@@ -197,7 +197,7 @@ if Code.ensure_loaded?(Absinthe) do
     defp put_actor_key(_config, _context_id, other, authorizer) do
       raise Warden.PolicyError,
             "#{inspect(authorizer)}.actor_key/2 must return a string or nil, got: " <>
-              inspect(other)
+              Shape.describe(other)
     end
 
     defp drop_context_id(config) when is_list(config), do: Keyword.delete(config, :context_id)

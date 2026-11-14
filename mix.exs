@@ -94,6 +94,7 @@ defmodule Warden.MixProject do
         "Warden.Absinthe.Phase.ItemErrors",
         "Warden.Absinthe.Plugin",
         "Warden.Policy.Dispatch",
+        "Warden.Shape",
         "Warden.Plug.init/1"
       ]
     ]

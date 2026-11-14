@@ -4,7 +4,7 @@ defmodule Warden.Decision do
   # validation, evaluation, the denial and the telemetry event. `layer` names the front
   # end in telemetry.
 
-  alias Warden.{Actor, Check, Denial, Evaluator, Rule, Telemetry}
+  alias Warden.{Actor, Check, Denial, Evaluator, Rule, Shape, Telemetry}
 
   @spec authorize(Warden.actor_or_context(), Rule.t(), keyword, atom) ::
           :ok | {:error, Denial.t()}
@@ -59,7 +59,8 @@ defmodule Warden.Decision do
   end
 
   def setup(other, _opts) do
-    raise ArgumentError, "expected a %Warden.Actor{} or a context map, got: #{inspect(other)}"
+    raise ArgumentError,
+          "expected a %Warden.Actor{} or a context map, got: #{Shape.describe(other)}"
   end
 
   @spec validate_rule!(Rule.t(), module) :: :ok
@@ -100,7 +101,8 @@ defmodule Warden.Decision do
   defp check(actor, context, opts, value) do
     args = Keyword.get(opts, :args, %{})
 
-    if not is_map(args), do: raise(ArgumentError, "`args:` must be a map, got: #{inspect(args)}")
+    if not is_map(args),
+      do: raise(ArgumentError, "`args:` must be a map, got: #{Shape.describe(args)}")
 
     %Check{actor: actor, value: value, args: args, context: context}
   end
