@@ -52,11 +52,10 @@ if Code.ensure_loaded?(Ecto) do
     import Ecto.Query, only: [dynamic: 1, where: 2]
 
     alias Warden.{Actor, Decision, Rule, Telemetry}
-    alias Warden.Ecto.{Audience, Explain, Info, Scope}
+    alias Warden.Ecto.{Audience, Explain, Guard, Info, Scope}
     alias Warden.Ecto.Policy.Graph
 
     @default_action :read
-    @marker "warden:scope"
 
     @typedoc """
     Options: `:authorizer`, `:context` (the context for policy callbacks when the first
@@ -75,14 +74,24 @@ if Code.ensure_loaded?(Ecto) do
         Warden.Ecto.scope(query, context, :read)          # every tenant of the actor
 
     Raises `Warden.PolicyError` when the authorizer lists no `Warden.Ecto.Policy` for the
-    root schema, the action is unknown, or a scope callback returns anything but a
-    dynamic, `true` or `false`.
+    root schema, the action is unknown, a scope callback returns anything but a dynamic,
+    `true` or `false`, or a CTE of the query is named like a table the scope reads
+    (Postgres would read the CTE instead).
+
+    Raises `ArgumentError` for queries it cannot scope as a whole:
+
+      * `union`, `union_all`, `intersect` and `except`: scope each arm, then combine
+        them (`union_all(scope(arm_a, ...), ^scope(arm_b, ...))`);
+      * preloads, which would load children without their policy: preload a scoped query
+        instead, `preload(comments: ^Warden.Ecto.scope(Comment, actor, :read))`, or load
+        them with `dataloader_query/2`.
     """
     @spec scope(Ecto.Queryable.t(), Warden.actor_or_context(), atom, opts) :: Ecto.Query.t()
     def scope(queryable, actor_or_context, action, opts \\ []) when is_list(opts) do
       {actor, context, authorizer} = Decision.setup(actor_or_context, opts)
       query = Ecto.Queryable.to_query(queryable)
       info = query |> root_schema!() |> then(&Info.policy_for!(authorizer, &1))
+      Guard.compose!(query)
       Graph.ensure_valid!(info.policy)
 
       which = if Keyword.has_key?(opts, :tenant), do: {:tenant, opts[:tenant]}, else: :all
@@ -90,10 +99,14 @@ if Code.ensure_loaded?(Ecto) do
 
       emit_scope(info, action, actor, Keyword.get(opts, :tenant), verdict)
 
-      query
-      |> named_root!(info)
-      |> where(^as_dynamic(verdict))
-      |> mark(info, action)
+      scoped =
+        query
+        |> named_root!(info)
+        |> where(^as_dynamic(verdict))
+        |> Guard.mark(info.policy, action)
+
+      Guard.ctes!(scoped)
+      scoped
     end
 
     @doc """
@@ -269,18 +282,25 @@ if Code.ensure_loaded?(Ecto) do
     @doc """
     Runs `repo.update_all(query, updates, opts)` when `query` was scoped by `scope/4` for
     one of the policy's `write_actions:`, and raises `Warden.PolicyError` otherwise. A
-    scope that a later `or_where` widened is refused too.
+    scope that a later `or_where` widened is refused, and so is a CTE named like a table
+    the scope reads.
+
+    It also refuses `set`, `inc`, `push` and `pull` on the policy's `:tenant` field and on
+    the fields the write action's clauses go `through:` (foreign keys, and the type and id
+    fields of `through_type:`), which would move a row out of the scope that admitted it.
+    Every other field is checked before the write only: the scope decides which rows may
+    be written, not what they look like afterwards.
     """
     @spec update_all(module, Ecto.Query.t(), keyword, keyword) :: {non_neg_integer, nil | [term]}
     def update_all(repo, query, updates, opts) when is_list(opts) do
-      ensure_write_scope!(query, "update_all")
+      Guard.write!(query, updates, "update_all")
       repo.update_all(query, updates, opts)
     end
 
     @doc "Like `update_all/4`, for `repo.delete_all(query, opts)`."
     @spec delete_all(module, Ecto.Query.t(), keyword) :: {non_neg_integer, nil | [term]}
     def delete_all(repo, query, opts) when is_list(opts) do
-      ensure_write_scope!(query, "delete_all")
+      Guard.write!(query, [], "delete_all")
       repo.delete_all(query, opts)
     end
 
@@ -324,62 +344,6 @@ if Code.ensure_loaded?(Ecto) do
     defp as_dynamic(true), do: dynamic(true)
     defp as_dynamic(false), do: dynamic(false)
     defp as_dynamic(%Ecto.Query.DynamicExpr{} = dynamic), do: dynamic
-
-    # The `where` that `scope/4` adds carries a marker (as its source file), so
-    # `update_all/4` and `delete_all/3` can tell a Warden-scoped query from another one.
-    defp mark(query, info, action) do
-      marker = "#{@marker}:#{info.policy}:#{action}"
-      wheres = List.update_at(query.wheres, -1, &%{&1 | file: marker})
-      %{query | wheres: wheres}
-    end
-
-    defp ensure_write_scope!(%Ecto.Query{} = query, function) do
-      if not write_scoped?(query) do
-        raise Warden.PolicyError, """
-        Warden.Ecto.#{function} refuses a query that Warden.Ecto.scope/4 did not scope for \
-        one of the policy's write_actions (or that was widened afterwards with or_where)\
-        """
-      end
-
-      :ok
-    end
-
-    defp ensure_write_scope!(other, function) do
-      raise ArgumentError, "Warden.Ecto.#{function} expects an Ecto query, got: #{inspect(other)}"
-    end
-
-    # A write scope for the query's root schema, and no `or_where` after it.
-    defp write_scoped?(query) do
-      schema = root_schema!(query)
-
-      query.combinations == [] and
-        query.wheres
-        |> Enum.with_index()
-        |> Enum.any?(fn {where, index} ->
-          write_marker?(where.file, schema) and
-            query.wheres |> Enum.drop(index + 1) |> Enum.all?(&(&1.op == :and))
-        end)
-    end
-
-    defp write_marker?(file, schema) when is_binary(file) do
-      with ["warden", "scope", policy, action] <- String.split(file, ":", parts: 4),
-           {:ok, policy} <- existing_atom(policy),
-           {:ok, action} <- existing_atom(action),
-           true <- Info.ecto_policy?(policy) do
-        info = Info.fetch!(policy)
-        info.schema == schema and action in info.write_actions
-      else
-        _not_a_marker -> false
-      end
-    end
-
-    defp write_marker?(_file, _schema), do: false
-
-    defp existing_atom(string) do
-      {:ok, String.to_existing_atom(string)}
-    rescue
-      ArgumentError -> :error
-    end
 
     defp emit_scope(info, action, %Actor{} = actor, tenant, verdict) do
       decision = %{

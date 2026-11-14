@@ -311,7 +311,37 @@ MyApp.Issues.Issue
 ```
 
 `scope/4` takes a schema or a query whose root is the policy's schema and adds one
-`where`. Pagination, sorting, counts and joins stay yours. Every function takes an actor
+`where`. Pagination, sorting, counts and joins stay yours.
+
+It refuses (`ArgumentError`) what it cannot scope as a whole:
+
+* `union`, `union_all`, `intersect` and `except`: the other arms would stay unscoped.
+  Scope each arm, then combine them:
+
+  ```elixir
+  open = Warden.Ecto.scope(open_issues, actor, :read)
+  recent = Warden.Ecto.scope(recent_issues, actor, :read)
+  Repo.all(union_all(open, ^recent))
+  ```
+
+* preloads: the children would load without their own policy. Preload a scoped query,
+  or load them with `dataloader_query/2`:
+
+  ```elixir
+  comments = Warden.Ecto.scope(MyApp.Comment, actor, :read)
+
+  MyApp.Issues.Issue
+  |> Warden.Ecto.scope(actor, :read)
+  |> preload(comments: ^comments)
+  ```
+
+A CTE named like a table the scope reads (`WITH team_memberships AS (...)`) raises
+`Warden.PolicyError`: Postgres would read the CTE instead of the table. Other CTEs are
+fine.
+
+A query run with a prefix (`Repo.all(query, prefix: "tenant_b")`) reads every table of
+the scope in that prefix. Single checks and lists decide a struct against the prefix it
+was loaded from (`__meta__.prefix`). Every function takes an actor
 or a context map, and `authorizer:` like the core API.
 
 ## Tenants
@@ -444,8 +474,14 @@ MyApp.Issues.Issue
 ```
 
 `update_all/4` and `delete_all/3` raise `Warden.PolicyError` for a query that `scope/4`
-did not scope for one of the policy's `write_actions:`, or that a later `or_where`
-widened.
+did not scope for one of the policy's `write_actions:`, that a later `or_where` widened,
+or that has a CTE named like a table the scope reads.
+
+`update_all/4` also refuses `set`, `inc`, `push` and `pull` on the policy's `tenant:`
+field and on the fields the write action's clauses go `through:` (the foreign keys, and
+the type and id fields of `through_type:`): those would move a row out of the scope
+that admitted it, for example into another tenant. Every other field is checked before
+the write only: the scope decides which rows may change, not what they hold afterwards.
 
 ## Explaining a decision
 

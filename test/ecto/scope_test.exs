@@ -609,6 +609,71 @@ defmodule Warden.Ecto.ScopeTest do
     end
   end
 
+  describe "guards" do
+    test "update_all/4 refuses to change the tenant field or a through foreign key" do
+      world = world()
+      query = WardenEcto.scope(Issue, actor(sam()), :write)
+
+      for updates <- [
+            [set: [workspace_id: "t2"]],
+            [set: [team_id: world.t2_public.id]],
+            [inc: [team_id: 1]]
+          ] do
+        assert_raise Warden.PolicyError, ~r/refuses to update/, fn ->
+          WardenEcto.update_all(Repo, query, updates, [])
+        end
+      end
+
+      with_update = update(query, set: [team_id: ^world.t2_public.id])
+
+      assert_raise Warden.PolicyError, ~r/refuses to update :team_id/, fn ->
+        WardenEcto.update_all(Repo, with_update, [], [])
+      end
+
+      assert Repo.get!(Issue, world.i1_public.id).team_id == world.t1_public.id
+      assert {_count, nil} = WardenEcto.update_all(Repo, query, [set: [title: "edited"]], [])
+    end
+
+    test "scope/4 refuses a CTE named like a table its scope reads, and allows others" do
+      _world = world()
+      forged = from(team in Team, select: %{id: team.id})
+      shadowing = Issue |> from() |> with_cte("teams", as: ^forged)
+      unrelated = Issue |> from() |> with_cte("recent", as: ^forged)
+
+      assert_raise Warden.PolicyError,
+                   ~r/CTEs named like tables its Warden scope reads \(teams\)/,
+                   fn ->
+                     WardenEcto.scope(shadowing, actor(sam()), :read)
+                   end
+
+      assert %Ecto.Query{} = WardenEcto.scope(unrelated, actor(sam()), :read)
+    end
+
+    test "scope/4 refuses preloads and combinations, and a scoped preload works" do
+      world = world()
+      comment = insert!(%Comment{workspace_id: "t1", issue_id: world.i1_public.id})
+      _hidden = insert!(%Comment{workspace_id: "t2", issue_id: world.i1_public.id})
+
+      assert_raise ArgumentError, ~r/preload a scoped query/, fn ->
+        Issue |> preload(:comments) |> WardenEcto.scope(actor(sam()), :read)
+      end
+
+      assert_raise ArgumentError, ~r/scope each arm/, fn ->
+        Issue |> from() |> union(^from(issue in Issue)) |> WardenEcto.scope(actor(sam()), :read)
+      end
+
+      comments = WardenEcto.scope(Comment, actor(sam()), :read)
+
+      issues_query =
+        Issue
+        |> WardenEcto.scope(actor(sam()), :read)
+        |> where([issue: issue], issue.id == ^world.i1_public.id)
+
+      [issue] = issues_query |> preload(comments: ^comments) |> Repo.all()
+      assert ids(issue.comments) == [comment.id]
+    end
+  end
+
   describe "to_sql/4 and SQL injection" do
     test "returns the scoped SQL with parameters" do
       _world = world()
