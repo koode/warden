@@ -251,6 +251,43 @@ defmodule Warden.Ecto.PolicyCompileTest do
     end
   end
 
+  describe "the fields a mark keeps" do
+    # The primary key, the tenant and every field a clause reads, in schema order; every
+    # persisted field when a decision may read any of them.
+    test "are the fields the clauses of every action read" do
+      body = """
+      allow :read, rule: public(), where: [state: "open"]
+      allow :read, rule: public(), actor_in: [:author_id]
+      allow :read, rule: kind(:webhook), within: {:issue_ids, :id}
+      """
+
+      policy = policy!(@issue, body)
+      assert policy.__warden_ecto__(:info).mark_fields == [:id, :workspace_id, :state, :author_id]
+    end
+
+    test "include the foreign key of a through: association" do
+      policy = policy!(@issue, "allow :read, rule: public(), through: :team")
+      assert policy.__warden_ecto__(:info).mark_fields == [:id, :workspace_id, :team_id]
+    end
+
+    test "are every field with a when: function, a scope/4 or an allowed?/4" do
+      when_body = """
+      allow :read, rule: public(), when: fn _actor, _tenant, _context -> true end
+      """
+
+      scope_body = "def scope(:read, _actor, _tenant, _context), do: true"
+
+      allowed_body = """
+      allow :read, rule: public()
+      def allowed?(:read, _actor, _issue, _context), do: true
+      """
+
+      for body <- [when_body, scope_body, allowed_body] do
+        assert policy!(@issue, body).__warden_ecto__(:info).mark_fields == :all
+      end
+    end
+  end
+
   describe "scope callbacks" do
     test "an action takes a scope/4 or clauses, never both" do
       body = """

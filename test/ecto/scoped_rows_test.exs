@@ -4,7 +4,7 @@ defmodule Warden.Ecto.ScopedRowsTest do
   use Warden.Test.EctoCase, async: true
 
   alias Warden.Ecto, as: WardenEcto
-  alias Warden.Test.Ecto.{Authz, Comments, Issue, Issues, Team}
+  alias Warden.Test.Ecto.{Authz, Comments, Issue, Issues, Note, Notes, Team}
 
   @both_tenants %{id: "lee", memberships: %{"t1" => [:member], "t2" => [:member]}}
 
@@ -259,11 +259,42 @@ defmodule Warden.Ecto.ScopedRowsTest do
       refute WardenEcto.allowed?(actor, :read, trashed)
     end
 
+    test "for a struct whose clause field, tenant or prefix changed" do
+      actor = actor(@both_tenants)
+      [row | _rest] = load(actor)
+      other_team = insert!(%Team{workspace_id: "t1"})
+
+      changed = [
+        %{row | team_id: other_team.id},
+        %{row | workspace_id: "t2"},
+        %{row | author_id: "kim"},
+        Ecto.put_meta(row, prefix: "public")
+      ]
+
+      for struct <- changed do
+        {_allowed, count} = count_queries(fn -> WardenEcto.filter(actor, :read, [struct]) end)
+        assert count > 0
+      end
+    end
+
+    test "of a policy with a hand-written scope/4, for a change to any persisted field" do
+      actor = actor(abby())
+      insert!(%Note{workspace_id: "t1", author_id: "abby"})
+      [note] = WardenEcto.all(Repo, Note, actor, :read)
+
+      assert WardenEcto.allowed?(actor, :read, note)
+      refute_received {:allowed?, :read, _id}
+
+      # Nothing tells which fields a hand-written scope reads, so every one counts.
+      assert WardenEcto.allowed?(actor, :read, %{note | secret: true})
+      assert_received {:allowed?, :read, _id}
+    end
+
     test "for another policy" do
       actor = actor(@both_tenants)
       [row | _rest] = load(actor)
       mark = row.__meta__.context
-      forged = Ecto.put_meta(row, context: %{mark | policy: Comments})
+      forged = Ecto.put_meta(row, context: %{mark | call: %{mark.call | policy: Comments}})
 
       {[^forged], count} = count_queries(fn -> WardenEcto.filter(actor, :read, [forged]) end)
       assert count > 0
@@ -279,6 +310,35 @@ defmodule Warden.Ecto.ScopedRowsTest do
                Warden.authorize(bound, read_rule(), value: t2_row)
 
       refute WardenEcto.allowed?(bound, :read, t2_row)
+    end
+  end
+
+  describe "a mark is kept" do
+    # The mark holds only the fields a decision of the policy can read: the primary key,
+    # the tenant and the fields its clauses read (Issues: team_id, trashed_at, author_id).
+    # A change to any other field cannot change the scope's answer.
+    test "for a struct changed in a field no clause of its policy reads" do
+      actor = actor(@both_tenants)
+      rows = load(actor)
+
+      retitled =
+        Enum.map(rows, &%{&1 | title: "renamed", state: :closed, priority: Decimal.new(9)})
+
+      {filtered, count} = count_queries(fn -> WardenEcto.filter(actor, :read, retitled) end)
+      assert filtered == retitled
+      assert count == 0
+    end
+
+    test "for the fields a decision of the policy reads, or every field" do
+      issue_fields = Issues.__warden_ecto__(:info).mark_fields
+      assert issue_fields == [:id, :workspace_id, :author_id, :trashed_at, :team_id]
+      assert Notes.__warden_ecto__(:info).mark_fields == :all
+    end
+
+    test "with one call-level term shared by every row of the call" do
+      actor = actor(@both_tenants)
+      [first, second | _rest] = load(actor)
+      assert :erts_debug.same(first.__meta__.context.call, second.__meta__.context.call)
     end
   end
 

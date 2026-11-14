@@ -523,8 +523,13 @@ credential's tenant (`:tenant_binding`) and the system kinds. A mark counts only
   actor's own): a decision under another context decides the rows through the policy,
   since a policy may read the context. Only `:loader` is left out of the comparison,
   because Absinthe's Dataloader plugin replaces it on every resolution pass;
-* for the row as loaded: a struct whose persisted fields or prefix changed is decided as
-  it is.
+* for the row as loaded, as far as the policy can tell: a struct whose prefix, primary
+  key, tenant or any field a clause of the policy reads (for any of its actions: `where:`
+  keys, the foreign key of `through:`, `actor_in:` and `within:` fields, and so on)
+  changed is decided as it is. A change to a field no clause reads (a title, say) keeps
+  the mark, because the scope's answer does not depend on it. With a hand-written
+  `scope/4`, `allowed?/4` or `allowed_many/4`, or a `when:` function, Warden cannot tell
+  which fields matter, so a change to any persisted field drops the mark.
 
 Only the root structs of the policy's schema are marked (a partial `select: [...]` of
 the root included): never preloaded children, structs selected from a join or changed by

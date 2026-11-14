@@ -278,6 +278,56 @@ if Code.ensure_loaded?(Ecto) do
 
     defp tenant_from_arg(rule), do: rule
 
+    # The fields of a row that a decision of this policy can depend on, for the marks of
+    # `Warden.Ecto.all/5` (`Warden.Ecto.Mark`): the primary key, the tenant field and
+    # every field a clause of any action reads, in schema order. `:all` (every persisted
+    # field) when a decision can read any field: an action with a hand-written `scope/4`,
+    # a `when:` function (its dynamic may name any field), or a hand-written `allowed?/4`
+    # or `allowed_many/4`.
+    @spec mark_fields(map, map, boolean) :: [atom] | :all
+    def mark_fields(actions, options, custom?) do
+      parts =
+        for {_action, {:clauses, requires, allows}} <- actions,
+            clause <- requires ++ allows,
+            part <- clause.parts,
+            do: part
+
+      if custom? or Enum.any?(actions, &match?({_action, :scope}, &1)) or
+           Enum.any?(parts, &match?({:when, _function}, &1)) do
+        :all
+      else
+        read = Enum.flat_map(parts, &part_fields(&1, options))
+        read = [options.primary_key, options.tenant | read]
+        Enum.filter(options.schema.__schema__(:fields), &(&1 in read))
+      end
+    end
+
+    defp part_fields({:where, conditions}, _options), do: Keyword.keys(conditions)
+
+    defp part_fields({:through, assoc, _action, _if_nil, _opts}, options),
+      do: owner_key(assoc, options)
+
+    defp part_fields({:through_any, assoc, _action, _opts}, options),
+      do: owner_key(assoc, options)
+
+    defp part_fields({:none, assoc}, options), do: owner_key(assoc, options)
+    defp part_fields({:actor_in, fields}, _options), do: fields
+
+    defp part_fields({:member_of, _link, _row_key, _actor_key}, options),
+      do: [options.primary_key]
+
+    defp part_fields({:grant, _link, _row_key, _grantee_key, _expires}, options),
+      do: [options.primary_key]
+
+    defp part_fields({:through_type, {type_field, id_field, _targets}}, _options),
+      do: [type_field, id_field]
+
+    defp part_fields({:within, _bounds_key, field, _if_missing}, _options), do: [field]
+    defp part_fields({:rule, _rule}, _options), do: []
+
+    defp owner_key(assoc, options),
+      do: [options.schema.__schema__(:association, assoc).owner_key]
+
     defp action_errors(clauses, actions, scope_patterns) do
       clause_actions = clauses |> Enum.map(& &1.action) |> Enum.uniq()
       scope_any? = :any in scope_patterns

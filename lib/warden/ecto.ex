@@ -202,8 +202,15 @@ if Code.ensure_loaded?(Ecto) do
         own context, and a decision under any other context (not `===`) decides the row
         through its policy. The `:loader` key is left out of that comparison: Absinthe's
         Dataloader plugin replaces it on every resolution pass;
-      * for the struct as loaded: a struct whose persisted fields or prefix changed is
-        decided as it is.
+      * for the struct as loaded, as far as the decision can tell: a struct whose prefix,
+        primary key, tenant or any field a clause of the policy reads (for any action)
+        changed is decided as it is. A change to a field no clause reads keeps the mark,
+        since the scope's answer does not depend on it. For a policy with a hand-written
+        `scope/4`, `allowed?/4` or `allowed_many/4`, or a `when:` function, every
+        persisted field counts.
+
+    The marks of one call share one term with the policy, action, actor instances,
+    context and prefix; each row adds only the values of the fields above.
 
     Pass an actor, not a context map, and use that actor for the decisions: a context map
     builds a new actor on every call. In GraphQL that is the actor of the document

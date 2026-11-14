@@ -1261,8 +1261,20 @@ Paths are relative to `lib/warden/`.
   actor, the instance of the delegator it carries), the context the scope ran with (the
   `context:` option, else the actor's own; a decision under a context that is not `===`
   to it does not match, except for the `:loader` key, which Absinthe's Dataloader plugin
-  replaces on every resolution pass), the prefix and the values of every persisted field, the tenant
-  included. `Decide` (the one place that decides a loaded
+  replaces on every resolution pass), the prefix and the values of the fields a decision
+  of the policy can read. Those are the policy's `mark_fields`, computed at compile time
+  (`Compiler.mark_fields/3`): the primary key, the tenant field and every field a clause
+  of any action reads (`where:` keys, the owner key of `through:`, `through_any:` and
+  `none:`, `actor_in:`, `within:`, both `through_type:` fields, the primary key for
+  `grant:` and `member_of:`), or every persisted field (`:all`) for a policy with a
+  hand-written `scope/4`, `allowed?/4` or `allowed_many/4`, or a `when:` function, whose
+  dynamic may name any field. A change to a field outside that list keeps the mark: the
+  scope's answer cannot depend on it. Everything but the values is the same for every
+  row of a call, so it is one `Mark.Call` term that every row's mark references; a row
+  adds a tuple of values. On 1,000 rows of the test repo this took the marking from
+  about 0.5 ms to 0.1 ms and the result from 2.2 to 1.6 times the words of plain
+  `repo.all/2` (the rest is each row's own copy of its struct and `__meta__`). Rows from
+  another prefix than the call's first struct are not marked. `Decide` (the one place that decides a loaded
   struct for every entry point: `can/2` in GraphQL and the core API, `allowed?/4`,
   `filter/4`) runs the scope gates first and then answers `true` for a struct whose mark
   matches all of these, before a hand-written `allowed?/4` and before the in-memory

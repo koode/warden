@@ -15,9 +15,17 @@ if Code.ensure_loaded?(Ecto) do
     # context says nothing about another. The one key left out of that comparison is
     # `:loader`, where Absinthe's Dataloader plugin keeps the request's data-loading cache
     # and replaces it on every resolution pass; it holds data, not the actor's authority.
-    # The struct must still be the one loaded: same
-    # prefix and same values in every persisted field (the tenant included), so a changed
-    # struct is decided as it is.
+    #
+    # The struct must still be the one loaded, as far as the decision can tell: same
+    # prefix and same values in every field the policy's decision can read (the policy's
+    # `mark_fields`: the primary key, the tenant and the fields its clauses read, or every
+    # persisted field for a policy with a hand-written `scope/4`, `allowed?/4` or `when:`
+    # function). A change to such a field drops the mark; a change to any other field
+    # keeps it, since the scope's answer does not depend on it.
+    #
+    # Everything but those values is the same for every row of one call, so it lives in
+    # one `Warden.Ecto.Mark.Call` that every row's mark references: a call over many rows
+    # holds that term once, and each row adds a small tuple of values.
     #
     # Postgres and MySQL do not use `__meta__.context`; a struct whose context is already
     # set (by another adapter) is never marked.
@@ -25,29 +33,52 @@ if Code.ensure_loaded?(Ecto) do
     alias Warden.Actor
     alias Warden.Ecto.Info
 
-    @enforce_keys [:policy, :action, :actor, :delegator, :context, :prefix, :fields]
+    defmodule Call do
+      @moduledoc false
+      # What one `Warden.Ecto.all/5` call shares between the marks of its rows.
+      @enforce_keys [:policy, :action, :actor, :delegator, :context, :prefix]
+      defstruct @enforce_keys
+
+      @type t :: %__MODULE__{
+              policy: module,
+              action: atom,
+              actor: reference,
+              delegator: reference | nil,
+              context: map,
+              prefix: String.t() | nil
+            }
+    end
+
+    @enforce_keys [:call, :values]
     defstruct @enforce_keys
 
-    @type t :: %__MODULE__{
-            policy: module,
-            action: atom,
-            actor: reference,
-            delegator: reference | nil,
-            context: map,
-            prefix: String.t() | nil,
-            fields: map
-          }
+    @type t :: %__MODULE__{call: Call.t(), values: tuple}
 
     # Marks the structs of the policy's schema in `rows`, when `query` returned its root
     # binding as is and the actor has an instance. `context` is the one the scope ran
     # with. A struct from a join, a `select_merge` or a source other than the schema's own
-    # is never marked.
+    # is never marked, and neither is a struct from another prefix than the call's (the
+    # prefix of the first struct of the schema).
     @spec mark_all(list, map, atom, Actor.t(), map, Ecto.Query.t()) :: list
     def mark_all(rows, info, action, %Actor{instance: instance} = actor, context, query)
         when is_reference(instance) do
-      if root_select?(query.select),
-        do: Enum.map(rows, &mark(&1, info, action, actor, context)),
-        else: rows
+      with true <- root_select?(query.select),
+           %{__meta__: %Ecto.Schema.Metadata{prefix: prefix}} <- first_of(rows, info.schema) do
+        call = %Call{
+          policy: info.policy,
+          action: action,
+          actor: instance,
+          delegator: actor.delegator && actor.delegator.instance,
+          context: comparable(context),
+          prefix: prefix
+        }
+
+        fields = fields(info)
+        source = info.schema.__schema__(:source)
+        Enum.map(rows, &mark(&1, info.schema, source, call, fields))
+      else
+        _unmarked -> rows
+      end
     end
 
     def mark_all(rows, _info, _action, _actor, _context, _query), do: rows
@@ -56,48 +87,38 @@ if Code.ensure_loaded?(Ecto) do
     defp root_select?(%Ecto.Query.SelectExpr{expr: {:&, _meta, [0]}}), do: true
     defp root_select?(_select), do: false
 
-    defp mark(
-           %schema{__meta__: %Ecto.Schema.Metadata{context: nil} = meta} = struct,
-           info,
-           action,
-           actor,
-           context
-         )
-         when schema == info.schema do
-      if meta.source == schema.__schema__(:source) do
-        mark = %__MODULE__{
-          policy: info.policy,
-          action: action,
-          actor: actor.instance,
-          delegator: actor.delegator && actor.delegator.instance,
-          context: comparable(context),
-          prefix: meta.prefix,
-          fields: persisted(struct)
-        }
+    defp first_of(rows, schema), do: Enum.find(rows, &match?(%{__struct__: ^schema}, &1))
 
-        Ecto.put_meta(struct, context: mark)
-      else
-        struct
-      end
+    defp mark(
+           %schema{__meta__: %Ecto.Schema.Metadata{context: nil, source: source, prefix: prefix}} =
+             struct,
+           schema,
+           source,
+           %Call{prefix: prefix} = call,
+           fields
+         ) do
+      mark = %__MODULE__{call: call, values: values(struct, fields)}
+      %{struct | __meta__: %{struct.__meta__ | context: mark}}
     end
 
-    defp mark(row, _info, _action, _actor, _context), do: row
+    defp mark(row, _schema, _source, _call, _fields), do: row
 
     # True when `struct` carries a mark of `info`'s policy for `action`, this actor
     # instance (one side of a delegated actor included) and this decision's `context`,
-    # and is still the struct that was loaded.
+    # and is still the struct that was loaded, in every field the decision can read.
     @spec admits?(term, map, atom, Actor.t(), map) :: boolean
     def admits?(
-          %{__meta__: %Ecto.Schema.Metadata{context: %__MODULE__{} = mark}} = struct,
+          %{__meta__: %Ecto.Schema.Metadata{context: %__MODULE__{call: %Call{} = call} = mark}} =
+            struct,
           info,
           action,
           %Actor{instance: instance},
           context
         )
         when is_reference(instance) do
-      mark.policy == info.policy and mark.action == action and
-        instance in [mark.actor, mark.delegator] and mark.context === comparable(context) and
-        mark.prefix == Info.prefix(struct) and mark.fields == persisted(struct)
+      call.policy == info.policy and call.action == action and
+        instance in [call.actor, call.delegator] and call.context === comparable(context) and
+        call.prefix == Info.prefix(struct) and mark.values === values(struct, fields(info))
     end
 
     def admits?(_struct, _info, _action, _actor, _context), do: false
@@ -113,12 +134,23 @@ if Code.ensure_loaded?(Ecto) do
 
     def unmark(row), do: row
 
-    defp persisted(%schema{} = struct), do: Map.take(struct, schema.__schema__(:fields))
+    defp fields(%{mark_fields: :all, schema: schema}), do: schema.__schema__(:fields)
+    defp fields(%{mark_fields: fields}), do: fields
+
+    defp values(struct, fields) do
+      values = for field <- fields, do: Map.fetch!(struct, field)
+      List.to_tuple(values)
+    end
   end
 
   defimpl Inspect, for: Warden.Ecto.Mark do
     # A mark holds the row's values, the actor's instance and the context: show none.
-    def inspect(mark, _opts),
-      do: "#Warden.Ecto.Mark<#{inspect(mark.policy)} #{inspect(mark.action)}>"
+    def inspect(%{call: call}, _opts),
+      do: "#Warden.Ecto.Mark<#{inspect(call.policy)} #{inspect(call.action)}>"
+  end
+
+  defimpl Inspect, for: Warden.Ecto.Mark.Call do
+    def inspect(call, _opts),
+      do: "#Warden.Ecto.Mark.Call<#{inspect(call.policy)} #{inspect(call.action)}>"
   end
 end

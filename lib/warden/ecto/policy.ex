@@ -225,14 +225,18 @@ if Code.ensure_loaded?(Ecto) do
           {:error, errors} -> compile_error!(env, "invalid Warden.Ecto.Policy", errors)
         end
 
+      allowed? = Module.defines?(env.module, {:allowed?, 4})
+      allowed_many? = Module.defines?(env.module, {:allowed_many, 4})
+
       info =
         Map.merge(options, %{
           policy: env.module,
           authorizer: core.authorizer,
           system_kinds: core.system_kinds,
           actions: actions,
-          allowed?: Module.defines?(env.module, {:allowed?, 4}),
-          allowed_many?: Module.defines?(env.module, {:allowed_many, 4})
+          allowed?: allowed?,
+          allowed_many?: allowed_many?,
+          mark_fields: Compiler.mark_fields(actions, options, allowed? or allowed_many?)
         })
 
       quote do
