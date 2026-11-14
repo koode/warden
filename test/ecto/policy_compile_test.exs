@@ -190,10 +190,46 @@ defmodule Warden.Ecto.PolicyCompileTest do
                policy.__warden_ecto__(:info).actions.read
     end
 
-    test "clause values are evaluated at compile time" do
-      assert_raise CompileError, ~r/could not evaluate the argument of `allow`/, fn ->
-        policy!(@team, "allow :read, rule: undefined_builder()")
+    test "clause values are evaluated when the module compiles" do
+      error =
+        assert_raise CompileError, fn ->
+          policy!(@team, "allow :read, rule: undefined_builder()")
+        end
+
+      assert Exception.message(error) =~ "cannot compile module"
+    end
+
+    test "options and clause values may read module attributes set before them" do
+      authorizer = unique("Warden.Test.Compiled.AttributeAuthz")
+      policy = unique("Warden.Test.Compiled.AttributePolicy")
+
+      compile!("""
+      defmodule #{authorizer} do
+        use Warden.Authorizer, roles: [:admin], kinds: [:user, :webhook, :job], policies: [#{policy}]
+        def subject(context), do: context[:current_user]
+        def roles(_user, _context), do: []
       end
+
+      defmodule #{policy} do
+        @system_kinds [:webhook, :job]
+        @hidden false
+
+        use Warden.Ecto.Policy,
+          authorizer: #{authorizer},
+          schema: Warden.Test.Ecto.Team,
+          as: :team,
+          actions: [:read],
+          system_kinds: @system_kinds
+
+        allow :read, rule: kind(@system_kinds), where: [private: @hidden]
+      end
+      """)
+
+      info = Module.concat([policy]).__warden_ecto__(:info)
+      assert info.system_kinds == [:webhook, :job]
+      assert {:clauses, [], [%{parts: parts}]} = info.actions.read
+      assert {:rule, {:kind, [:webhook, :job]}} in parts
+      assert {:where, [private: false]} in parts
     end
 
     test "literal values are cast to their field types" do

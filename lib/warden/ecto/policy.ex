@@ -45,6 +45,10 @@ if Code.ensure_loaded?(Ecto) do
       * `:write_actions` - the actions that `Warden.Ecto.update_all/4` and
         `Warden.Ecto.delete_all/3` accept a scope for. Default `[]`.
 
+    Options and clause values may read module attributes, so one list can feed both:
+    set `@system_kinds [:automation, :unfurl]` before `use`, then pass
+    `system_kinds: @system_kinds` and write `rule: kind(@system_kinds)`.
+
     ## Per action: a scope callback or clauses
 
     Each action gets either a hand-written `c:scope/4` or declarative `allow` and
@@ -157,17 +161,12 @@ if Code.ensure_loaded?(Ecto) do
 
     defmacro __using__(opts) do
       env = __CALLER__
-      {opts, _binding} = Code.eval_quoted(opts, [], env)
 
-      {core, options} =
-        case Compiler.validate_options(opts, env.module) do
-          {:ok, core, options} -> {core, options}
-          {:error, errors} -> compile_error!(env, "invalid Warden.Ecto.Policy options", errors)
-        end
-
-      # Registered now, not in the module body: the clause macros record into it while
-      # the body expands.
+      # Registered now: the clause macros count clauses while the body expands, and the
+      # body records into these attributes when it runs.
       Module.register_attribute(env.module, :warden_ecto_clauses, accumulate: true)
+      Module.register_attribute(env.module, :warden_ecto_options, [])
+      Module.register_attribute(env.module, :warden_ecto_clause_count, [])
 
       quote do
         @behaviour Warden.Ecto.Policy
@@ -176,15 +175,12 @@ if Code.ensure_loaded?(Ecto) do
 
         import Warden.Ecto.Policy, only: [allow: 2, requires: 2]
 
-        @warden_ecto_core unquote(Macro.escape(core))
-        @warden_ecto_options unquote(Macro.escape(options))
+        # Evaluated when the module body runs, so options may read module attributes set
+        # before `use`; validated in `__before_compile__/1`.
+        @warden_ecto_options {unquote(env.line), unquote(opts)}
 
-        # The entry points Warden calls (see Warden.Policy.Dispatch). They must be public,
-        # and are hidden from the user's docs.
-        # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
-        @doc false
-        def __warden_policy__(:info), do: @warden_ecto_core
-
+        # The entry point Warden calls (see Warden.Policy.Dispatch). It must be public, and
+        # is hidden from the user's docs.
         # credo:disable-for-lines:4 ExSlop.Check.Readability.DocFalseOnPublicFunction
         @doc false
         def __warden_decide__(action, actor, values, context),
@@ -195,7 +191,8 @@ if Code.ensure_loaded?(Ecto) do
     @doc """
     Adds an `allow` clause for `action`: a keyword list of clause keys (ANDed), or a bare
     rule (`allow :read, tenant_role(:member)` means `rule: tenant_role(:member)`).
-    `allow` clauses of one action are ORed.
+    `allow` clauses of one action are ORed. Values may read module attributes set before
+    the clause (`rule: kind(@system_kinds)`).
     """
     defmacro allow(action, clause), do: record(:allow, action, clause, __CALLER__)
 
@@ -207,8 +204,18 @@ if Code.ensure_loaded?(Ecto) do
 
     @doc false
     defmacro __before_compile__(env) do
-      core = Module.get_attribute(env.module, :warden_ecto_core)
-      options = Module.get_attribute(env.module, :warden_ecto_options)
+      {line, opts} = Module.get_attribute(env.module, :warden_ecto_options)
+      use_env = %{env | line: line}
+
+      {core, options} =
+        case Compiler.validate_options(opts, env.module) do
+          {:ok, core, options} ->
+            {core, options}
+
+          {:error, errors} ->
+            compile_error!(use_env, "invalid Warden.Ecto.Policy options", errors)
+        end
+
       clauses = env.module |> Module.get_attribute(:warden_ecto_clauses) |> Enum.reverse()
       patterns = Compiler.scope_patterns(env.module)
 
@@ -229,22 +236,46 @@ if Code.ensure_loaded?(Ecto) do
         })
 
       quote do
+        # The entry points Warden calls (see Warden.Policy.Dispatch). They must be public,
+        # and are hidden from the user's docs.
+        # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
+        @doc false
+        def __warden_policy__(:info), do: unquote(Macro.escape(core))
+
         # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
         @doc false
         def __warden_ecto__(:info), do: unquote(Macro.escape(info))
       end
     end
 
+    # Records a clause when the module body runs, so its values may read module
+    # attributes; the rule builders are imported for the values only.
     defp record(kind, action_ast, clause_ast, env) do
-      action = eval!(action_ast, env, kind)
-      index = env.module |> Module.get_attribute(:warden_ecto_clauses) |> length()
-      {parts, functions} = parts(clause_ast, index, env, kind)
-      clause = %{kind: kind, action: action, index: index, line: env.line, parts: parts}
-      Module.put_attribute(env.module, :warden_ecto_clauses, clause)
-      {:__block__, [], functions}
+      index = Module.get_attribute(env.module, :warden_ecto_clause_count) || 0
+      Module.put_attribute(env.module, :warden_ecto_clause_count, index + 1)
+      {parts_ast, functions} = parts(clause_ast, index)
+      meta = %{kind: kind, index: index, line: env.line}
+
+      quote do
+        unquote_splicing(functions)
+
+        Warden.Ecto.Policy.__record__(__MODULE__, unquote(Macro.escape(meta)), fn ->
+          import Warden.Rule, only: unquote(@rule_builders), warn: false
+          {unquote(action_ast), unquote(parts_ast)}
+        end)
+      end
     end
 
-    defp parts(clause_ast, index, env, kind) do
+    # credo:disable-for-lines:3 ExSlop.Check.Readability.DocFalseOnPublicFunction
+    @doc false
+    @spec __record__(module, map, (-> {atom, keyword})) :: :ok
+    def __record__(module, meta, values) do
+      {action, parts} = values.()
+      clause = Map.merge(meta, %{action: action, parts: parts})
+      Module.put_attribute(module, :warden_ecto_clauses, clause)
+    end
+
+    defp parts(clause_ast, index) do
       if Keyword.keyword?(clause_ast) and clause_ast != [] do
         Enum.map_reduce(clause_ast, [], fn
           {:when, fun_ast}, functions ->
@@ -252,10 +283,10 @@ if Code.ensure_loaded?(Ecto) do
             {{:when, {:function, name}}, [when_function(name, fun_ast) | functions]}
 
           {key, value_ast}, functions ->
-            {{key, eval!(value_ast, env, kind)}, functions}
+            {{key, value_ast}, functions}
         end)
       else
-        {[rule: eval!(clause_ast, env, kind)], []}
+        {[rule: clause_ast], []}
       end
     end
 
@@ -268,29 +299,6 @@ if Code.ensure_loaded?(Ecto) do
         def unquote(name)(actor, tenant, context), do: unquote(fun_ast).(actor, tenant, context)
       end
     end
-
-    # Clause values are built at compile time, with the rule builders in scope.
-    defp eval!(ast, env, kind) do
-      wrapped =
-        quote do
-          import Warden.Rule, only: unquote(@rule_builders), warn: false
-          unquote(ast)
-        end
-
-      {value, _binding} = Code.eval_quoted(wrapped, [], env)
-      value
-    rescue
-      error ->
-        message = """
-        could not evaluate the argument of `#{macro_name(kind)}` at compile time: \
-        #{Exception.message(error)}\
-        """
-
-        reraise CompileError, [file: env.file, line: env.line, description: message], []
-    end
-
-    defp macro_name(:allow), do: "allow"
-    defp macro_name(:require), do: "requires"
 
     @spec compile_error!(Macro.Env.t(), String.t(), [String.t()]) :: no_return()
     defp compile_error!(env, title, errors) do
