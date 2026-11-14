@@ -37,7 +37,7 @@ projects.
 ```elixir
 def deps do
   [
-    {:warden, "~> 0.2"},
+    {:warden, "~> 0.3"},
     # Optional, each enables its layer:
     {:absinthe, "~> 1.12"},  # Warden.Absinthe
     {:plug, "~> 1.14"}       # Warden.Plug

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0 (2026-11-14)
+
 ### Added
 
 - `Warden.Ecto.all/4,5`: runs a query scoped by `scope/4` and marks the rows it returns,
