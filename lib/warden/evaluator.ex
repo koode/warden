@@ -20,9 +20,19 @@ defmodule Warden.Evaluator do
   alias Warden.Policy.Dispatch
 
   @unavailable :unavailable
+  @tenant_binding :tenant_binding
   @check_contract "must return true or false (or {:deny, reason})"
 
-  defstruct [:authorizer, :catalog, :check, explain?: false, trace: [], tenant: nil, decided: %{}]
+  defstruct [
+    :authorizer,
+    :catalog,
+    :check,
+    explain?: false,
+    trace: [],
+    tenant: nil,
+    decided: %{},
+    foreign?: nil
+  ]
 
   @type outcome :: :ok | {:deny, term, [atom], [term], term}
   @type failure :: %{
@@ -97,10 +107,15 @@ defmodule Warden.Evaluator do
   defp many_pass(rule, checks, actor, authorizer) do
     catalog = authorizer.__warden_catalog__()
 
+    # A bound actor's batch callbacks never see values of another tenant: those values
+    # deny with :tenant_binding before the batch, as they do per value.
+    foreign = Enum.map(checks, &foreign_tenant?(%{&1 | actor: actor}, authorizer))
+    asked = for {check, false} <- Enum.zip(checks, foreign), do: check
+
     tables =
       for leaf <- batched_leaves(rule, catalog, []),
           not leaf_refused?(leaf, actor, catalog),
-          do: {leaf, batch_verdicts(leaf, checks, actor, authorizer, catalog)}
+          do: {leaf, leaf |> batch_verdicts(asked, actor, authorizer, catalog) |> spread(foreign)}
 
     checks
     |> Enum.with_index()
@@ -135,9 +150,22 @@ defmodule Warden.Evaluator do
 
   defp leaf_refused?({:can, _policy, _action, _opts}, _actor, _catalog), do: false
 
-  # Calls `check_many/2` once for every value. Returns the verdicts as a tuple, indexed
-  # like `checks`.
-  # A policy is asked once about every value (it splits by tenant itself).
+  # Puts the verdicts for the asked values back in place and denies the foreign ones.
+  # Returns a tuple indexed like the checks.
+  defp spread(verdicts, foreign), do: foreign |> spread(verdicts, []) |> List.to_tuple()
+
+  defp spread([], _verdicts, acc), do: Enum.reverse(acc)
+
+  defp spread([true | rest], verdicts, acc),
+    do: spread(rest, verdicts, [{:deny, @tenant_binding} | acc])
+
+  defp spread([false | rest], [verdict | verdicts], acc),
+    do: spread(rest, verdicts, [verdict | acc])
+
+  # Returns one verdict per check, in order. A policy is asked once about every value (it
+  # splits by tenant itself); a batched check calls `check_many/2` once.
+  defp batch_verdicts(_leaf, [], _actor, _authorizer, _catalog), do: []
+
   defp batch_verdicts(
          {:can, policy, action, _opts},
          [first | _rest] = checks,
@@ -146,10 +174,7 @@ defmodule Warden.Evaluator do
          _catalog
        ) do
     values = Enum.map(checks, & &1.value)
-
-    policy
-    |> Dispatch.decide(action, actor, values, first.context, authorizer)
-    |> List.to_tuple()
+    Dispatch.decide(policy, action, actor, values, first.context, authorizer)
   end
 
   defp batch_verdicts({:check, name, opts}, checks, actor, authorizer, catalog) do
@@ -157,14 +182,11 @@ defmodule Warden.Evaluator do
     batch = Enum.map(checks, &%{&1 | actor: actor, name: name, opts: opts})
     count = length(batch)
 
-    verdicts =
-      case caught(fn -> Callbacks.check_many(authorizer, name, batch) end, spec.timeout) do
-        {:ok, results} -> batch_results!(results, count, authorizer, name)
-        :timeout -> List.duplicate({:deny, @unavailable}, count)
-        {:raised, kind, reason, _stacktrace} -> batch_raised!(kind, reason, authorizer, name)
-      end
-
-    List.to_tuple(verdicts)
+    case caught(fn -> Callbacks.check_many(authorizer, name, batch) end, spec.timeout) do
+      {:ok, results} -> batch_results!(results, count, authorizer, name)
+      :timeout -> List.duplicate({:deny, @unavailable}, count)
+      {:raised, kind, reason, _stacktrace} -> batch_raised!(kind, reason, authorizer, name)
+    end
   end
 
   defp batch_results!(results, count, authorizer, name) when is_list(results) do
@@ -268,7 +290,7 @@ defmodule Warden.Evaluator do
   end
 
   defp eval_step(state, rule) do
-    {outcome, state} = leaf(rule, state)
+    {outcome, state} = screened_leaf(rule, state)
     entry = {rule, trace_outcome(outcome)}
     state = %{state | trace: [entry | state.trace]}
     {outcome, step(state, rule, outcome, []), state}
@@ -321,6 +343,40 @@ defmodule Warden.Evaluator do
          {:deny, _rule, more_roles, more_perms, reason}
        ),
        do: {:deny, failed, roles ++ more_roles, perms ++ more_perms, [reason | reasons]}
+
+  # A bound actor (a credential or system actor with a tenant) denies every leaf but
+  # `public()` and `covered()` for a value of another known tenant, before any user code
+  # runs. A value without a known tenant goes on to the leaf.
+  defp screened_leaf(rule, state) when rule in [:public, :covered], do: leaf(rule, state)
+
+  defp screened_leaf(rule, state) do
+    state = with_foreign(state)
+
+    if state.foreign?,
+      do: {{:deny, rule, [], [], @tenant_binding}, state},
+      else: leaf(rule, state)
+  end
+
+  defp with_foreign(%__MODULE__{foreign?: nil} = state),
+    do: %{state | foreign?: foreign_tenant?(state.check, state.authorizer)}
+
+  defp with_foreign(state), do: state
+
+  # True when the actor is bound and the value's tenant is known and another one.
+  @spec foreign_tenant?(Check.t(), module) :: boolean
+  def foreign_tenant?(%Check{actor: actor, value: value}, authorizer) do
+    case Actor.bound_tenant(actor) do
+      nil -> false
+      bound -> value_tenant(value, authorizer) not in [nil, bound]
+    end
+  end
+
+  defp value_tenant(nil, _authorizer), do: nil
+  defp value_tenant(value, authorizer), do: authorizer |> Callbacks.tenant_of(value) |> scalar()
+
+  # A tenant is a scalar (an id); a list, map or tuple is never one.
+  defp scalar(tenant) when is_list(tenant) or is_map(tenant) or is_tuple(tenant), do: nil
+  defp scalar(tenant), do: tenant
 
   defp leaf(rule, state) when rule in [:public, :covered], do: {:ok, state}
   defp leaf(:deny, state), do: deny(:deny, state)
@@ -475,12 +531,10 @@ defmodule Warden.Evaluator do
 
   # The tenant a tenant-role rule asks about.
   @spec rule_tenant(term, Check.t(), module) :: term
-  def rule_tenant(:value, %Check{value: nil}, _authorizer), do: nil
+  def rule_tenant(:value, %Check{value: value}, authorizer), do: value_tenant(value, authorizer)
 
-  def rule_tenant(:value, %Check{value: value}, authorizer),
-    do: Callbacks.tenant_of(authorizer, value)
-
-  def rule_tenant({:arg, path}, %Check{args: args}, _authorizer), do: get_path(args, path)
+  def rule_tenant({:arg, path}, %Check{args: args}, _authorizer),
+    do: args |> get_path(path) |> scalar()
 
   # Reads `path` (atoms and list indexes) from argument maps. Missing keys give `nil`.
   @spec get_path(term, [atom | non_neg_integer]) :: term

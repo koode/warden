@@ -77,7 +77,7 @@ defmodule Warden.Policy.Dispatch do
   defp screen(value, actor, info, authorizer) do
     cond do
       actor.system? and Actor.kind(actor) not in info.system_kinds -> {:deny, nil}
-      not binding_allows?(value, actor, info, authorizer) -> {:deny, nil}
+      not binding_allows?(value, actor, info, authorizer) -> {:deny, :tenant_binding}
       true -> {:ask, value}
     end
   end

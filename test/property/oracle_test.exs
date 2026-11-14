@@ -671,35 +671,47 @@ defmodule Warden.Property.OracleTest do
   defp v2_oracle(rule, %{type: :delegated} = spec, doc, args),
     do: v2_oracle(rule, spec.actor, doc, args) and v2_oracle(rule, spec.delegator, doc, args)
 
-  defp v2_oracle(:public, _spec, _doc, _args), do: true
-  defp v2_oracle(:authenticated, spec, _doc, _args), do: v2_user?(spec)
-  defp v2_oracle({:role, role}, spec, _doc, _args), do: v2_user?(spec) and role in spec.roles
-  defp v2_oracle(:session, spec, _doc, _args), do: v2_session?(spec)
-  defp v2_oracle({:credential_scope, scope}, spec, _doc, _args), do: v2_scope?(spec, scope)
-  defp v2_oracle({:kind, kinds}, spec, _doc, _args), do: v2_kind(spec) in kinds
+  # A bound actor denies every leaf but public() for a doc of another tenant.
+  defp v2_oracle(rule, spec, doc, args)
+       when not is_tuple(rule) or elem(rule, 0) not in [:all, :any] do
+    bound = v2_bound(spec)
 
-  defp v2_oracle({:tenant_role, role, []}, spec, doc, _args),
-    do: v2_has_tenant_role?(spec, doc.workspace_id, role)
-
-  defp v2_oracle({:tenant_role, role, [tenant: {:arg, [:workspace]}]}, spec, _doc, args),
-    do: v2_has_tenant_role?(spec, args[:workspace], role)
-
-  defp v2_oracle({:check, :mine, []}, spec, doc, _args),
-    do: v2_user?(spec) and spec.id == doc.owner_id
-
-  defp v2_oracle({:check, :visible, []}, spec, doc, _args),
-    do: spec.type != :system and doc.visible
-
-  defp v2_oracle({:check, :hooked, []}, spec, _doc, _args),
-    do: spec.type != :system or spec.kind == :webhook
-
-  defp v2_oracle({:can, _policy, action, []}, spec, doc, _args), do: v2_policy?(spec, action, doc)
+    cond do
+      rule == :public -> true
+      bound != nil and doc.workspace_id != bound -> false
+      true -> v2_leaf(rule, spec, doc, args)
+    end
+  end
 
   defp v2_oracle({:all, rules}, spec, doc, args),
     do: Enum.all?(rules, &v2_oracle(&1, spec, doc, args))
 
   defp v2_oracle({:any, rules}, spec, doc, args),
     do: Enum.any?(rules, &v2_oracle(&1, spec, doc, args))
+
+  defp v2_leaf(:public, _spec, _doc, _args), do: true
+  defp v2_leaf(:authenticated, spec, _doc, _args), do: v2_user?(spec)
+  defp v2_leaf({:role, role}, spec, _doc, _args), do: v2_user?(spec) and role in spec.roles
+  defp v2_leaf(:session, spec, _doc, _args), do: v2_session?(spec)
+  defp v2_leaf({:credential_scope, scope}, spec, _doc, _args), do: v2_scope?(spec, scope)
+  defp v2_leaf({:kind, kinds}, spec, _doc, _args), do: v2_kind(spec) in kinds
+
+  defp v2_leaf({:tenant_role, role, []}, spec, doc, _args),
+    do: v2_has_tenant_role?(spec, doc.workspace_id, role)
+
+  defp v2_leaf({:tenant_role, role, [tenant: {:arg, [:workspace]}]}, spec, _doc, args),
+    do: v2_has_tenant_role?(spec, args[:workspace], role)
+
+  defp v2_leaf({:check, :mine, []}, spec, doc, _args),
+    do: v2_user?(spec) and spec.id == doc.owner_id
+
+  defp v2_leaf({:check, :visible, []}, spec, doc, _args),
+    do: spec.type != :system and doc.visible
+
+  defp v2_leaf({:check, :hooked, []}, spec, _doc, _args),
+    do: spec.type != :system or spec.kind == :webhook
+
+  defp v2_leaf({:can, _policy, action, []}, spec, doc, _args), do: v2_policy?(spec, action, doc)
 
   property "0.2 rule terms agree with an independent evaluator, one value and lists" do
     check all(
