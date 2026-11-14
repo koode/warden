@@ -107,6 +107,11 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
   IO.puts("phoenix=" <> inspect(Code.ensure_loaded?(Warden.Phoenix.Channel)))
   IO.puts("ecto=" <> inspect(Code.ensure_loaded?(Warden.Ecto)))
   IO.puts("ecto_policy=" <> inspect(Code.ensure_loaded?(Warden.Ecto.Policy)))
+  IO.puts("test_helpers=" <> inspect(Code.ensure_loaded?(Warden.Test)))
+  IO.puts("matrix=" <> inspect(Code.ensure_loaded?(Warden.Test.Matrix)))
+  IO.puts("matrix_task=" <> inspect(Code.ensure_loaded?(Mix.Tasks.Warden.Matrix)))
+  started = Enum.map(Application.started_applications(), &elem(&1, 0))
+  IO.puts("ex_unit=" <> inspect(:code.is_loaded(ExUnit.AssertionError) != false or :ex_unit in started))
   """
 
   test "neither absinthe nor plug: explicit authorizer" do
@@ -121,6 +126,10 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
     assert out =~ "phoenix=false"
     assert out =~ "ecto=false"
     assert out =~ "ecto_policy=false"
+    assert out =~ "test_helpers=true"
+    assert out =~ "matrix=false"
+    assert out =~ "matrix_task=true"
+    assert out =~ "ex_unit=false"
   end
 
   test "neither absinthe nor plug: only the configured default authorizer" do
@@ -228,12 +237,16 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
       query = Warden.Ecto.scope(Standalone.Doc, context, :read, authorizer: Standalone.Authz)
       IO.puts("scope=" <> inspect(query))
       IO.puts("to_sql=" <> inspect(function_exported?(Warden.Ecto, :to_sql, 4)))
+      IO.puts("matrix=" <> inspect(Code.ensure_loaded?(Warden.Test.Matrix)))
+      IO.puts("absinthe_matrix=" <> inspect(Code.ensure_loaded?(Warden.Test.Absinthe)))
       IO.puts("absinthe=" <> inspect(Code.ensure_loaded?(Warden.Absinthe)))
       IO.puts("plug=" <> inspect(Code.ensure_loaded?(Warden.Plug)))
       """)
 
     assert out =~ ~s(where: d0.workspace_id == ^"w1" and d0.public == ^true)
     assert out =~ "to_sql=false"
+    assert out =~ "matrix=true"
+    assert out =~ "absinthe_matrix=false"
     assert out =~ "absinthe=false"
     assert out =~ "plug=false"
   end
@@ -344,11 +357,15 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
       run!(dir, """
       {:ok, r} = Absinthe.run("{ secret }", Standalone.Schema, context: %{current_user: %{id: "u2", roles: [:viewer]}})
       IO.puts("data=" <> inspect(r.data))
+      IO.puts("absinthe_matrix=" <> inspect(Code.ensure_loaded?(Warden.Test.Absinthe)))
+      IO.puts("matrix=" <> inspect(Code.ensure_loaded?(Warden.Test.Matrix)))
       IO.puts("plug=" <> inspect(Code.ensure_loaded?(Warden.Plug)))
       IO.puts("phoenix=" <> inspect(Code.ensure_loaded?(Warden.Phoenix.Channel)))
       """)
 
     assert out =~ ~s(data=%{"secret" => nil})
+    assert out =~ "absinthe_matrix=true"
+    assert out =~ "matrix=false"
     assert out =~ "plug=false"
     assert out =~ "phoenix=false"
   end

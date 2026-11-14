@@ -18,6 +18,7 @@ defmodule Warden.Test.Ecto.Authz do
       Warden.Test.Ecto.OauthClients,
       Warden.Test.Ecto.Notes
     ],
+    fields: [Warden.Test.Ecto.CommentFields],
     checks: [:active]
 
   @impl true
@@ -73,10 +74,10 @@ defmodule Warden.Test.Ecto.Teams do
 
   alias Warden.Test.Ecto.TeamMembership
 
-  allow(:read, rule: tenant_role(:member), where: [private: false])
-  allow(:read, rule: tenant_role(:guest), member_of: {TeamMembership, :team_id, :user_id})
-  allow(:read, rule: kind(:webhook), within: {:team_ids, :id})
-  allow(:read, rule: tenant_role(:owner), where: [name: "o'brien\"; DROP TABLE teams; --"])
+  allow :read, rule: tenant_role(:member), where: [private: false]
+  allow :read, rule: tenant_role(:guest), member_of: {TeamMembership, :team_id, :user_id}
+  allow :read, rule: kind(:webhook), within: {:team_ids, :id}
+  allow :read, rule: tenant_role(:owner), where: [name: "o'brien\"; DROP TABLE teams; --"]
 end
 
 defmodule Warden.Test.Ecto.Issues do
@@ -93,19 +94,18 @@ defmodule Warden.Test.Ecto.Issues do
 
   alias Warden.Test.Ecto.Share
 
-  allow(:read, through: :team, if_nil: :tenant, where: [trashed_at: nil])
+  allow :read, through: :team, if_nil: :tenant, where: [trashed_at: nil]
 
-  allow(:read,
+  allow :read,
     grant: {Share, :issue_id, :grantee_id, expires_at: :expires_at},
     where: [trashed_at: nil]
-  )
 
-  allow(:read, rule: kind(:agent), within: {:issue_ids, :id})
-  allow(:read, rule: kind(:webhook), through: :team, where: [trashed_at: nil])
-  allow(:read_trashed, tenant_role(:admin))
-  allow(:write, rule: tenant_role(:member), through: {:team, :read}, where: [trashed_at: nil])
-  allow(:write, actor_in: [:author_id], where: [trashed_at: nil])
-  requires(:write, credential_scope("issues:write"))
+  allow :read, rule: kind(:agent), within: {:issue_ids, :id}
+  allow :read, rule: kind(:webhook), through: :team, where: [trashed_at: nil]
+  allow :read_trashed, tenant_role(:admin)
+  allow :write, rule: tenant_role(:member), through: {:team, :read}, where: [trashed_at: nil]
+  allow :write, actor_in: [:author_id], where: [trashed_at: nil]
+  requires :write, credential_scope("issues:write")
 end
 
 defmodule Warden.Test.Ecto.Comments do
@@ -120,14 +120,13 @@ defmodule Warden.Test.Ecto.Comments do
 
   import Ecto.Query, only: [dynamic: 2]
 
-  allow(:read, through: :issue)
+  allow :read, through: :issue
 
-  allow(:read,
+  allow :read,
     rule: tenant_role(:admin),
     when: fn actor, _tenant, _context ->
       dynamic([comment: comment], comment.author_id == ^actor.subject.id)
     end
-  )
 end
 
 defmodule Warden.Test.Ecto.Projects do
@@ -142,11 +141,11 @@ defmodule Warden.Test.Ecto.Projects do
 
   alias Warden.Test.Ecto.ProjectMember
 
-  allow(:read, rule: tenant_role(:member), none: :project_teams)
-  allow(:read, through_any: :teams)
-  allow(:read, rule: tenant_role(:guest), actor_in: [:lead_id, :creator_id])
-  allow(:read, rule: tenant_role(:guest), member_of: {ProjectMember, :project_id, :user_id})
-  requires(:read, check(:active))
+  allow :read, rule: tenant_role(:member), none: :project_teams
+  allow :read, through_any: :teams
+  allow :read, rule: tenant_role(:guest), actor_in: [:lead_id, :creator_id]
+  allow :read, rule: tenant_role(:guest), member_of: {ProjectMember, :project_id, :user_id}
+  requires :read, check(:active)
 end
 
 defmodule Warden.Test.Ecto.Summaries do
@@ -159,7 +158,7 @@ defmodule Warden.Test.Ecto.Summaries do
     repo: Warden.Test.Repo,
     actions: [:read]
 
-  allow(:read,
+  allow :read,
     through_type:
       {:subject_type, :subject_id,
        %{
@@ -167,7 +166,6 @@ defmodule Warden.Test.Ecto.Summaries do
          "team" => Warden.Test.Ecto.Teams,
          "comment" => Warden.Test.Ecto.Comments
        }}
-  )
 end
 
 defmodule Warden.Test.Ecto.OauthClients do
@@ -183,8 +181,8 @@ defmodule Warden.Test.Ecto.OauthClients do
     repo: Warden.Test.Repo,
     actions: [:read]
 
-  allow(:read, rule: tenant_role(:admin))
-  allow(:read, actor_in: [:owner_id])
+  allow :read, rule: tenant_role(:admin)
+  allow :read, actor_in: [:owner_id]
 end
 
 defmodule Warden.Test.Ecto.Notes do
@@ -268,4 +266,55 @@ defmodule Warden.Test.Ecto.People do
   def actor(user, extra \\ %{}), do: Warden.actor(context(user, extra), authorizer: @authorizer)
 
   def webhook(opts), do: Warden.system_actor(@authorizer, [kind: :webhook] ++ opts)
+end
+
+defmodule Warden.Test.Ecto.CommentFields do
+  @moduledoc false
+  # Guests do not see comment bodies.
+  use Warden.Fields, authorizer: Warden.Test.Ecto.Authz, for: Warden.Test.Ecto.Comment
+
+  redact :body, with: "", unless: tenant_role(:member)
+end
+
+defmodule Warden.Test.Ecto.BrokenAuthz do
+  @moduledoc false
+  # An authorizer with one policy whose hand-written allowed?/4 disagrees with its
+  # scope/4 for secret notes, to prove the consistency checks catch it.
+  use Warden.Authorizer,
+    roles: [:instance_admin],
+    tenant_roles: [:member],
+    policies: [Warden.Test.Ecto.BrokenNotes]
+
+  @impl true
+  def subject(context), do: context[:current_user]
+
+  @impl true
+  def roles(_user, _context), do: []
+
+  @impl true
+  def tenant_roles(user, tenant, _context),
+    do: user |> Map.get(:memberships, %{}) |> Map.get(tenant, [])
+
+  @impl true
+  def tenants(actor, _context), do: actor.subject |> Map.get(:memberships, %{}) |> Map.keys()
+end
+
+defmodule Warden.Test.Ecto.BrokenNotes do
+  @moduledoc false
+  use Warden.Ecto.Policy,
+    authorizer: Warden.Test.Ecto.BrokenAuthz,
+    schema: Warden.Test.Ecto.Note,
+    as: :note,
+    tenant: :workspace_id,
+    repo: Warden.Test.Repo,
+    actions: [:read]
+
+  import Ecto.Query, only: [dynamic: 2]
+
+  @impl true
+  def scope(:read, _actor, _tenant, _context), do: dynamic([note: note], note.secret == false)
+
+  # Wrong on purpose: it forgets that secret notes are hidden.
+  @impl true
+  def allowed?(:read, _actor, _note, _context), do: true
 end

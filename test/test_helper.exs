@@ -2,12 +2,13 @@
 {:ok, _} = Supervisor.start_link([Warden.Test.Pubsub], strategy: :one_for_one)
 
 # The `:postgres` suite needs a database: run it with `mix test --only postgres`
-# (WARDEN_DATABASE_URL, default postgres://localhost/warden_test). The database is created
+# (WARDEN_DATABASE_URL, default postgres://localhost/warden_test), or with `mix warden.matrix`,
+# which includes the `:warden_matrix` tests. The database is created
 # here and dropped when the suite ends.
 postgres? =
   Enum.any?(ExUnit.configuration()[:include] || [], fn
-    :postgres -> true
-    {:postgres, _value} -> true
+    tag when tag in [:postgres, :warden_matrix] -> true
+    {tag, _value} when tag in [:postgres, :warden_matrix] -> true
     _other -> false
   end)
 

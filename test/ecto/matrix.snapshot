@@ -1,0 +1,46 @@
+# Warden policy matrix: the actions each actor (column) may take on each resource
+# (row); "-" means none. Fixture names only. Rewrite with `mix warden.matrix --update`.
+
+policy Warden.Test.Ecto.Comments
+actions read
+resource          agent  api_key_read  guest  member  outsider  owner  webhook
+comment_teamless  read   read          read   read    -         read   -
+
+policy Warden.Test.Ecto.Issues
+actions read read_trashed write
+resource        agent  api_key_read  guest  member      outsider  owner                    webhook
+issue_private   -      read          -      read,write  -         read_trashed             read
+issue_public    read   read          -      read,write  -         read,read_trashed,write  -
+issue_teamless  read   read          read   read        -         read,read_trashed        -
+issue_trashed   -      -             -      -           -         read_trashed             -
+
+policy Warden.Test.Ecto.Notes
+actions read write
+resource     agent  api_key_read  guest  member  outsider  owner       webhook
+note_secret  -      -             -      -       -         read,write  -
+
+policy Warden.Test.Ecto.OauthClients
+actions read
+resource   agent  api_key_read  guest  member  outsider  owner  webhook
+client_t1  -      -             -      -       -         read   -
+
+policy Warden.Test.Ecto.Projects
+actions read
+resource          agent  api_key_read  guest  member  outsider  owner  webhook
+project_teamless  -      read          -      read    -         read   -
+
+policy Warden.Test.Ecto.Summaries
+actions read
+resource      agent  api_key_read  guest  member  outsider  owner  webhook
+summary_team  -      read          -      read    -         read   -
+
+policy Warden.Test.Ecto.Teams
+actions read
+resource      agent  api_key_read  guest  member  outsider  owner  webhook
+team_private  -      read          -      read    -         -      read
+team_public   -      read          -      read    -         read   -
+
+redacted
+resource          actor  fields
+comment_teamless  agent  body
+comment_teamless  guest  body

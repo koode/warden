@@ -7,7 +7,7 @@ defmodule Warden.Test.Ecto.GraphQL do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Warden.Test.Ecto.{Issue, Issues}
+  alias Warden.Test.Ecto.{Comment, CommentFields, Comments, Issue, Issues}
   alias Warden.Test.Repo
 
   object :issue do
@@ -16,7 +16,24 @@ defmodule Warden.Test.Ecto.GraphQL do
     field :title, :string
   end
 
+  object :comment do
+    authorize can(Comments, :read)
+    redact_with CommentFields
+    field :id, :id
+    field :body, :string
+  end
+
   query do
+    field :issue, :issue do
+      arg :id, non_null(:id)
+      resolve fn %{id: id}, _resolution -> {:ok, Repo.get(Issue, id)} end
+    end
+
+    field :comment, :comment do
+      arg :id, non_null(:id)
+      resolve fn %{id: id}, _resolution -> {:ok, Repo.get(Comment, id)} end
+    end
+
     field :issues, list_of(:issue) do
       resolve fn _args, _resolution ->
         query = from(issue in Issue, order_by: issue.id)
