@@ -104,6 +104,7 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
   IO.puts("filter=" <> inspect(Warden.filter(viewer, role(:viewer), [1, 2], AUTHZ)))
   IO.puts("absinthe=" <> inspect(Code.ensure_loaded?(Warden.Absinthe)))
   IO.puts("plug=" <> inspect(Code.ensure_loaded?(Warden.Plug)))
+  IO.puts("phoenix=" <> inspect(Code.ensure_loaded?(Warden.Phoenix.Channel)))
   """
 
   test "neither absinthe nor plug: explicit authorizer" do
@@ -115,6 +116,7 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
     assert out =~ "filter=[1, 2]"
     assert out =~ "absinthe=false"
     assert out =~ "plug=false"
+    assert out =~ "phoenix=false"
   end
 
   test "neither absinthe nor plug: only the configured default authorizer" do
@@ -149,9 +151,65 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
       conn = Warden.Plug.call(conn, opts)
       IO.puts("status=" <> inspect({conn.status, conn.halted}))
       IO.puts("absinthe=" <> inspect(Code.ensure_loaded?(Warden.Absinthe)))
+      IO.puts("phoenix=" <> inspect(Code.ensure_loaded?(Warden.Phoenix.Channel)))
       """)
 
     assert out =~ "status={403, true}"
+    assert out =~ "absinthe=false"
+    assert out =~ "phoenix=false"
+  end
+
+  test "phoenix without absinthe" do
+    channel = """
+    defmodule Standalone.RoomChannel do
+      use Phoenix.Channel
+      import Warden.Rule
+
+      use Warden.Phoenix.Channel,
+        rule: role(:admin),
+        value: fn "room:" <> id -> id end,
+        recheck: [:every_push, {:every, 60_000}]
+
+      intercept(["edited"])
+
+      @impl true
+      def join("room:" <> _id, _params, socket), do: {:ok, socket}
+
+      @impl true
+      def handle_in("ping", _payload, socket), do: {:reply, :ok, socket}
+
+      @impl true
+      def handle_out("edited", payload, socket) do
+        push(socket, "edited", payload)
+        {:noreply, socket}
+      end
+
+      @impl true
+      def handle_info(:tick, socket), do: {:noreply, socket}
+    end
+    """
+
+    dir =
+      project("phoenix_only", ~s([{:phoenix, "~> 1.7"}]), %{
+        "lib/authz.ex" => @authorizer,
+        "lib/room_channel.ex" => channel,
+        "config/config.exs" => "import Config\nconfig :warden, authorizer: Standalone.Authz\n"
+      })
+
+    build!(dir)
+
+    out =
+      run!(dir, """
+      import Warden.Rule
+      socket = %Phoenix.Socket{assigns: %{current_user: %{id: "u2", roles: [:viewer]}}}
+      {:error, %Warden.Denial{}} = Warden.Phoenix.Channel.authorize(socket, role(:admin))
+      IO.puts("join=" <> inspect(Warden.Phoenix.Channel.authorize_join(socket, role(:admin))))
+      IO.puts("intercepts=" <> inspect("any" in Standalone.RoomChannel.__intercepts__()))
+      IO.puts("absinthe=" <> inspect(Code.ensure_loaded?(Warden.Absinthe)))
+      """)
+
+    assert out =~ ~s(join={:error, %{reason: "forbidden"}})
+    assert out =~ "intercepts=true"
     assert out =~ "absinthe=false"
   end
 
@@ -183,9 +241,11 @@ defmodule Warden.Standalone.NoOptionalDepsTest do
       {:ok, r} = Absinthe.run("{ secret }", Standalone.Schema, context: %{current_user: %{id: "u2", roles: [:viewer]}})
       IO.puts("data=" <> inspect(r.data))
       IO.puts("plug=" <> inspect(Code.ensure_loaded?(Warden.Plug)))
+      IO.puts("phoenix=" <> inspect(Code.ensure_loaded?(Warden.Phoenix.Channel)))
       """)
 
     assert out =~ ~s(data=%{"secret" => nil})
     assert out =~ "plug=false"
+    assert out =~ "phoenix=false"
   end
 end
