@@ -20,8 +20,10 @@ defmodule Warden.RedteamMythos.FeedSchema do
   end
 
   subscription do
+    # Decided: the subscribe is refused for a card the subscriber may not read.
     field :card_changed, :card do
       arg :id, non_null(:integer)
+      authorize can(Cards, :read, arg: [:id])
       config fn args, _info -> {:ok, topic: "card:#{args.id}"} end
       resolve fn card, _args, _resolution -> {:ok, card} end
     end
@@ -129,28 +131,56 @@ defmodule Warden.RedteamMythos.AbsintheTest do
     end
   end
 
+  # Changed to match the decision: an unguarded subscription is a compile-time warning,
+  # and `can(Policy, :read, arg: [:id])` on the field refuses the subscribe.
   describe "HOLE: a subscriber is pushed an event for a payload it may not see" do
-    test "an event about a hidden card looks like no event at all" do
+    test "a subscription guarded only by a value-dependent object rule warns at compile time" do
+      unguarded = """
+        alias Warden.Test.RedteamV2.{CardFields, Cards}
+
+        object :card do
+          authorize can(Cards, :read)
+          redact_with CardFields
+          field :id, non_null(:integer)
+          field :note, :string
+        end
+
+        query do
+          field :ok, :string
+        end
+
+        subscription do
+          field :card_changed, :card do
+            arg :id, non_null(:integer)
+            config fn args, _info -> {:ok, topic: "card:\#{args.id}"} end
+          end
+        end
+      """
+
+      warnings = ExUnit.CaptureIO.capture_io(:stderr, fn -> compile_outcome(unguarded) end)
+      assert warnings =~ ~s|subscription "card_changed"|
+      assert warnings =~ "can(Policy, :read, arg: [:id])"
+
+      guarded =
+        String.replace(
+          unguarded,
+          "arg :id, non_null(:integer)\n",
+          "arg :id, non_null(:integer)\n      authorize can(Cards, :read, arg: [:id])\n"
+        )
+
+      refute ExUnit.CaptureIO.capture_io(:stderr, fn -> compile_outcome(guarded) end) =~
+               "cardChanged"
+    end
+
+    test "can(..., arg: [:id]) refuses the subscribe for a hidden card" do
       hidden = Card.get(2)
       refute hidden.visible
 
       result = People.run(FeedSchema, "{ card(id: 2) { id } }", People.abby())
       assert result.data == %{"card" => nil}
 
-      case subscribe("subscription { cardChanged(id: 2) { id note } }", People.abby()) do
-        {:error, _errors} ->
-          :ok
-
-        {:ok, topic} ->
-          :ok = Absinthe.Subscription.publish(Pubsub, hidden, card_changed: "card:2")
-          received = pushes(topic, [])
-
-          assert received == [], """
-          the subscriber may not read card 2, yet every change of it is pushed as \
-          #{inspect(received)}: the push itself tells that the card exists and when it \
-          changes, which the query (`null`, as for a missing card) hides\
-          """
-      end
+      assert {:error, _errors} =
+               subscribe("subscription { cardChanged(id: 2) { id note } }", People.abby())
     end
   end
 

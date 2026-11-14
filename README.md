@@ -547,6 +547,21 @@ field when any inner list becomes `null`; Warden keeps every item error on the f
   subscription is refused, because the subscriber could never see an event.
 - **Publish time.** Every published event resolves with the subscriber's context; the
   actor is rebuilt for every event and all rules run again.
+- **Objects the subscriber may not see.** A value-dependent object rule (`can/2`, a
+  check, a tenant role) nulls the payload of a denied publish, but the subscriber still
+  gets an event, which tells that the object exists and when it changes. Refuse the
+  subscribe instead with a field rule on the argument that names the object:
+
+  ```elixir
+  field :card_changed, :card do
+    arg :id, non_null(:id)
+    authorize can(MyApp.Authz.Cards, :read, arg: [:id])
+    config fn args, _info -> {:ok, topic: "card:#{args.id}"} end
+  end
+  ```
+
+  Compilation warns about a subscription field whose return type has such a rule while
+  the field has no field or argument rule (`authorize public()` acknowledges it).
 - **`context_id`: sharing is off by default.** Absinthe resolves an event once per
   `context_id` and document and sends the result to every subscriber that shares them.
   Warden removes any `context_id` your `config` sets, so every subscription resolves on

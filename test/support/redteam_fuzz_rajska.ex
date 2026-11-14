@@ -354,11 +354,15 @@ defmodule Warden.Test.RF.Schema do
     end
 
     field :tenant_doc_changed, :tenant_doc do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       config fn _, _ -> {:ok, topic: "rf_tenant", context_id: "global"} end
       resolve &Resolvers.root/3
     end
 
     field :account_changed, :account do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       config fn _, _ -> {:ok, topic: "rf_accounts", context_id: "global"} end
       resolve &Resolvers.root/3
     end

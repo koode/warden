@@ -362,10 +362,14 @@ defmodule Warden.RedteamExec.Schema do
     end
 
     field :rx_tdoc_updated, :rx_tdoc do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       config fn _, _ -> {:ok, topic: "rx-t", context_id: "global"} end
     end
 
     field :rx_odoc_updated, :rx_odoc do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       config fn _, _ -> {:ok, topic: "rx-o", context_id: "global"} end
     end
 

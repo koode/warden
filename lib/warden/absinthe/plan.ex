@@ -771,6 +771,10 @@ if Code.ensure_loaded?(Absinthe) do
         else: %{type: named, rule: rule, members: members}
     end
 
+    # True when the rule reads the value (a check, a policy, a tenant role of the value).
+    def value_dependent?(nil), do: false
+    def value_dependent?(rule), do: contains_check?(rule)
+
     defp value_independent?(nil), do: false
     defp value_independent?(:public), do: false
     defp value_independent?(rule), do: not contains_check?(rule)

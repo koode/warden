@@ -418,6 +418,8 @@ defmodule Warden.Test.FZ.Schema do
 
   subscription do
     field :item_updated, :item do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       arg :channel, non_null(:string)
       config fn args, _ -> {:ok, topic: args.channel, context_id: "global"} end
       resolve &R.root/3

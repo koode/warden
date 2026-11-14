@@ -44,6 +44,7 @@ if Code.ensure_loaded?(Absinthe) do
       end
 
       warn_unguarded_mutations(schema, types, plan)
+      warn_unguarded_subscriptions(schema, types, plan)
 
       artifacts = Enum.map(schema_def.type_artifacts, &apply_plan(&1, plan))
       schema_def = %{schema_def | type_artifacts: artifacts}
@@ -73,6 +74,66 @@ if Code.ensure_loaded?(Absinthe) do
       end
 
       :ok
+    end
+
+    # A subscription whose return type has a value-dependent object rule nulls the payload
+    # of a denied publish, but the subscriber still gets an event: that an object exists,
+    # and when it changes. Warn about subscriptions with nothing to refuse the subscribe
+    # (no field or argument rule; an explicit `authorize public()` acknowledges it);
+    # `can(Policy, :read, arg: [:id])` on the field refuses it for an object the
+    # subscriber may not read.
+    defp warn_unguarded_subscriptions(schema, types, plan) do
+      subscription = Map.get(types, :subscription)
+      fields = if subscription, do: Enum.sort_by(subscription.fields, &elem(&1, 0)), else: []
+
+      for {_fident, field} <- fields,
+          not String.starts_with?(field.name, "__"),
+          not guarded_field?(field),
+          Plan.value_dependent?(return_rule(field, types, plan)) do
+        IO.warn(
+          """
+          Warden: subscription #{inspect(field.name)} in #{inspect(schema)} is protected \
+          only by the object rule of its return type, which reads the value: a subscriber \
+          who may not see an object still gets an event (with no data) whenever it is \
+          published. Add a field rule that refuses the subscribe, such as \
+          `authorize can(Policy, :read, arg: [:id])`.\
+          """,
+          []
+        )
+      end
+
+      :ok
+    end
+
+    defp guarded_field?(field) do
+      arg_rules =
+        for {_ident, arg} <- field.args || %{}, Type.meta(arg, :warden_rule) != nil, do: arg
+
+      Type.meta(field, :warden_rule) != nil or
+        Type.meta(field, :warden_args) not in [nil, %{}] or arg_rules != []
+    end
+
+    defp return_rule(field, types, plan) do
+      named = Type.unwrap(field.type)
+
+      case Map.get(types, named) do
+        %Type.Object{} -> Map.get(plan.object_rules, named)
+        %{} -> Map.get(plan.object_rules, named) || any_member_rule(types, named, plan)
+        nil -> nil
+      end
+    end
+
+    defp any_member_rule(types, named, plan) do
+      members =
+        case Map.get(types, named) do
+          %Type.Union{types: members} -> members
+          _interface -> Plan.implementors(types, named)
+        end
+
+      Enum.find_value(
+        members,
+        &(Plan.value_dependent?(Map.get(plan.object_rules, &1)) && Map.get(plan.object_rules, &1))
+      )
     end
 
     defp apply_plan(%Type.Object{identifier: ident, fields: fields} = object, plan) do

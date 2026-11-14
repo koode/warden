@@ -380,11 +380,15 @@ defmodule Warden.Test.Schema do
     end
 
     field :shared_user, :user do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       config fn _args, _info -> {:ok, topic: "users", context_id: "global"} end
       resolve &R.subscription_root/3
     end
 
     field :shared_user_map, :user do
+      # The object rule alone guards it: the tests publish denied objects.
+      authorize public()
       config fn _args, _info -> {:ok, %{topic: "users", context_id: "global"}} end
       resolve &R.subscription_root/3
     end
