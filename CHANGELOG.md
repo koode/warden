@@ -73,7 +73,8 @@
   cycle) warn after compiling and raise on first use.
 - `through: {assoc, action, resolve: :ids}` runs the parent scope once per actor, tenant,
   call and prefix and compares the foreign key with the ids (`fk = ANY($ids)`);
-  `system: :inherit` lets the parent policy decide system actors for that clause.
+  `system: :inherit` (also on `through_any:`) lets the related policy decide system
+  actors for that clause.
   `within: {bounds_key, field, if_missing: :allow}` makes a limit optional. `within:`
   bounds and `actor_in:` subject ids are cast through the field's type, in memory and in
   SQL alike; values that do not cast match nothing.

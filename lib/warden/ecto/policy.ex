@@ -67,7 +67,7 @@ if Code.ensure_loaded?(Ecto) do
     | `where: [field: value]` | the field equals a literal (`nil` means `IS NULL`) |
     | `through: assoc` / `{assoc, action}` / `{assoc, action, opts}` | the `belongs_to` parent is allowed under its own policy (default: the same action), in the same tenant; opts `resolve: :ids` (compare the foreign key with the parent's ids) and `system: :inherit` (the parent decides system actors) |
     | `if_nil: :deny \\| :tenant` | with `through:`, a `nil` foreign key denies (default) or admits members of the tenant |
-    | `through_any: assoc` / `{assoc, action}` | at least one row of a `has_many` or `many_to_many` association is allowed under its policy |
+    | `through_any: assoc` / `{assoc, action}` / `{assoc, action, opts}` | at least one row of a `has_many` or `many_to_many` association is allowed under its policy; opt `system: :inherit` (the related policy decides system actors) |
     | `none: assoc` | the association has no rows |
     | `actor_in: [fields]` | one of the fields equals the actor's subject id |
     | `member_of: {schema, row_key, actor_key}` | a row in `schema` links this row to the actor |

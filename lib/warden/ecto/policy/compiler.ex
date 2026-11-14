@@ -14,6 +14,10 @@ if Code.ensure_loaded?(Ecto) do
     @ecto_option_keys [:schema, :as, :null_tenant, :repo, :subject_id, :write_actions]
     @core_option_keys [:authorizer, :actions, :tenant, :system_kinds]
 
+    # The options of `through:` and `through_any:`, with the values each takes.
+    @through_options [resolve: [:exists, :ids], system: [:deny, :inherit]]
+    @through_any_options [system: [:deny, :inherit]]
+
     # Clause keys that say something about the actor. An `allow` clause needs one, so a
     # clause about rows alone (`where:` only) never admits every actor by accident; a
     # clause meant for everyone says `rule: public()`.
@@ -202,7 +206,7 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     defp finish_part({:through, value}, parts, _schema) do
-      {:ok, assoc, action, opts} = through_value(value)
+      {:ok, assoc, action, opts} = through_value(value, "through")
       if_nil = Keyword.get(parts, :if_nil, :deny)
 
       through_opts = %{
@@ -214,8 +218,9 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     defp finish_part({:through_any, value}, _parts, _schema) do
-      {assoc, action} = assoc_action(value)
-      {:through_any, assoc, action}
+      {:ok, assoc, action, opts} = through_value(value, "through_any")
+      through_opts = %{system: Keyword.get(opts, :system, :deny)}
+      {:through_any, assoc, action, through_opts}
     end
 
     defp finish_part({:rule, rule}, _parts, _schema), do: {:rule, tenant_from_arg(rule)}
@@ -248,9 +253,6 @@ if Code.ensure_loaded?(Ecto) do
       {:ok, cast} = Ecto.Type.cast(schema.__schema__(:type, field), value)
       cast
     end
-
-    defp assoc_action({assoc, action}), do: {assoc, action}
-    defp assoc_action(assoc), do: {assoc, nil}
 
     defp through_type({type_field, id_field, policies}, schema) do
       targets =
@@ -396,8 +398,8 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     defp part_errors({:through, value}, _clause, options, _catalog) do
-      with {:ok, assoc, _action, opts} <- through_value(value),
-           [] <- through_option_errors(opts),
+      with {:ok, assoc, _action, opts} <- through_value(value, "through"),
+           [] <- through_option_errors(opts, "through", @through_options),
            {:ok, association} <- association(options.schema, assoc, "through") do
         through_errors(association, options)
       else
@@ -407,11 +409,13 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     defp part_errors({:through_any, value}, _clause, options, _catalog) do
-      with {:ok, assoc, _action} <- assoc_action_value(value, "through_any"),
+      with {:ok, assoc, _action, opts} <- through_value(value, "through_any"),
+           [] <- through_option_errors(opts, "through_any", @through_any_options),
            {:ok, association} <- association(options.schema, assoc, "through_any") do
         through_any_errors(association, options)
       else
         {:error, error} -> [error]
+        errors when is_list(errors) -> errors
       end
     end
 
@@ -571,44 +575,43 @@ if Code.ensure_loaded?(Ecto) do
     defp field_errors(_schema, field, key),
       do: ["`#{key}:` expects field names, got: #{inspect(field)}"]
 
-    # `through:` takes `assoc`, `{assoc, action}`, `{assoc, opts}` or
-    # `{assoc, action, opts}`, with opts `resolve:` and `system:`.
-    defp through_value({assoc, action, opts})
+    # `through:` and `through_any:` take `assoc`, `{assoc, action}`, `{assoc, opts}` or
+    # `{assoc, action, opts}`. `through:` takes the opts `resolve:` and `system:`,
+    # `through_any:` only `system:`.
+    defp through_value({assoc, action, opts}, _key)
          when is_atom(assoc) and is_atom(action) and is_list(opts),
          do: {:ok, assoc, action, opts}
 
-    defp through_value({assoc, [{_key, _value} | _rest] = opts}) when is_atom(assoc),
+    defp through_value({assoc, [{_option, _value} | _rest] = opts}, _key) when is_atom(assoc),
       do: {:ok, assoc, nil, opts}
 
-    defp through_value(value) do
-      case assoc_action_value(value, "through") do
+    defp through_value(value, key) do
+      case assoc_action_value(value, key) do
         {:ok, assoc, action} -> {:ok, assoc, action, []}
         error -> error
       end
     end
 
-    @through_options [resolve: [:exists, :ids], system: [:deny, :inherit]]
-
-    defp through_option_errors(opts) do
+    defp through_option_errors(opts, key, known) do
       if Keyword.keyword?(opts) do
-        for {key, value} <- opts,
-            error = through_option_error(key, value),
+        for {option, value} <- opts,
+            error = through_option_error(option, value, key, known),
             error != nil,
             do: error
       else
-        ["`through:` options must be a keyword list"]
+        ["`#{key}:` options must be a keyword list"]
       end
     end
 
-    defp through_option_error(key, value) do
-      case Keyword.fetch(@through_options, key) do
+    defp through_option_error(option, value, key, known) do
+      case Keyword.fetch(known, option) do
         :error ->
-          "`through:` takes the options #{inspect(Keyword.keys(@through_options))}, not #{inspect(key)}"
+          "`#{key}:` takes the options #{inspect(Keyword.keys(known))}, not #{inspect(option)}"
 
         {:ok, allowed} ->
           if value in allowed,
             do: nil,
-            else: "`through:` option #{inspect(key)} must be one of #{inspect(allowed)}"
+            else: "`#{key}:` option #{inspect(option)} must be one of #{inspect(allowed)}"
       end
     end
 

@@ -160,7 +160,15 @@ if Code.ensure_loaded?(Ecto) do
       end
     end
 
-    defp part(info, clause, {:through_any, assoc, through_action}, actor, tenant, struct, state) do
+    defp part(
+           info,
+           clause,
+           {:through_any, assoc, through_action, _opts},
+           actor,
+           tenant,
+           struct,
+           state
+         ) do
       association = info.schema.__schema__(:association, assoc)
       action = through_action || clause.action
 

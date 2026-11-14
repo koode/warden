@@ -233,8 +233,8 @@ if Code.ensure_loaded?(Ecto) do
 
     # A system actor passes only allow clauses whose `rule:` names its kind.
     @spec applicable([map], Actor.t()) :: [map]
-    # A clause with `through: {assoc, action, system: :inherit}` applies too: the parent
-    # policy then decides the system actor, and admits only the kinds it admits.
+    # A clause with `through:` or `through_any:` and `system: :inherit` applies too: the
+    # related policy then decides the system actor, and admits only the kinds it admits.
     def applicable(allows, %Actor{system?: true} = actor) do
       kind = Actor.kind(actor)
       Enum.filter(allows, &(names_kind?(&1, kind) or inherits_system?(&1)))
@@ -250,10 +250,11 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     defp inherits_system?(clause) do
-      Enum.any?(
-        clause.parts,
-        &match?({:through, _assoc, _action, _if_nil, %{system: :inherit}}, &1)
-      )
+      Enum.any?(clause.parts, fn
+        {:through, _assoc, _action, _if_nil, %{system: :inherit}} -> true
+        {:through_any, _assoc, _action, %{system: :inherit}} -> true
+        _part -> false
+      end)
     end
 
     defp rule_names_kind?({:kind, kinds}, kind), do: kind in kinds
@@ -343,7 +344,7 @@ if Code.ensure_loaded?(Ecto) do
       {any(parent_condition, nil_branch), actor, state}
     end
 
-    def part(info, clause, {:through_any, assoc, through_action}, actor, tenant, state) do
+    def part(info, clause, {:through_any, assoc, through_action, _opts}, actor, tenant, state) do
       association = info.schema.__schema__(:association, assoc)
       child = Info.policy_for!(info.authorizer, association.related)
       action = through_action || clause.action

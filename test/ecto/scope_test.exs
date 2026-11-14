@@ -680,6 +680,58 @@ defmodule Warden.Ecto.ScopeTest do
       assert scope_ids(Issue, job, :write) == []
     end
 
+    test "through_any: with system: :inherit lets the child policy decide system actors" do
+      world = world()
+      authorizer = unique("Warden.Test.Compiled.InheritAnyAuthz")
+      teams = unique("Warden.Test.Compiled.InheritAnyTeams")
+      projects = unique("Warden.Test.Compiled.InheritAnyProjects")
+
+      compile!("""
+      defmodule #{authorizer} do
+        use Warden.Authorizer,
+          roles: [:admin],
+          kinds: [:user, :webhook, :job],
+          tenant_roles: [:member],
+          policies: [#{teams}, #{projects}]
+
+        def subject(context), do: context[:current_user]
+        def roles(_user, _context), do: []
+        def tenant_roles(_user, _tenant, _context), do: [:member]
+        def tenants(_actor, _context), do: ["t1"]
+      end
+
+      defmodule #{teams} do
+        use Warden.Ecto.Policy,
+          authorizer: #{authorizer}, schema: Warden.Test.Ecto.Team, as: :team,
+          tenant: :workspace_id, repo: Warden.Test.Repo, actions: [:read],
+          system_kinds: [:webhook]
+
+        allow :read, rule: kind(:webhook), within: {:team_ids, :id}
+      end
+
+      defmodule #{projects} do
+        use Warden.Ecto.Policy,
+          authorizer: #{authorizer}, schema: Warden.Test.Ecto.Project, as: :project,
+          tenant: :workspace_id, repo: Warden.Test.Repo, actions: [:read],
+          system_kinds: [:webhook, :job]
+
+        allow :read, through_any: {:teams, :read, system: :inherit}
+      end
+      """)
+
+      authorizer = Module.concat([authorizer])
+      on_private = insert!(%Project{workspace_id: "t1", name: "private team"})
+      on_public = insert!(%Project{workspace_id: "t1", name: "public team"})
+      insert!(%ProjectTeam{project_id: on_private.id, team_id: world.t1_private.id})
+      insert!(%ProjectTeam{project_id: on_public.id, team_id: world.t1_public.id})
+      bounds = %{team_ids: [world.t1_private.id]}
+      hook = Warden.system_actor(authorizer, kind: :webhook, tenant: "t1", bounds: bounds)
+      job = Warden.system_actor(authorizer, kind: :job, tenant: "t1", bounds: bounds)
+
+      assert assert_agrees(Project, hook, :read, [:teams]) == [on_private.id]
+      assert assert_agrees(Project, job, :read, [:teams]) == []
+    end
+
     test "within: with if_missing: :allow admits when the bounds key is missing" do
       world = world()
       authorizer = unique("Warden.Test.Compiled.OptionalLimitAuthz")
