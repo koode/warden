@@ -22,6 +22,20 @@ jobs:
     name: Elixir
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # The Ecto suite (`mix test --only postgres`) runs against this database.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -53,6 +67,9 @@ jobs:
       # Builds throwaway projects that depend on warden without Absinthe and/or Plug,
       # so the optional layers stay optional.
       - run: mix test --only no_optional_deps
+      - run: mix test --only postgres
+        env:
+          WARDEN_DATABASE_URL: postgres://postgres:postgres@localhost:5432/warden_test
       - run: mix docs --warnings-as-errors
       - run: mix hex.build
 

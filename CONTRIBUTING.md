@@ -102,9 +102,13 @@ Use a scope when the change is in one area:
 
 | Scope | Area |
 |---|---|
-| `core` | `Warden`, `Warden.Rule`, `Warden.Authorizer`, `Warden.Actor`, `Warden.Check`, `Warden.Denial` and the errors |
+| `core` | `Warden`, `Warden.Rule`, `Warden.Authorizer`, `Warden.Actor`, `Warden.Check`, `Warden.Denial`, `Warden.Credential`, `Warden.Policy`, `Warden.Explanation` and the errors |
 | `absinthe` | `Warden.Absinthe` and the modules under it |
 | `plug` | `Warden.Plug` |
+| `ecto` | `Warden.Ecto` and the modules under it |
+| `fields` | `Warden.Fields` and redaction |
+| `phoenix` | `Warden.Phoenix.Channel` |
+| `testing` | `Warden.Test` and the modules under it, `mix warden.matrix` |
 | `deps` | Dependency updates |
 | `hex` | Hex package metadata |
 | `release` | Release commits |
