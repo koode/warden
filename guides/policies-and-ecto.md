@@ -284,6 +284,13 @@ allow :read,
 The field is in the actor's `bounds[key]`. A missing key denies, and a `NULL` field never
 matches, even when the bounds hold a `nil`.
 
+For an optional limit, such as a credential that may or may not carry a team limit, opt
+in to admitting a missing key; an empty list still admits nothing:
+
+```elixir
+allow :read, rule: tenant_role(:member), within: {:team_ids, :id, if_missing: :allow}
+```
+
 ```elixir
 allow :read, rule: kind(:agent), within: {:issue_ids, :id}
 ```

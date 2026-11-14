@@ -235,7 +235,10 @@ if Code.ensure_loaded?(Ecto) do
       do: {:member_of, link, row_key, actor_key}
 
     defp finish_part({:within, {bounds_key, field}}, _parts, _schema),
-      do: {:within, bounds_key, field}
+      do: {:within, bounds_key, field, :deny}
+
+    defp finish_part({:within, {bounds_key, field, opts}}, _parts, _schema),
+      do: {:within, bounds_key, field, Keyword.get(opts, :if_missing, :deny)}
 
     defp finish_part({key, value}, _parts, _schema), do: {key, value}
 
@@ -482,8 +485,22 @@ if Code.ensure_loaded?(Ecto) do
       field_errors(options.schema, field, "within")
     end
 
+    defp part_errors({:within, {bounds_key, field, opts}}, _clause, options, _catalog)
+         when is_atom(bounds_key) and is_list(opts) do
+      opts_errors =
+        case opts do
+          [] -> []
+          [if_missing: value] when value in [:allow, :deny] -> []
+          _other -> ["`within:` takes one option, `if_missing: :allow | :deny`"]
+        end
+
+      opts_errors ++ field_errors(options.schema, field, "within")
+    end
+
     defp part_errors({:within, other}, _clause, _options, _catalog),
-      do: ["`within:` must be {bounds_key, field}, got: #{inspect(other)}"]
+      do: [
+        "`within:` must be {bounds_key, field} or {bounds_key, field, opts}, got: #{inspect(other)}"
+      ]
 
     defp part_errors({:when, {:function, name}}, _clause, _options, _catalog) when is_atom(name),
       do: []

@@ -201,10 +201,18 @@ if Code.ensure_loaded?(Ecto) do
       {answer, actor, state}
     end
 
-    defp part(info, _clause, {:within, bounds_key, field}, actor, _tenant, struct, state) do
+    defp part(
+           info,
+           _clause,
+           {:within, bounds_key, field, if_missing},
+           actor,
+           _tenant,
+           struct,
+           state
+         ) do
       answer =
         case Scope.bounds!(actor, bounds_key, info) do
-          nil -> false
+          nil -> if_missing == :allow
           ids -> if exact?(info, field), do: Map.get(struct, field) in ids, else: :unknown
         end
 

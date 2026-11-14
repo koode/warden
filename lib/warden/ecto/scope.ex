@@ -415,10 +415,12 @@ if Code.ensure_loaded?(Ecto) do
       end)
     end
 
-    def part(info, _clause, {:within, bounds_key, field}, actor, _tenant, state) do
+    # A missing bounds key denies, unless the clause opts in with `if_missing: :allow`
+    # (an optional limit, such as a credential's team limit).
+    def part(info, _clause, {:within, bounds_key, field, if_missing}, actor, _tenant, state) do
       verdict =
         case bounds!(actor, bounds_key, info) do
-          nil -> false
+          nil -> if_missing == :allow
           ids -> dynamic([{^info.as, row}], field(row, ^field) in ^ids)
         end
 

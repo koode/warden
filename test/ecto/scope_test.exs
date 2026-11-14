@@ -1,6 +1,8 @@
 defmodule Warden.Ecto.ScopeTest do
   use Warden.Test.EctoCase, async: true
 
+  import Warden.Test.CompileHelpers, only: [compile!: 1, unique: 1]
+
   alias Warden.Credential
   alias Warden.Ecto, as: WardenEcto
   alias Warden.Test.Decisions
@@ -661,6 +663,50 @@ defmodule Warden.Ecto.ScopeTest do
       assert assert_agrees(Issue, job, :read_ids, [:team]) == []
       assert scope_ids(Issue, job, :read) == []
       assert scope_ids(Issue, job, :write) == []
+    end
+
+    test "within: with if_missing: :allow admits when the bounds key is missing" do
+      world = world()
+      authorizer = unique("Warden.Test.Compiled.OptionalLimitAuthz")
+      policy = unique("Warden.Test.Compiled.OptionalLimit")
+
+      compile!("""
+      defmodule #{authorizer} do
+        use Warden.Authorizer, roles: [:admin], tenant_roles: [:member], policies: [#{policy}]
+        def subject(context), do: context[:current_user]
+        def roles(_user, _context), do: []
+        def credential(context), do: context[:credential]
+        def tenant_roles(_user, _tenant, _context), do: [:member]
+        def tenants(_actor, _context), do: ["t1"]
+      end
+
+      defmodule #{policy} do
+        use Warden.Ecto.Policy,
+          authorizer: #{authorizer}, schema: Warden.Test.Ecto.Team, as: :team,
+          tenant: :workspace_id, repo: Warden.Test.Repo, actions: [:read]
+
+        allow :read, rule: tenant_role(:member), within: {:team_ids, :id, if_missing: :allow}
+      end
+      """)
+
+      authorizer = Module.concat([authorizer])
+      policy = Module.concat([policy])
+      limited = %Warden.Credential{method: :api_key, bounds: %{team_ids: [world.t1_private.id]}}
+      empty = %Warden.Credential{method: :api_key, bounds: %{team_ids: []}}
+
+      actors = [
+        unlimited: %{current_user: %{id: "sam"}},
+        limited: %{current_user: %{id: "sam"}, credential: limited},
+        empty: %{current_user: %{id: "sam"}, credential: empty}
+      ]
+
+      rows = [public: world.t1_public, private: world.t1_private]
+      cells = Warden.Test.assert_policy_consistent(policy, actors, rows, authorizer: authorizer)
+
+      assert cells[{:unlimited, :public, :read}] and cells[{:unlimited, :private, :read}]
+      refute cells[{:limited, :public, :read}]
+      assert cells[{:limited, :private, :read}]
+      refute cells[{:empty, :public, :read}] or cells[{:empty, :private, :read}]
     end
 
     test "none: over a many_to_many reads the join table only" do

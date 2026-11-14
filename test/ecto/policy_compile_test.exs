@@ -142,6 +142,8 @@ defmodule Warden.Ecto.PolicyCompileTest do
             {"allow :read, through_type: {:name, :parent_id, %{1 => X}}",
              ~r/1 is not a valid :string for :name/},
             {"allow :read, within: {:team_ids, :nope}", ~r/`within:` :nope is not a field/},
+            {"allow :read, within: {:team_ids, :id, if_missing: :maybe}",
+             ~r/`within:` takes one option, `if_missing: :allow \| :deny`/},
             {"allow :read, rule: public(), if_nil: :tenant",
              ~r/`if_nil:` is an option of `through:`/},
             {"allow :read, rule: can(Warden.Test.Ecto.Issues, :read)",

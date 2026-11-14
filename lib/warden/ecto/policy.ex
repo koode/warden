@@ -73,7 +73,7 @@ if Code.ensure_loaded?(Ecto) do
     | `member_of: {schema, row_key, actor_key}` | a row in `schema` links this row to the actor |
     | `grant: {schema, row_key, grantee_key, expires_at: field}` | a share row for the actor that has not expired (`expires_at` `NULL` never expires) |
     | `through_type: {type_field, id_field, %{type => policy}}` | a polymorphic parent allowed under the policy for its type; a type not in the map denies |
-    | `within: {bounds_key, field}` | the field is in the actor's `bounds[bounds_key]` (a missing key denies) |
+    | `within: {bounds_key, field}` | the field is in the actor's `bounds[bounds_key]` (a missing key denies; `{bounds_key, field, if_missing: :allow}` admits it) |
     | `when: fun` | `fun.(actor, tenant, context)` returns a dynamic, `true` or `false`, like `c:scope/4` |
 
     Every `allow` clause needs a key about the actor (all but `where:`, `none:` and
