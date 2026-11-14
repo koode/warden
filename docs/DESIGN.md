@@ -983,19 +983,42 @@ Paths are relative to `lib/warden/`.
   (`absinthe/middleware.ex`) then applies list policies, item errors and folds from those
   outcomes. Both passes are linear (`test/adversarial/batching_test.exs`).
 - **Admitted values.** The pre middleware decides the parent object rule again for every
-  field (defense in depth). For a value that this execution's post middleware admitted
-  under a batched rule, it does not: that would turn one batched call per list into one
-  call per value and field. Admissions live in `resolution.acc`, keyed by the type, the
-  actor (without its cache) and the exact value; any other value is decided again. A
-  value replaced by `redact_with` is admitted too, whatever its object rule, keyed by the
-  redacted value its fields see: the rule was decided on the value before redaction, and
-  deciding it again on the redacted struct could deny what was admitted.
+  field (defense in depth). For a value that this execution's post middleware admitted, it
+  does not: that would turn one batched call per list into one call per value and field.
+  Admitted are values whose (concrete, for abstract types) object rule is batched, and
+  values replaced by `redact_with` (their rule was decided on the value before redaction,
+  and deciding it again on the redacted struct could disagree). Only the pre specs of types
+  that can be admitted carry `admissible: true` from the plan; every other field does no
+  lookup at all.
+
+  An admission is keyed by the concrete type and the response path of the value, so a
+  lookup costs O(path depth), whatever the size of the value. The post walk records it at
+  the value's OUTPUT position: admissions travel with item errors through the walk, after
+  `:filter` removed items and with nested list indexes, and a position that becomes null
+  (a bubble, a fold) drops them. This is sound because a child field's source at path P is
+  exactly the value the parent's post walk left at P: Warden's post entry runs last (it
+  moves itself behind middleware appended at runtime, so a value replaced after the
+  resolver is decided as replaced), every field that can return the type carries a post
+  entry, and a denied value is never left at a position (it is null or removed), so a path
+  admitted for one value can never name another. Two documents run by
+  `Absinthe.Pipeline.BatchResolver` share the accumulator (a 0.1 limit: they share the
+  actor and the context too), but a value at a path in either document was decided by
+  that document's own post walk before its fields ran. Absinthe resolving a different
+  concrete type for the child than the walk decided simply misses the key and decides
+  again. `test/adversarial/admission_paths_test.exs` covers `:filter`, nested lists and a
+  value replaced after the resolver.
 - **Cross-parent batching** (`batch_across_parents: true`) applies to object rules with
   batched leaves on fields that return one object (not a list, not an abstract type)
   inside a list. The post middleware hands the check to `Absinthe.Middleware.Batch` with a
-  reference and resumes in `post_decided/2`; the batch function groups the deferred checks
-  by actor and context (a batch can span documents) and decides each group with one
-  `Evaluator.many/3` call. Such checks have no `resolution`, and tenant roles read there
+  reference and resumes in `post_decided/2`. The actor and the context are encoded once per
+  document execution into one binary kept in `resolution.acc` with a reference: Absinthe
+  runs the batch function in another process, and a message would otherwise copy the
+  context once per deferred check. The batch function groups the deferred checks by that
+  reference (one execution, one actor and context), decodes once per group and decides
+  each group with one `Evaluator.many/3` call, so the cost per check does not depend on
+  the size of the context. The batch gets `timeout:` the longest check timeout of the
+  rule plus 1 s (at least Absinthe's 5 s), so a slow check denies with `:unavailable`
+  instead of exiting the document. Such checks have no `resolution`, and tenant roles read there
   are not written back to `resolution.acc`. The verifier fails compilation when the
   schema's `plugins/0` has no `Absinthe.Middleware.Batch`.
 - **Field policies** (`fields.ex`, `fields/redactor.ex`). `use Warden.Fields` validates

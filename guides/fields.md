@@ -135,8 +135,15 @@ object :comment do
 end
 ```
 
+Every object type over the struct (linked through a `can/2` policy's `for:` or
+`warden_schema`) that exposes a redacted field under the same identifier must declare
+`redact_with` for its field policy; otherwise the schema fails to compile. A type that
+exposes none of the redacted fields needs nothing.
+
 After the object rule passes and before any child field resolves, Warden replaces the
-object value with its redacted struct. Default resolvers and custom resolvers of the
+object value with its redacted struct. For an interface or union, Warden resolves the
+concrete type again on the redacted struct; when redaction changed it, the value is
+denied. Default resolvers and custom resolvers of the
 child fields both read the redacted struct, so no field can reach the original value.
 
 It applies wherever object rules apply: per list item (one decision per rule and list),
