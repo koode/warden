@@ -582,7 +582,8 @@ if Code.ensure_loaded?(Ecto) do
           nil
 
         list when is_list(list) ->
-          list
+          # A NULL column is never inside the bounds.
+          Enum.reject(list, &is_nil/1)
 
         other ->
           raise Warden.PolicyError, """

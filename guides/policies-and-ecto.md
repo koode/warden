@@ -261,7 +261,8 @@ allow :read,
 
 ### `within:`
 
-The field is in the actor's `bounds[key]`. A missing key denies.
+The field is in the actor's `bounds[key]`. A missing key denies, and a `NULL` field never
+matches, even when the bounds hold a `nil`.
 
 ```elixir
 allow :read, rule: kind(:agent), within: {:issue_ids, :id}
