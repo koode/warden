@@ -34,45 +34,45 @@ if Code.ensure_loaded?(Absinthe) do
       values = value |> flatten(spec.shape, []) |> Enum.reverse()
       {outcomes, types, actor} = decide_values(values, spec, ctx)
       {values, actor} = redact(values, outcomes, types, spec, %{ctx | actor: actor})
-      {decided, []} = rebuild(value, spec.shape, Enum.zip(values, outcomes))
+      admits = admits(outcomes, types, spec, ctx)
+      {decided, []} = rebuild(value, spec.shape, Enum.zip([values, outcomes, admits]))
       denials = for {:deny, denial} <- outcomes, do: denial
 
       stats = %{
         count: length(values),
         denied: length(denials),
-        reason: first_reason(denials),
-        admitted: admitted(values, outcomes, types, spec, ctx)
+        reason: first_reason(denials)
       }
 
       {decided, actor, stats}
     end
 
-    # The values whose object rule the fields' pre middleware does not decide again (see
-    # `Middleware.pre/2`): values admitted by a batched object rule of a plain object type,
-    # so a list stays one batched call instead of one call per value and field, and every
-    # redacted value. A redacted value is admitted as the children see it (redacted): its
-    # object rule was decided on the value before redaction, and deciding it again on the
-    # redacted struct could disagree with that decision.
-    defp admitted(values, outcomes, _types, %{abstract: nil} = spec, ctx) do
-      rule = Map.get(spec.rules, spec.named)
+    # The type under which a passing value is admitted, or nil: the fields' pre
+    # middleware does not decide that type's object rule again for it (see
+    # `Middleware.pre/2`). Admitted are values of a type whose object rule is batched, so
+    # a list stays one batched call instead of one call per value and field, and every
+    # redacted value: its object rule was decided on the value before redaction, and
+    # deciding it again on the redacted struct could disagree. For abstract types the
+    # concrete type counts. `Plan.admissible?/3` is the same test, for the pre specs.
+    defp admits(outcomes, types, spec, ctx) do
       catalog = ctx.spec.authorizer.__warden_catalog__()
-      redacted? = Map.has_key?(redactors(spec), spec.named)
 
-      if rule != nil and (redacted? or Evaluator.batched?(rule, catalog)) do
-        for {value, :ok} <- Enum.zip(values, outcomes), do: {spec.named, value}
-      else
-        []
-      end
+      outcomes
+      |> Enum.with_index()
+      |> Enum.map(fn {outcome, index} ->
+        type = value_type(index, types, spec)
+
+        if outcome == :ok and admissible?(type, spec, catalog), do: type, else: nil
+      end)
     end
 
-    defp admitted(values, outcomes, types, spec, _ctx) do
-      redactors = redactors(spec)
+    defp admissible?(nil, _spec, _catalog), do: false
 
-      for {{value, :ok}, index} <- values |> Enum.zip(outcomes) |> Enum.with_index(),
-          type = Map.get(types, index),
-          Map.has_key?(redactors, type),
-          Map.has_key?(spec.rules, type),
-          do: {type, value}
+    defp admissible?(type, spec, catalog) do
+      rule = Map.get(spec.rules, type)
+
+      rule != nil and
+        (Map.has_key?(redactors(spec), type) or Evaluator.batched?(rule, catalog))
     end
 
     defp redactors(spec), do: Map.get(spec, :redactors, %{})
@@ -138,8 +138,8 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp rebuild(value, {:list, inner}, entries), do: rebuild([value], {:list, inner}, entries)
 
-    defp rebuild(_value, :named, [{value, outcome} | rest]) do
-      decided = {@decided, value, outcome}
+    defp rebuild(_value, :named, [{value, outcome, admit} | rest]) do
+      decided = {@decided, value, outcome, admit}
       {decided, rest}
     end
 

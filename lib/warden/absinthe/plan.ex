@@ -53,7 +53,7 @@ if Code.ensure_loaded?(Absinthe) do
             {_, field} <- object.fields,
             reduce: {%{}, %{}} do
           {fields, subs} ->
-            pre = pre_spec(object, field, types, object_rules, inputs, config)
+            pre = pre_spec(object, field, types, {object_rules, redactors}, inputs, config)
             rules = {object_rules, object_type_rules, redactors}
             post = post_spec(object, field, types, rules, config)
 
@@ -145,7 +145,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     ## Pre
 
-    defp pre_spec(object, field, types, object_rules, inputs, config) do
+    defp pre_spec(object, field, types, {object_rules, redactors}, inputs, config) do
       root? = object.identifier in @root_types
       ctx = %{types: types, object_rules: object_rules, inputs: inputs, config: config}
 
@@ -154,9 +154,25 @@ if Code.ensure_loaded?(Absinthe) do
           nil
 
         checks ->
-          with_on_deny(%{authorizer: config.authorizer, root: root?, checks: checks}, field)
+          %{authorizer: config.authorizer, root: root?, checks: checks}
+          |> with_on_deny(field)
+          |> with_admissible(checks, redactors, config)
       end
     end
+
+    # The post middleware admits values of a type whose object rule is batched or that
+    # redacts (`Warden.Absinthe.Decide`); only the fields of such a type look admissions
+    # up, so every other field pays nothing for them.
+    defp with_admissible(spec, [{:object, type, rule} | _rest], redactors, config) do
+      if admissible?(type, rule, redactors, config),
+        do: Map.put(spec, :admissible, true),
+        else: spec
+    end
+
+    defp with_admissible(spec, _checks, _redactors, _config), do: spec
+
+    defp admissible?(type, rule, redactors, config),
+      do: Map.has_key?(redactors, type) or Warden.Evaluator.batched?(rule, config.catalog)
 
     defp pre_checks(object, field, root?, ctx) do
       cond do

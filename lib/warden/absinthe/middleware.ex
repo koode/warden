@@ -21,6 +21,7 @@ if Code.ensure_loaded?(Absinthe) do
 
     @acc_key Warden
     @decided :__warden_decided__
+    @admit :__warden_admit__
 
     def pre_spec(spec), do: {{__MODULE__, :pre}, spec}
     def post_spec(spec), do: {{__MODULE__, :post}, spec}
@@ -81,7 +82,7 @@ if Code.ensure_loaded?(Absinthe) do
         resolution: res
       }
 
-      run = skip_admitted(checks, res, actor)
+      run = skip_admitted(checks, res, spec)
       {verdict, actor} = run_checks(run, base, authorizer)
       res = put_actor(res, actor)
 
@@ -115,39 +116,34 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     # The parent object rule is decided again for every field (defense in depth), except
-    # for a value the post middleware of this execution already admitted under a batched
-    # rule: re-deciding it per field would undo the batching. Admissions are keyed by the
-    # type, the actor and the exact value, so another actor or a changed value is decided
-    # again.
-    defp skip_admitted([{:object, type, _rule} | rest] = checks, res, actor) do
-      if admitted?(res, type, actor, res.source), do: rest, else: checks
+    # for a value the post middleware of this execution already admitted (a batched or a
+    # redacted object rule): re-deciding it per field would undo the batching. Only the
+    # pre specs of types that can be admitted (`admissible: true`, from the plan) look
+    # admissions up. An admission is keyed by the concrete type and the response path of
+    # the value (see "Admitted values" in docs/DESIGN.md), so the lookup costs the same
+    # whatever the size of the value.
+    defp skip_admitted([{:object, type, _rule} | rest] = checks, res, %{admissible: true}) do
+      if admitted?(res, type), do: rest, else: checks
     end
 
-    defp skip_admitted(checks, _res, _actor), do: checks
+    defp skip_admitted(checks, _res, _spec), do: checks
 
-    defp admitted?(%Resolution{acc: acc}, type, actor, value) do
-      key = admission_key(type, actor, value)
+    defp admitted?(%Resolution{acc: acc} = res, type) do
+      case acc do
+        %{@acc_key => %{admitted: table}} ->
+          parent_path = res |> Resolution.path() |> Enum.drop(-1)
+          Map.has_key?(table, {type, parent_path})
 
-      acc
-      |> Map.get(@acc_key, %{})
-      |> Map.get(:admitted, %{})
-      |> Map.get(:erlang.phash2(key), [])
-      |> Enum.member?(key)
+        _none ->
+          false
+      end
     end
 
-    defp admission_key(type, actor, value), do: {type, without_cache(actor), value}
+    defp put_admitted(res, []), do: res
 
-    defp put_admitted(res, [], _actor), do: res
-
-    defp put_admitted(%Resolution{acc: acc} = res, admitted, actor) do
+    defp put_admitted(%Resolution{acc: acc} = res, admitted) do
       state = Map.get(acc, @acc_key, %{})
-
-      table =
-        Enum.reduce(admitted, Map.get(state, :admitted, %{}), fn {type, value}, table ->
-          key = admission_key(type, actor, value)
-          Map.update(table, :erlang.phash2(key), [key], &[key | &1])
-        end)
-
+      table = Enum.reduce(admitted, Map.get(state, :admitted, %{}), &Map.put(&2, &1, true))
       %{res | acc: Map.put(acc, @acc_key, Map.put(state, :admitted, table))}
     end
 
@@ -402,7 +398,7 @@ if Code.ensure_loaded?(Absinthe) do
 
       ctx = %{spec: spec, base: base, res: res, actor: actor}
       {decided, actor, stats} = Decide.decide(value, spec, ctx)
-      res = res |> put_actor(actor) |> put_admitted(stats.admitted, actor)
+      res = put_actor(res, actor)
       emit_post(spec, actor, stats)
 
       decided
@@ -533,11 +529,6 @@ if Code.ensure_loaded?(Absinthe) do
     defp deny_reason({:deny, %{reason: reason}}), do: reason
     defp deny_reason(_result), do: nil
 
-    defp without_cache(%Actor{delegator: nil} = actor), do: %{actor | cache: %{}}
-
-    defp without_cache(%Actor{delegator: delegator} = actor),
-      do: %{actor | cache: %{}, delegator: without_cache(delegator)}
-
     # Resumes a deferred check: rebuilds the decided (and redacted) value and walks it like
     # `post/2`.
     def post_decided(
@@ -558,9 +549,8 @@ if Code.ensure_loaded?(Absinthe) do
 
       ctx = %{spec: spec, base: base, res: res, actor: actor}
       outcome = Decide.outcome(result, Map.fetch!(spec.rules, spec.named), spec.named, ctx)
-      res = if outcome == :ok, do: put_admitted(res, [{spec.named, value}], actor), else: res
-
-      {@decided, value, outcome}
+      # Cross-parent batching only defers batched rules, so a passing value is admitted.
+      {@decided, value, outcome, spec.named}
       |> walk(spec.shape, ctx, [])
       |> finish_post(res, spec)
     end
@@ -588,17 +578,9 @@ if Code.ensure_loaded?(Absinthe) do
     defp finish_post({:ok, value, []}, res, _spec), do: %{res | value: value}
 
     defp finish_post({:ok, value, attached}, res, spec) do
-      if innermost_non_null?(spec.shape) do
-        # Absinthe's null propagation nulls the whole list field when a null appears at
-        # any depth of a list whose innermost item type is non-null
-        # (`null_allowed_in_list?/1` only looks at the innermost type). Report the errors
-        # on the field so they are not lost.
-        res
-        |> null_field(Enum.map(attached, fn {_at, ii, term} -> {ii, term} end))
-        |> maybe_record_fold()
-      else
-        record_item_errors(%{res | value: value}, attached)
-      end
+      {admits, errors} = split_admits(attached)
+      res = record_admits(res, admits)
+      finish_errors(value, errors, res, spec)
     end
 
     defp finish_post({tag, pending}, res, _spec) when tag in [:null, :bubble] do
@@ -619,6 +601,40 @@ if Code.ensure_loaded?(Absinthe) do
         other ->
           object_replace_error!(spec, other)
       end
+    end
+
+    defp finish_errors(value, [], res, _spec), do: %{res | value: value}
+
+    defp finish_errors(value, attached, res, spec) do
+      if innermost_non_null?(spec.shape) do
+        # Absinthe's null propagation nulls the whole list field when a null appears at
+        # any depth of a list whose innermost item type is non-null
+        # (`null_allowed_in_list?/1` only looks at the innermost type). Report the errors
+        # on the field so they are not lost.
+        res
+        |> null_field(Enum.map(errors_only(attached), fn {_at, ii, term} -> {ii, term} end))
+        |> maybe_record_fold()
+      else
+        record_item_errors(%{res | value: value}, attached)
+      end
+    end
+
+    # Admissions travel with the item errors in the walk's `attached` list, as
+    # `{@admit, {relative_path, type}}` pairs, so they get the same OUTPUT positions:
+    # after `:filter` removed items, and only for values the field returns. A position
+    # that becomes null (a bubble, a fold of the field) drops them.
+    defp split_admits(attached) do
+      Enum.split_with(attached, &match?({@admit, _admission}, &1))
+    end
+
+    defp errors_only(attached), do: for({_at, _item, _term} = entry <- attached, do: entry)
+
+    defp record_admits(res, []), do: res
+
+    defp record_admits(res, admits) do
+      field_path = Resolution.path(res)
+      admitted = for {@admit, {relative, type}} <- admits, do: {type, field_path ++ relative}
+      put_admitted(res, admitted)
     end
 
     defp null_field(res, pending) do
@@ -671,10 +687,11 @@ if Code.ensure_loaded?(Absinthe) do
     defp walk(value, {:list, inner}, ctx, idx), do: walk([value], {:list, inner}, ctx, idx)
 
     # Every checked position was decided by `Warden.Absinthe.Decide` before the walk.
-    defp walk({@decided, value, outcome}, :named, ctx, idx) do
-      case outcome do
-        :ok -> {:ok, value, []}
-        {:deny, denial} -> object_denied(denial, ctx, idx)
+    defp walk({@decided, value, outcome, admit}, :named, ctx, idx) do
+      case {outcome, admit} do
+        {:ok, nil} -> {:ok, value, []}
+        {:ok, type} -> {:ok, value, [{@admit, {Enum.reverse(idx), type}}]}
+        {{:deny, denial}, _admit} -> object_denied(denial, ctx, idx)
       end
     end
 
@@ -725,7 +742,10 @@ if Code.ensure_loaded?(Absinthe) do
           # to positions inside it move up with it, and the remaining items are still
           # checked so every denied item is reported.
           unattached =
-            attached |> Enum.reverse() |> Enum.map(fn {_at, ii, term} -> {ii, term} end)
+            attached
+            |> Enum.reverse()
+            |> errors_only()
+            |> Enum.map(fn {_at, ii, term} -> {ii, term} end)
 
           collect_rest(rest, i + 1, inner, ctx, idx, Enum.reverse(unattached ++ pending))
 
@@ -740,7 +760,7 @@ if Code.ensure_loaded?(Absinthe) do
     defp collect_rest([value | rest], i, inner, ctx, idx, pending) do
       case walk(value, inner, ctx, [i | idx]) do
         {:ok, _value, a} ->
-          more = Enum.map(a, fn {_at, ii, term} -> {ii, term} end)
+          more = a |> errors_only() |> Enum.map(fn {_at, ii, term} -> {ii, term} end)
           collect_rest(rest, i + 1, inner, ctx, idx, Enum.reverse(more, pending))
 
         {tag, more} when tag in [:null, :bubble] ->
