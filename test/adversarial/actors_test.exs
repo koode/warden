@@ -188,6 +188,52 @@ defmodule Warden.Adversarial.ActorsTest do
     end
   end
 
+  describe "the tenant-role cache" do
+    test "never crosses from one actor to another, delegator included" do
+      rule = tenant_role(:guest)
+      context = context(nil)
+      delegated = Warden.on_behalf_of(actor(olivia()), actor(sam()))
+
+      evaluation =
+        Warden.Evaluator.one(
+          rule,
+          %Warden.Check{actor: delegated, value: %{tenant_id: "t1"}, context: context},
+          Authz
+        )
+
+      {:ok, cached, _tenant} = evaluation
+
+      assert cached.cache == %{{:tenant_roles, "t1"} => MapSet.new([:guest])}
+      assert cached.delegator.cache == %{{:tenant_roles, "t1"} => MapSet.new([:member, :guest])}
+      assert_received {:tenant_roles, "olivia", "t1"}
+      assert_received {:tenant_roles, "sam", "t1"}
+
+      # Abby's own roles in t1 come from her callback, not from Sam's cached entry.
+      refute Warden.allowed?(actor(sam()), tenant_role(:owner),
+               value: %{tenant_id: "t1"},
+               context: context
+             )
+
+      assert Warden.allowed?(actor(abby()), tenant_role(:owner),
+               value: %{tenant_id: "t1"},
+               context: context
+             )
+    end
+
+    test "is not shared between two GraphQL executions" do
+      for user <- [abby(), sam()] do
+        {:ok, _result} =
+          Absinthe.run("{ workspaces { name } }", Warden.Test.V2.Schema, context: context(user))
+      end
+
+      reads =
+        for {:tenant_roles, user_id, _tenant} <- elem(Process.info(self(), :messages), 1),
+            do: user_id
+
+      assert Enum.frequencies(reads) == %{"abby" => 3, "sam" => 3}
+    end
+  end
+
   describe "reasons and actors never leak" do
     test "the default ForbiddenError message names no reason" do
       context = context(abby(), %{reasoned: {:deny, {:not_member, %{team: "team-crimson"}}}})

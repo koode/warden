@@ -63,8 +63,10 @@ defmodule Warden.Test.V2.Authz do
   defp single(:reasoned, %Warden.Check{context: context}),
     do: Map.get(context, :reasoned, {:deny, :not_member})
 
-  defp single(:mine, %Warden.Check{actor: actor, value: value}),
-    do: is_map(value) and Map.get(value, :owner_id) == actor.subject.id
+  defp single(:mine, %Warden.Check{actor: %Warden.Actor{subject: %{id: id}}, value: value}),
+    do: is_map(value) and Map.get(value, :owner_id) == id
+
+  defp single(:mine, %Warden.Check{}), do: false
 
   defp single(:typed, %Warden.Check{}), do: true
   defp single(:hooked, %Warden.Check{}), do: true
@@ -138,7 +140,7 @@ end
 
 defmodule Warden.Test.V2.Doc do
   @moduledoc false
-  defstruct [:id, :workspace_id, :owner_id, public: false, body: "doc body"]
+  defstruct [:id, :workspace_id, :owner_id, public: false, visible: false, body: "doc body"]
 
   def all do
     [

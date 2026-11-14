@@ -502,4 +502,256 @@ defmodule Warden.Property.OracleTest do
       assert result == :ok == expected, "rule: #{inspect(rule)}, actor: #{inspect(actor)}"
     end
   end
+
+  # The 0.2 rule terms over `Warden.Test.V2.Authz`: kinds, credentials, tenant roles,
+  # system and delegated actors, a batched check and a policy. The oracle below restates
+  # their meaning as plain functions over the generated actor specs.
+
+  @v2_tenants ["t1", "t2"]
+  @v2_tenant_ranks %{owner: 4, admin: 3, member: 2, guest: 1}
+
+  defp v2_user_spec do
+    gen all(
+          id <- member_of(["abby", "sam", "olivia"]),
+          kind <- member_of([:user, :agent]),
+          roles <- subset([:staff]),
+          t1 <- member_of([nil, :owner, :admin, :member, :guest]),
+          t2 <- member_of([nil, :owner, :member, :guest]),
+          credential <- v2_credential()
+        ) do
+      memberships =
+        for {tenant, role} <- [{"t1", t1}, {"t2", t2}],
+            role != nil,
+            into: %{},
+            do: {tenant, [role]}
+
+      %{
+        type: :user,
+        id: id,
+        kind: kind,
+        roles: roles,
+        memberships: memberships,
+        credential: credential
+      }
+    end
+  end
+
+  defp v2_credential do
+    one_of([
+      constant(nil),
+      gen all(
+            method <- member_of([:session, :api_key, :oauth]),
+            scopes <- one_of([constant(:all), subset(["docs:read", "docs:write"])]),
+            tenant <- member_of([nil | @v2_tenants])
+          ) do
+        %Warden.Credential{method: method, scopes: scopes, tenant: tenant}
+      end
+    ])
+  end
+
+  defp v2_actor_spec do
+    one_of([
+      constant(%{type: :anonymous}),
+      v2_user_spec(),
+      gen all(kind <- member_of([:webhook, :system]), tenant <- member_of([nil | @v2_tenants])) do
+        %{type: :system, kind: kind, tenant: tenant}
+      end,
+      gen all(agent <- v2_user_spec(), user <- v2_user_spec()) do
+        %{type: :delegated, actor: agent, delegator: user}
+      end
+    ])
+  end
+
+  defp v2_rule_gen do
+    leaf =
+      one_of([
+        constant(:public),
+        constant(:authenticated),
+        constant({:role, :staff}),
+        constant(:session),
+        map(member_of(["docs:read", "docs:write"]), &{:credential_scope, &1}),
+        map(non_empty_subset([:user, :agent, :webhook, :anonymous]), &{:kind, &1}),
+        map(member_of([:owner, :admin, :member, :guest]), &{:tenant_role, &1, []}),
+        map(member_of([:admin, :guest]), &{:tenant_role, &1, [tenant: {:arg, [:workspace]}]}),
+        constant({:check, :mine, []}),
+        constant({:check, :visible, []}),
+        constant({:check, :hooked, []}),
+        map(member_of([:read, :write]), &{:can, Warden.Test.V2.Docs, &1, []})
+      ])
+
+    tree(leaf, fn child ->
+      one_of([
+        map(list_of(child, min_length: 1, max_length: 3), &{:all, &1}),
+        map(list_of(child, min_length: 1, max_length: 3), &{:any, &1})
+      ])
+    end)
+  end
+
+  defp v2_doc do
+    gen all(
+          id <- integer(1..1000),
+          workspace <- member_of(@v2_tenants),
+          owner <- member_of(["abby", "sam", "olivia"]),
+          public <- boolean(),
+          visible <- boolean()
+        ) do
+      %Warden.Test.V2.Doc{
+        id: id,
+        workspace_id: workspace,
+        owner_id: owner,
+        public: public,
+        visible: visible
+      }
+    end
+  end
+
+  defp v2_build(%{type: :anonymous}), do: Warden.actor(%{}, authorizer: Warden.Test.V2.Authz)
+
+  defp v2_build(%{type: :user} = spec) do
+    user = Map.take(spec, [:id, :kind, :roles, :memberships])
+
+    Warden.actor(%{current_user: user, credential: spec.credential},
+      authorizer: Warden.Test.V2.Authz
+    )
+  end
+
+  defp v2_build(%{type: :system} = spec),
+    do: Warden.system_actor(Warden.Test.V2.Authz, kind: spec.kind, tenant: spec.tenant)
+
+  defp v2_build(%{type: :delegated} = spec),
+    do: Warden.on_behalf_of(v2_build(spec.actor), v2_build(spec.delegator))
+
+  defp v2_kind(%{type: :anonymous}), do: :anonymous
+  defp v2_kind(%{type: :system, kind: kind}), do: kind
+  defp v2_kind(%{type: :user, kind: kind}), do: kind
+
+  defp v2_bound(%{type: :user, credential: %Warden.Credential{tenant: tenant}}), do: tenant
+  defp v2_bound(%{type: :system, tenant: tenant}), do: tenant
+  defp v2_bound(_spec), do: nil
+
+  defp v2_user?(spec), do: spec.type == :user
+
+  defp v2_has_tenant_role?(spec, tenant, role) do
+    held =
+      spec
+      |> Map.get(:memberships, %{})
+      |> Map.get(tenant, [])
+      |> Enum.map(&Map.fetch!(@v2_tenant_ranks, &1))
+
+    bound = v2_bound(spec)
+
+    v2_user?(spec) and tenant != nil and (bound == nil or bound == tenant) and
+      Enum.any?(held, &(&1 >= Map.fetch!(@v2_tenant_ranks, role)))
+  end
+
+  defp v2_session?(%{type: :user, credential: nil}), do: true
+  defp v2_session?(%{type: :user, credential: %{method: :session}}), do: true
+  defp v2_session?(_spec), do: false
+
+  defp v2_scope?(%{type: :user, credential: %{scopes: :all}}, _scope), do: true
+
+  defp v2_scope?(%{type: :user, credential: %{scopes: scopes}} = spec, scope),
+    do: v2_session?(spec) or scope in scopes
+
+  defp v2_scope?(spec, _scope), do: v2_session?(spec)
+
+  defp v2_policy?(spec, action, doc) do
+    bound = v2_bound(spec)
+    in_tenant? = bound == nil or bound == doc.workspace_id
+    in_tenant? and v2_policy_decides?(spec, action, doc)
+  end
+
+  defp v2_policy_decides?(%{type: :system, kind: :webhook}, action, doc),
+    do: action == :read and doc.public
+
+  defp v2_policy_decides?(%{type: :system}, _action, _doc), do: false
+  defp v2_policy_decides?(spec, :read, doc), do: doc.public or Map.get(spec, :id) == doc.owner_id
+  defp v2_policy_decides?(spec, :write, doc), do: spec.type == :user and spec.id == doc.owner_id
+
+  defp v2_oracle(rule, %{type: :delegated} = spec, doc, args),
+    do: v2_oracle(rule, spec.actor, doc, args) and v2_oracle(rule, spec.delegator, doc, args)
+
+  defp v2_oracle(:public, _spec, _doc, _args), do: true
+  defp v2_oracle(:authenticated, spec, _doc, _args), do: v2_user?(spec)
+  defp v2_oracle({:role, role}, spec, _doc, _args), do: v2_user?(spec) and role in spec.roles
+  defp v2_oracle(:session, spec, _doc, _args), do: v2_session?(spec)
+  defp v2_oracle({:credential_scope, scope}, spec, _doc, _args), do: v2_scope?(spec, scope)
+  defp v2_oracle({:kind, kinds}, spec, _doc, _args), do: v2_kind(spec) in kinds
+
+  defp v2_oracle({:tenant_role, role, []}, spec, doc, _args),
+    do: v2_has_tenant_role?(spec, doc.workspace_id, role)
+
+  defp v2_oracle({:tenant_role, role, [tenant: {:arg, [:workspace]}]}, spec, _doc, args),
+    do: v2_has_tenant_role?(spec, args[:workspace], role)
+
+  defp v2_oracle({:check, :mine, []}, spec, doc, _args),
+    do: v2_user?(spec) and spec.id == doc.owner_id
+
+  defp v2_oracle({:check, :visible, []}, spec, doc, _args),
+    do: spec.type != :system and doc.visible
+
+  defp v2_oracle({:check, :hooked, []}, spec, _doc, _args),
+    do: spec.type != :system or spec.kind == :webhook
+
+  defp v2_oracle({:can, _policy, action, []}, spec, doc, _args), do: v2_policy?(spec, action, doc)
+
+  defp v2_oracle({:all, rules}, spec, doc, args),
+    do: Enum.all?(rules, &v2_oracle(&1, spec, doc, args))
+
+  defp v2_oracle({:any, rules}, spec, doc, args),
+    do: Enum.any?(rules, &v2_oracle(&1, spec, doc, args))
+
+  property "0.2 rule terms agree with an independent evaluator, one value and lists" do
+    check all(
+            spec <- v2_actor_spec(),
+            rule <- v2_rule_gen(),
+            docs <- list_of(v2_doc(), min_length: 1, max_length: 6),
+            workspace <- member_of([nil | @v2_tenants]),
+            max_runs: @runs
+          ) do
+      actor = v2_build(spec)
+      args = %{workspace: workspace}
+      expected = Enum.filter(docs, &v2_oracle(rule, spec, &1, args))
+      label = "rule: #{inspect(rule)}, actor: #{inspect(spec)}"
+
+      for doc <- docs do
+        decision = Warden.authorize(actor, rule, value: doc, args: args) == :ok
+        assert decision == v2_oracle(rule, spec, doc, args), label
+
+        assert Warden.explain(actor, rule, value: doc, args: args).result ==
+                 if(decision, do: :ok, else: :deny),
+               label
+      end
+
+      assert Warden.filter(actor, rule, docs, args: args) == expected, label
+    end
+  end
+
+  property "delegation is never wider than either actor" do
+    check all(
+            agent <- v2_user_spec(),
+            user <- v2_user_spec(),
+            rule <- v2_rule_gen(),
+            docs <- list_of(v2_doc(), min_length: 1, max_length: 4),
+            max_runs: @runs
+          ) do
+      agent_actor = v2_build(agent)
+      user_actor = v2_build(user)
+      delegated = Warden.on_behalf_of(agent_actor, user_actor)
+      args = %{workspace: "t1"}
+
+      for doc <- docs do
+        both? =
+          Warden.allowed?(agent_actor, rule, value: doc, args: args) and
+            Warden.allowed?(user_actor, rule, value: doc, args: args)
+
+        assert Warden.allowed?(delegated, rule, value: doc, args: args) == both?, inspect(rule)
+      end
+
+      for kept <- Warden.filter(delegated, rule, docs, args: args) do
+        assert Warden.allowed?(agent_actor, rule, value: kept, args: args)
+        assert Warden.allowed?(user_actor, rule, value: kept, args: args)
+      end
+    end
+  end
 end
