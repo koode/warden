@@ -1111,6 +1111,94 @@ defmodule Warden.Ecto.ScopeTest do
       end
     end
 
+    test "bind: reuses the host's placeholders for the tenant and the user id" do
+      world = world()
+      shared = insert!(%Issue{workspace_id: "t1", team_id: world.t1_private.id, title: "shared"})
+      insert!(%Share{issue_id: shared.id, grantee_id: "sam"})
+      own = insert!(%Issue{workspace_id: "t1", team_id: world.t1_public.id, author_id: "sam"})
+      query = from(issue in Issue, select: issue.id)
+      opts = [tenant: "t1", param_offset: 2]
+
+      {unbound_sql, unbound_params} = WardenEcto.to_sql(query, actor(sam()), :read, opts)
+      bound = %{1 => "t1", 2 => "sam"}
+      {sql, params} = WardenEcto.to_sql(query, actor(sam()), :read, [bind: bound] ++ opts)
+
+      assert "t1" in unbound_params and "sam" in unbound_params
+      refute "t1" in params or "sam" in params
+      assert length(params) < length(unbound_params)
+      assert unbound_sql =~ "$3"
+
+      numbers =
+        ~r/\$(\d+)/ |> Regex.scan(sql, capture: :all_but_first) |> List.flatten() |> Enum.uniq()
+
+      assert numbers |> Enum.map(&String.to_integer/1) |> Enum.sort() ==
+               Enum.to_list(1..(length(params) + 2))
+
+      # The host compares its own $1 and $2 too, so both are typed by both statements.
+      host = fn sql ->
+        """
+        SELECT issues.id FROM issues JOIN (#{sql}) AS scoped ON scoped.id = issues.id
+        WHERE issues.workspace_id = $1 AND issues.author_id IS DISTINCT FROM $2
+        ORDER BY issues.id
+        """
+      end
+
+      %{rows: rows} = Repo.query!(host.(sql), ["t1", "sam" | params])
+      %{rows: unbound_rows} = Repo.query!(host.(unbound_sql), ["t1", "sam" | unbound_params])
+
+      expected =
+        Issue
+        |> WardenEcto.scope(actor(sam()), :read, tenant: "t1")
+        |> all_ids()
+        |> List.delete(own.id)
+
+      assert List.flatten(rows) == expected
+      assert List.flatten(unbound_rows) == expected
+      assert shared.id in expected
+
+      # A host statement with a third value of its own: the scope's values follow it.
+      {offset_sql, offset_params} =
+        WardenEcto.to_sql(query, actor(sam()), :read,
+          tenant: "t1",
+          param_offset: 3,
+          bind: %{2 => "t1", 3 => "sam"}
+        )
+
+      assert offset_params == params
+
+      raw = """
+      SELECT count(*) FROM (#{offset_sql}) AS scoped
+      WHERE $1::int > 0 AND $2::text = 't1' AND $3::text = 'sam'
+      """
+
+      %{rows: [[count]]} = Repo.query!(raw, [1, "t1", "sam" | offset_params])
+      assert count == length(expected) + 1
+    end
+
+    test "bind: takes placeholder numbers of the host statement only" do
+      _world = world()
+
+      for {bound, offset} <- [{%{1 => "t1"}, 0}, {%{3 => "t1"}, 2}, {%{"1" => "t1"}, 1}] do
+        message = ~r/`bind:` keys must be placeholder numbers from 1 to `param_offset:`/
+
+        error =
+          assert_raise ArgumentError, message, fn ->
+            WardenEcto.to_sql(Issue, actor(sam()), :read, bind: bound, param_offset: offset)
+          end
+
+        refute error.message =~ "t1"
+      end
+
+      assert_raise ArgumentError,
+                   ~r/`bind:` must be a map of placeholder numbers to values, got: a list/,
+                   fn ->
+                     WardenEcto.to_sql(Issue, actor(sam()), :read,
+                       bind: [{1, "t1"}],
+                       param_offset: 1
+                     )
+                   end
+    end
+
     test "tenant ids and where: literals stay parameters" do
       world = world()
       hostile = "t1'; DROP TABLE teams; --"

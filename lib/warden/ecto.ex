@@ -72,8 +72,8 @@ if Code.ensure_loaded?(Ecto) do
 
     @typedoc """
     Options: `:authorizer`, `:context` (the context for policy callbacks when the first
-    argument is an actor) and, for `scope/4` and `to_sql/4`, `:tenant` and `:prefix`
-    (the query prefix the scope will run in, for the parent ids that
+    argument is an actor) and, for `scope/4`, `to_sql/4` and `preload_ids/4`, `:tenant`
+    and `:prefix` (the query prefix the scope will run in, for the parent ids that
     `through: {assoc, action, resolve: :ids}` reads while the scope is built).
     """
     @type opts :: keyword
@@ -366,25 +366,67 @@ if Code.ensure_loaded?(Ecto) do
           Repo.query!("SELECT count(*) FROM (\#{sql}) AS scoped WHERE $1", [true | params])
 
       The offset must equal the number of placeholders the host statement binds, with no
-      gaps: Postgres cannot type a placeholder that no expression uses. `params` holds
-      every value the scope needs (the tenant and the subject id included), even when the
-      host statement already binds the same value.
+      gaps: Postgres cannot type a placeholder that no expression uses.
+
+      `:bind` (default `%{}`) names values the host statement already binds, as a map of
+      its placeholder numbers (`1..param_offset`) to values. A value the scope needs that
+      equals (`===`) a bound value uses the host's placeholder instead of a new one and
+      is left out of `params`; the scope's other values are numbered from
+      `$param_offset + 1` with no gaps:
+
+          ids = from(issue in MyApp.Issues.Issue, select: issue.id)
+          bound = %{1 => workspace_id, 2 => user_id}
+          opts = [tenant: workspace_id, param_offset: 2, bind: bound]
+          {sql, params} = Warden.Ecto.to_sql(ids, actor, :read, opts)
+
+          Repo.query!(
+            "SELECT ... FROM issues WHERE workspace_id = $1 AND owner_id = $2 AND id IN (\#{sql})",
+            [workspace_id, user_id | params]
+          )
+
+      Values are compared as Ecto dumps them for the query, so a value that differs only
+      in type (a UUID string where the column is `:binary_id`, which dumps to 16 bytes)
+      does not match and stays a new placeholder: never wrong, only not shared. A shared
+      placeholder has one type in both statements, so bind the host's value to a
+      placeholder of the type the scope compares it with.
       """
       @spec to_sql(Ecto.Queryable.t(), Warden.actor_or_context(), atom, opts) ::
               {String.t(), [term]}
       def to_sql(queryable, actor_or_context, action, opts) when is_list(opts) do
         {repo, scope_opts} = Keyword.pop(opts, :repo)
         {offset, scope_opts} = Keyword.pop(scope_opts, :param_offset, 0)
+        {bound, scope_opts} = Keyword.pop(scope_opts, :bind, %{})
 
         if not (is_integer(offset) and offset >= 0) do
           raise ArgumentError, "`param_offset:` must be a non-negative integer"
         end
 
+        bound!(bound, offset)
         scoped = scope(queryable, actor_or_context, action, scope_opts)
         repo = repo || scoped |> root_schema!() |> policy_repo(actor_or_context, opts)
         {sql, params} = SQL.to_sql(:all, repo, scoped)
-        shifted = Placeholders.shift(sql, offset)
-        {shifted, params}
+        Placeholders.bind(sql, params, offset, bound)
+      end
+
+      # `bind:` is a map whose keys are placeholders the host statement binds. The error
+      # names the shape of a bad key, never a value.
+      defp bound!(bound, offset) when is_map(bound) do
+        case Enum.find(Map.keys(bound), &(not (is_integer(&1) and &1 in 1..offset//1))) do
+          nil ->
+            :ok
+
+          key ->
+            raise ArgumentError, """
+            `bind:` keys must be placeholder numbers from 1 to `param_offset:` \
+            (#{offset}), got: #{Info.shape(key)}\
+            """
+        end
+      end
+
+      defp bound!(bound, _offset) do
+        raise ArgumentError, """
+        `bind:` must be a map of placeholder numbers to values, got: #{Info.shape(bound)}\
+        """
       end
 
       defp policy_repo(schema, actor_or_context, opts) do
