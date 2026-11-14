@@ -17,9 +17,9 @@ defmodule Warden.Test.V2.Authz do
       :mine,
       typed: [opts: [role: {:in, [:owner, :admin]}], required: [:role]],
       hooked: [system_kinds: [:webhook]],
-      slow: [timeout: 50],
+      slow: [timeout: 200],
       visible: [batch: true],
-      slow_many: [batch: true, timeout: 50],
+      slow_many: [batch: true, timeout: 200],
       configured_many: [batch: true],
       single_or_many: [batch: true]
     ]
@@ -117,7 +117,9 @@ end
 
 defmodule Warden.Test.Decisions do
   @moduledoc false
-  # Forwards `[:warden, :decision]` events to the test process that attached.
+  # Forwards `[:warden, :decision]` events to the test process that attached, when they
+  # were emitted by that process (or a process it started), so async tests do not see
+  # each other's events.
 
   def attach do
     handler = "warden-test-#{System.unique_integer([:positive])}"
@@ -126,6 +128,9 @@ defmodule Warden.Test.Decisions do
     handler
   end
 
-  def handle(_event, measurements, metadata, test_pid),
-    do: send(test_pid, {:decision, measurements, metadata})
+  def handle(_event, measurements, metadata, test_pid) do
+    if self() == test_pid or test_pid in Process.get(:"$callers", []) do
+      send(test_pid, {:decision, measurements, metadata})
+    end
+  end
 end

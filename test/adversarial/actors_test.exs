@@ -172,7 +172,7 @@ defmodule Warden.Adversarial.ActorsTest do
     end
 
     test "a timed-out check denies with :unavailable, even when it would grant later" do
-      context = context(abby(), %{sleep: 300, slow_result: true})
+      context = context(abby(), %{sleep: 600, slow_result: true})
       assert {:error, denial} = Warden.authorize(context, check(:slow), authorizer: Authz)
       assert denial.reason == :unavailable
       refute Warden.allowed?(context, any_of([deny(), check(:slow)]), authorizer: Authz)

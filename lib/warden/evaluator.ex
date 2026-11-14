@@ -54,19 +54,117 @@ defmodule Warden.Evaluator do
     end
   end
 
-  # One rule for many checks that share one actor. Returns the results in order and the
-  # updated actor.
+  # One rule for many checks that share one actor (`Warden.filter/4`, GraphQL lists).
+  # Batched leaves (checks declared with `batch: true`) are decided first, once for all
+  # values; then the rule is evaluated per value from those results, short-circuiting
+  # over the other leaves as `one/3` does. A delegated actor's delegator is asked only
+  # about the values the actor passed. Returns the results in order and the updated
+  # actor (`nil` for no checks).
   @spec many(term, [Check.t()], module) :: {[:ok | {:deny, failure}], Actor.t() | nil}
   def many(_rule, [], _authorizer), do: {[], nil}
 
-  def many(rule, [%Check{actor: first_actor} | _rest] = checks, authorizer) do
-    {results, actor} =
-      Enum.map_reduce(checks, first_actor, fn check, actor ->
-        {result, actor, _tenant} = one(rule, %{check | actor: actor}, authorizer)
-        {result, actor}
-      end)
+  def many(rule, [%Check{actor: %Actor{} = actor} | _rest] = checks, authorizer) do
+    {results, actor} = many_pass(rule, checks, actor, authorizer)
 
-    {results, actor}
+    case actor.delegator do
+      nil ->
+        {results, actor}
+
+      %Actor{} = delegator ->
+        {results, delegator} = delegated_pass(rule, checks, results, delegator, authorizer)
+        {results, %{actor | delegator: delegator}}
+    end
+  end
+
+  defp delegated_pass(rule, checks, results, delegator, authorizer) do
+    passed = for {check, :ok} <- Enum.zip(checks, results), do: check
+    {delegated, delegator} = many_pass(rule, passed, delegator, authorizer)
+    merged = merge_delegated(results, delegated, [])
+    {merged, delegator}
+  end
+
+  defp merge_delegated([], _delegated, acc), do: Enum.reverse(acc)
+
+  defp merge_delegated([:ok | rest], [delegated | more], acc),
+    do: merge_delegated(rest, more, [delegated | acc])
+
+  defp merge_delegated([denied | rest], delegated, acc),
+    do: merge_delegated(rest, delegated, [denied | acc])
+
+  defp many_pass(_rule, [], actor, _authorizer), do: {[], actor}
+
+  defp many_pass(rule, checks, actor, authorizer) do
+    catalog = authorizer.__warden_catalog__()
+
+    tables =
+      for leaf <- batched_leaves(rule, catalog, []),
+          not leaf_refused?(leaf, actor, catalog),
+          do: {leaf, batch_verdicts(leaf, checks, actor, authorizer, catalog)}
+
+    checks
+    |> Enum.with_index()
+    |> Enum.map_reduce(actor, fn {check, index}, actor ->
+      decided = Map.new(tables, fn {leaf, verdicts} -> {leaf, elem(verdicts, index)} end)
+      {outcome, state} = run(rule, %{check | actor: actor}, authorizer, decided)
+      result = result(outcome, Enum.reverse(state.trace))
+      {result, state.check.actor}
+    end)
+  end
+
+  # The distinct batched leaves of a rule, in rule order.
+  defp batched_leaves({tag, rules}, catalog, acc) when tag in [:all, :any] and is_list(rules),
+    do: Enum.reduce(rules, acc, &batched_leaves(&1, catalog, &2))
+
+  defp batched_leaves({:check, name, _opts} = leaf, catalog, acc) do
+    if check_spec(catalog, name).batch and leaf not in acc, do: acc ++ [leaf], else: acc
+  end
+
+  defp batched_leaves(_rule, _catalog, acc), do: acc
+
+  defp leaf_refused?({:check, name, _opts}, actor, catalog),
+    do: system_refused?(actor, check_spec(catalog, name))
+
+  # Calls `check_many/2` once for every value. Returns the verdicts as a tuple, indexed
+  # like `checks`.
+  defp batch_verdicts({:check, name, opts}, checks, actor, authorizer, catalog) do
+    spec = check_spec(catalog, name)
+    batch = Enum.map(checks, &%{&1 | actor: actor, name: name, opts: opts})
+    count = length(batch)
+
+    verdicts =
+      case caught(fn -> Callbacks.check_many(authorizer, name, batch) end, spec.timeout) do
+        {:ok, results} -> batch_results!(results, count, authorizer, name)
+        :timeout -> List.duplicate({:deny, @unavailable}, count)
+        {:raised, kind, reason, _stacktrace} -> batch_raised!(kind, reason, authorizer, name)
+      end
+
+    List.to_tuple(verdicts)
+  end
+
+  defp batch_results!(results, count, authorizer, name) when is_list(results) do
+    if length(results) == count do
+      Enum.map(results, &verdict!(&1, authorizer, name))
+    else
+      raise Warden.PolicyError, """
+      #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) returned \
+      #{length(results)} results for #{count} checks\
+      """
+    end
+  end
+
+  defp batch_results!(other, _count, authorizer, name) do
+    raise Warden.PolicyError, """
+    #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return a list, \
+    got: #{inspect(other)}\
+    """
+  end
+
+  @spec batch_raised!(atom, term, module, atom) :: no_return()
+  defp batch_raised!(kind, reason, authorizer, name) do
+    raise Warden.PolicyError, """
+    #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) failed, so every value \
+    is denied: #{Exception.format_banner(kind, reason)}\
+    """
   end
 
   # Evaluates every sub-rule (no short-circuiting) and returns the full tree. The result
@@ -378,11 +476,14 @@ defmodule Warden.Evaluator do
   defp single_check(authorizer, name, check, _spec), do: Callbacks.check(authorizer, name, check)
 
   defp single_from_many(authorizer, name, check) do
-    case Callbacks.check_many(authorizer, name, [check]) do
-      [result] ->
+    case run_caught(fn -> Callbacks.check_many(authorizer, name, [check]) end) do
+      {:ok, [result]} ->
         result
 
-      other ->
+      {:raised, kind, reason, _stacktrace} ->
+        batch_raised!(kind, reason, authorizer, name)
+
+      {:ok, other} ->
         raise Warden.PolicyError, """
         #{inspect(authorizer)}.check_many(#{inspect(name)}, checks) must return one result \\
         per check, got: #{inspect(other)}\\
@@ -445,6 +546,10 @@ defmodule Warden.Evaluator do
         :timeout
     end
   end
+
+  # Batch callbacks never raise past Warden: a raise becomes a `Warden.PolicyError`.
+  defp caught(fun, nil), do: run_caught(fun)
+  defp caught(fun, timeout), do: with_timeout(fun, timeout)
 
   defp run_caught(fun) do
     {:ok, fun.()}

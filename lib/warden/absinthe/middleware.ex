@@ -13,10 +13,12 @@ if Code.ensure_loaded?(Absinthe) do
 
     alias Absinthe.Resolution
     alias Absinthe.Type.{Interface, Union}
-    alias Warden.{Actor, Check, Denial, Evaluator, Rule}
+    alias Warden.Absinthe.Decide
+    alias Warden.{Actor, Check, Denial, Evaluator}
     alias Warden.Authorizer.Callbacks
 
     @acc_key Warden
+    @decided :__warden_decided__
 
     def pre_spec(spec), do: {{__MODULE__, :pre}, spec}
     def post_spec(spec), do: {{__MODULE__, :post}, spec}
@@ -323,13 +325,33 @@ if Code.ensure_loaded?(Absinthe) do
       }
 
       ctx = %{spec: spec, base: base, res: res, actor: actor}
+      {decided, actor, stats} = Decide.decide(value, spec, ctx)
+      res = put_actor(res, actor)
+      emit_post(spec, actor, stats)
 
-      value
-      |> walk(spec.shape, ctx, [])
+      decided
+      |> walk(spec.shape, %{ctx | res: res, actor: actor}, [])
       |> finish_post(res, spec)
     end
 
     def post(res, _spec), do: res
+
+    # One event per field resolution: a list is one decision over all its values.
+    defp emit_post(_spec, _actor, %{count: 0}), do: :ok
+
+    defp emit_post(spec, actor, stats) do
+      decision = %{
+        layer: :absinthe,
+        kind: :object,
+        rule: Map.get(spec.rules, spec.named) || spec.abstract_rule,
+        actor: actor,
+        count: stats.count,
+        denied: stats.denied,
+        reason: stats.reason
+      }
+
+      Warden.Telemetry.decision(decision)
+    end
 
     defp finish_post({:ok, value, []}, res, _spec), do: %{res | value: value}
 
@@ -416,8 +438,9 @@ if Code.ensure_loaded?(Absinthe) do
     # the single item it will become.
     defp walk(value, {:list, inner}, ctx, idx), do: walk([value], {:list, inner}, ctx, idx)
 
-    defp walk(value, :named, ctx, idx) do
-      case check_object(value, ctx) do
+    # Every checked position was decided by `Warden.Absinthe.Decide` before the walk.
+    defp walk({@decided, value, outcome}, :named, ctx, idx) do
+      case outcome do
         :ok -> {:ok, value, []}
         {:deny, denial} -> object_denied(denial, ctx, idx)
       end
@@ -502,58 +525,6 @@ if Code.ensure_loaded?(Absinthe) do
     defp innermost_non_null?({:non_null, :named}), do: true
     defp innermost_non_null?({_, inner}), do: innermost_non_null?(inner)
     defp innermost_non_null?(:named), do: false
-
-    defp check_object(value, %{spec: %{abstract: nil} = spec} = ctx) do
-      check_rule(Map.get(spec.rules, spec.named), spec.named, value, ctx)
-    end
-
-    defp check_object(value, %{spec: spec} = ctx) do
-      with :ok <- check_rule(spec.abstract_rule, spec.named, value, ctx) do
-        check_concrete(value, ctx)
-      end
-    end
-
-    defp check_concrete(_value, %{spec: %{rules: rules}}) when map_size(rules) == 0, do: :ok
-
-    defp check_concrete(value, %{spec: spec} = ctx) do
-      case resolve_concrete(spec.abstract, spec.named, value, ctx.res) do
-        nil ->
-          # Fail closed: a value whose concrete type cannot be determined cannot be
-          # checked against the concrete type's rule.
-          failure = %{failed_rule: :deny, missing_roles: [], missing_permissions: []}
-          deny_object(:deny, failure, spec.named, ctx)
-
-        concrete ->
-          check_rule(Map.get(spec.rules, concrete), concrete, value, ctx)
-      end
-    end
-
-    defp check_rule(nil, _type, _value, _ctx), do: :ok
-
-    defp check_rule(rule, type, value, ctx) do
-      case Rule.evaluate(rule, %{ctx.base | value: value, type: type}, ctx.spec.authorizer) do
-        :ok -> :ok
-        {:deny, failure} -> deny_object(rule, failure, type, ctx)
-      end
-    end
-
-    defp deny_object(rule, failure, type, ctx) do
-      {:deny,
-       %Denial{
-         kind: :object,
-         rule: rule,
-         failed_rule: failure.failed_rule,
-         missing_roles: failure.missing_roles,
-         missing_permissions: failure.missing_permissions,
-         reason: Map.get(failure, :reason),
-         trace: Map.get(failure, :trace, []),
-         actor: ctx.actor,
-         path: Resolution.path(ctx.res),
-         field: ctx.base.field,
-         parent_type: ctx.base.parent_type,
-         type: type
-       }}
-    end
 
     # The same resolve-type functions Absinthe's executor uses for abstract types.
     def resolve_concrete(kind, abstract, value, res) do
