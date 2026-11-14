@@ -621,3 +621,271 @@ config :warden, authorizer: MyApp.Authz
 - **A non-module or non-authorizer authorizer raises `ArgumentError`** (the design says
   "raises" without naming the exception), the same exception as a missing authorizer.
 
+
+## v0.2.0: actors, policies, scoping, redaction (added 2026-11-14)
+
+Warden 0.1 decides about one value inside GraphQL or one REST call. 0.2 adds the
+questions a large Phoenix and Ecto app asks everywhere else: which rows may this actor
+see, which fields of a loaded struct may it read, and who is this actor (a user, an
+agent, an API key, the system). One declaration per resource then serves GraphQL, REST,
+contexts, search, exports, webhooks, jobs and channels.
+
+### Compatibility
+
+Every 0.1 public function, option, callback and rule term keeps working with the same
+meaning. In particular: the `{:check, name, opts}` term; `checks:` as a list of atoms;
+`Warden.PolicyError` for any check result that is not a grant or a denial; `%Warden.Check{}`
+fields `value`, `args`, `context`, `opts`; field and argument rules before the resolver;
+`deny/1` returning `:null` for `kind: :field`; `Warden.Authorizer.default_deny/2`;
+`roles/2` receiving the context; subscription dedup only with `actor_key/2`;
+`use Warden.Absinthe.Notation`; middleware after the app's own `middleware/3`; inspect
+output that never shows a subject or a guarded value; the optional dependencies.
+
+### Security goals added in 0.2
+
+8. **One declaration per resource and action.** The query scope, the single check, the
+   filter over loaded rows and the GraphQL object rule come from the same policy, and
+   Warden ships the tests that prove they agree.
+9. **No ambient authority.** A system actor (webhook, job, unfurl) is never anonymous and
+   never a user. It passes no role, tenant role, permission, `authenticated()` or check
+   rule, and no policy clause, that does not name its kind.
+10. **Delegation never widens.** An actor acting on behalf of another gets the AND of both
+    actors' decisions, inside explicit bounds.
+11. **Bound credentials stay bound.** A credential bound to tenant A denies every rule,
+    policy and scope for any other tenant, without calling user code.
+12. **Fail closed everywhere new.** A batch callback with a wrong length, a bad value, a
+    raise or a timeout denies. A scope callback that returns anything but a dynamic,
+    `true` or `false` raises `Warden.PolicyError`. A timeout never grants.
+13. **Reasons stay private by default.** Denial reasons, traces and telemetry never carry a
+    subject or a guarded value, and the default `deny/1` never puts a reason in a response.
+
+### Module layout added in 0.2
+
+| Layer | Modules | Needs |
+|---|---|---|
+| Core | `Warden.Credential`, `Warden.Explanation`, `Warden.Policy` (behaviour + `use`), `Warden.Fields` | `telemetry` (required dep) |
+| Ecto | `Warden.Ecto`, `Warden.Ecto.Policy`, internals under `Warden.Ecto.*` | `ecto` (`to_sql/4`: `ecto_sql`) |
+| Absinthe | `redact_with`, `authorize/2` (`on_deny:`), `covered()`, `can/2,3` | `absinthe` |
+| Phoenix | `Warden.Phoenix.Channel` | `phoenix` |
+| Test | `Warden.Test`, `Warden.Test.Matrix`, `Warden.Test.Absinthe`, `mix warden.matrix` | ExUnit; Ecto parts need `ecto` |
+
+New optional layers compile only when their dependency is loaded, like Absinthe and Plug,
+and the `:no_optional_deps` suite proves it. User guides go in `guides/*.md` (one per
+layer: `actors`, `policies-and-ecto`, `fields`, `channels`, `testing`), listed in the
+ExDoc extras; the README gets a short section per layer that links to its guide.
+
+### Actors
+
+New fields on `%Warden.Actor{}`: `kind` (atom), `credential` (`%Warden.Credential{}` or
+`nil`), `system?` (boolean), `delegator` (an actor or `nil`), `bounds` (map, opaque to
+Warden, read by policies), and a private per-actor cache.
+
+Authorizer options and callbacks:
+
+    use Warden.Authorizer,
+      roles: [:instance_admin],
+      tenant_roles: [:owner, :admin, :member, :guest],
+      tenant_role_hierarchy: %{owner: [:admin], admin: [:member], member: [:guest]},
+      kinds: [:user, :agent, :system, :webhook],
+      credential_scopes: ["issues:read", "issues:write"],
+      policies: [MyApp.Authz.Issues, ...],
+      checks: [...]
+
+    @callback kind(subject, context) :: atom               # optional, default :user
+    @callback credential(context) :: Warden.Credential.t() | nil   # optional, nil = full session
+    @callback tenant_roles(subject, tenant_id, context) :: [atom]  # required when tenant_roles: is set
+    @callback tenant_of(value) :: term | nil                # optional, see below
+    @callback tenants(Actor.t(), context) :: [term]         # optional, for scopes across tenants
+
+* `kind`: `:anonymous` for a `nil`/`false` subject (reserved, not declarable).
+  `kind/2` must return a declared kind, else `Warden.PolicyError`. `:user` is always
+  declared.
+* `%Warden.Credential{method: atom, scopes: [String.t()] | :all, tenant: term | nil,
+  bounds: map}`. `method: :session` (or a `nil` credential) is a full session. `tenant`
+  binds the credential: for any other tenant, `tenant_roles/3` is not called and the
+  actor has no tenant roles, `tenants/2` is narrowed to it, and every policy and scope
+  for another tenant is `false`. Scopes must be in `credential_scopes` when that catalog
+  is set (unknown ones are dropped with a warning, like roles).
+* `tenant_roles/3` runs at most once per actor and tenant: the result is kept in the
+  actor's cache. The cache lives in the actor struct only (no process dictionary, no
+  ETS), so it never outlives the actor; an actor rebuilt per subscription publish or
+  channel push starts empty. In Absinthe the updated actor is written back to
+  `resolution.acc`.
+* `tenant_of(value)`: where the tenant of a value is. Default: the policy's `tenant:`
+  field when a policy is registered for the struct, else a `:tenant_id` key, else `nil`.
+  `nil` denies every tenant-role rule.
+* `Warden.system_actor(authorizer, kind: k, tenant: t, bounds: map, reason: atom)`:
+  `k` must be a declared kind other than `:user` and `:anonymous`. `system?` is `true`, `subject` is `nil`, `anonymous?/1` is
+  `false`. `tenant` binds it like a credential.
+* `Warden.on_behalf_of(actor, delegator, bounds: map)`: both actors from the same
+  authorizer, neither anonymous, the delegator not itself delegated. Every rule, check,
+  policy decision and scope is evaluated for both and ANDed. Bounds are merged into
+  `bounds` for policies to read.
+* `inspect/1` shows `kind`, `system?`, the credential method and scopes, and the
+  delegator's kind. Never a subject, never bounds.
+* `default_actor_key/1` also covers `kind`, the credential (method, scopes, tenant),
+  `system?` and the delegator.
+
+### Rule terms added in 0.2
+
+| Builder | Term | Passes when |
+|---|---|---|
+| `covered()` | `:covered` | always; accepted only on fields of an object type that has an object rule (verifier), so reviewers can tell "the object rule guards this" from `public()` |
+| `tenant_role(r)` / `tenant_role(r, tenant: src)` | `{:tenant_role, r, opts}` | the actor has `r` (after `tenant_role_hierarchy`) in the tenant of the value; `src` is `:value` (default, through `tenant_of/1`) or `{:arg, path}` |
+| `kind(k)` / `kind([k, ...])` | `{:kind, [k, ...]}` | the actor's kind is one of them (for a delegated actor: both kinds) |
+| `credential_scope(s)` | `{:credential_scope, s}` | the credential grants `s`; a session grants every scope |
+| `session()` | `:session` | the credential is a session |
+| `can(policy, action)` / `can(policy, action, arg: path)` | `{:can, policy, action, opts}` | the policy allows `action` on the value; with `arg:`, on `{schema, id}` from that argument path, before the resolver |
+
+Unknown tenant roles, kinds, credential scopes, policies and policy actions in a rule fail
+compilation (catalog validation, as for roles). System actors fail every
+`authenticated()`, `role`, `tenant_role`, permission and check rule (see checks below).
+
+### Checks: options, reasons, batching
+
+`checks:` accepts atoms (0.1) and `name: opts` entries:
+
+    checks: [
+      :self,
+      email_visible: [batch: true],
+      code_readable: [batch: true, timeout: 3_000],
+      member: [opts: [role: {:in, [:owner, :admin]}, scope: :string], required: [:role]],
+      team: [system_kinds: [:webhook]]
+    ]
+
+* `opts:` is a schema for the check's rule options, validated wherever rules are
+  validated (Absinthe compile time, `Warden.Plug.init/1`, the core API). Types:
+  `:atom`, `:string`, `:integer`, `:boolean`, `:any`, `{:in, list}`, `{:list, type}`.
+  Unknown keys and missing `required:` keys fail. A check without `opts:` accepts any
+  options (0.1 behaviour).
+* `system_kinds:` the system kinds the check is called for. For every other system actor
+  the check denies without being called.
+* A check returns `true`, `false` or `{:deny, reason}` (`reason`: atom or
+  `{atom, map}`). Only `true` grants. Anything else raises `Warden.PolicyError`.
+* `batch: true`: the authorizer must define `check_many(name, [Check.t()])`, returning a
+  list of the same length and order with `true | false | {:deny, reason}`. Warden calls it
+  for list items in GraphQL, `Warden.filter/4`, `Warden.redact/3` over lists, and the
+  Ecto layer. Wrong length, a bad element or a raise: `Warden.PolicyError`. A
+  `check/2` call for a batched check (a single value) goes to `check_many/2` with one
+  element when `check/2` is not defined for it.
+* `timeout:` (ms) runs the check (single or batch) in a task. On timeout every value
+  denies with reason `:unavailable`. Never grants.
+* Inside `all_of`/`any_of` over a list, Warden evaluates the batched checks for all values
+  once, then evaluates the rule per value from those results. Short-circuiting is kept
+  for unbatched rules.
+* Cross-parent batching in Absinthe (object rules on single-object fields under a list,
+  deferred through `Absinthe.Middleware.Batch`) is opt-in in 0.2:
+  `use Warden.Absinthe, batch_across_parents: true`. Default off: it touches the
+  item-error phase and the batch resolver, which is where 0.1's red-team found a hang.
+
+### Denials, explain, telemetry
+
+* `%Warden.Denial{}` gains `reason` (the failing check's reason; a list in rule order for
+  `any_of`) and `trace` (`[{rule, :ok | {:deny, reason}}]`, rule terms only, never
+  values). Inspect shows `reason`, not `trace` args.
+* `Warden.explain(actor_or_context, rule, opts) :: %Warden.Explanation{result, steps}`
+  evaluates without short-circuiting. Its `result` always equals `authorize/3`.
+* Telemetry `[:warden, :decision]`, measurements `%{count: n}`, metadata
+  `%{layer, kind, rule, result, reason, actor_kind, tenant}`. `layer` is `:core`,
+  `:plug`, `:absinthe`, `:ecto`, `:fields` or `:channel`. No subject, no value, ever.
+  One event per decision call (a list counts as one event with `count`), so lists stay
+  cheap.
+* `deny/1` receives `reason`. The default handler ignores it unless
+  `expose_denial_reasons: true`, then it adds `reason` (atoms only; the map of a
+  `{atom, map}` reason is never exposed) next to the missing roles.
+
+### Absinthe additions
+
+* `authorize rule, on_deny: :null | {:replace, value} | :error` on a field: the denial
+  result for that field only. Default `:error` (0.1 behaviour: through `deny/1`). `:null`
+  on a non-null field fails compilation.
+* `covered()` (above). Under `strict_mode: :all`, a field with `covered()` counts as
+  declared.
+* `can/2,3` as object, field and argument rules. Object rules with `can/2` over a list are
+  batched per policy and tenant (one query per list for Ecto policies).
+* `redact_with Policy.Fields` on an object type (below).
+* Verifier option `require_can_for: [Schema, ...]` (with `strict_mode: :all`): an object
+  type whose rule does not use `can/2` for those schemas' policies fails compilation. The
+  link from object type to schema is the policy's `schema:` and an explicit
+  `warden_schema Schema` notation on the object.
+
+### Policies (core) and `Warden.Ecto`
+
+`Warden.Policy` is the core behaviour (no Ecto needed), so REST-only apps can use
+`can/2` with in-memory policies:
+
+    use Warden.Policy, authorizer: MyApp.Authz, for: MyApp.Doc, actions: [:read, :write]
+    @callback allowed?(action, Actor.t(), value, context) :: boolean | {:deny, reason}
+    @callback allowed_many(action, Actor.t(), [value], context) :: [boolean | {:deny, reason}]  # optional
+
+`Warden.Ecto.Policy` builds on it (`schema:`, `as:`, `tenant:`, `actions:`) and adds, per
+action, either a hand-written `scope(action, actor, tenant_id, context)` (an Ecto
+`dynamic` over the `as:` binding, `true` or `false`; anything else raises) or
+declarative clauses. Never both for one action (compile error). `allow` clauses are
+ORed, `require` clauses are ANDed:
+
+| Clause | Means |
+|---|---|
+| `rule: r` | a Warden rule over the actor only (no row) |
+| `where: [col: value]` | column equals a literal (`nil` means `IS NULL`) |
+| `through: assoc` / `{assoc, action}` | the `belongs_to` parent is allowed under its own policy (default: same action), same tenant |
+| `through_any: assoc` / `{assoc, action}` | at least one row of a `has_many` or `many_to_many` assoc is allowed |
+| `none: assoc` | the assoc has no rows |
+| `actor_in: [cols]` | one of the columns equals the actor's subject id |
+| `member_of: {schema, row_key, actor_key}` | a row in `schema` links this row to the actor |
+| `grant: {schema, row_key, grantee_key, opts}` | an explicit share row, with optional `expires_at` |
+| `through_type: {type_col, id_col, %{type => policy}}` | polymorphic parent; a type not in the map denies |
+| `within: {bounds_key, col}` | the column is in the actor's `bounds[bounds_key]` |
+| `when: fun/3` | escape hatch; returns a dynamic, like `scope/4` |
+| `if_nil: :deny \| :tenant` (on `through:`) | a `nil` foreign key; default `:deny` |
+
+A `through` chain that loops fails compilation, and so do an unknown association and a
+`through` to a schema without a policy. When `allowed?/4` is not hand-written, single checks run one `EXISTS` query; the
+clause compiler also derives an in-memory predicate where it can (preloaded parents),
+and falls back to a query when it cannot.
+
+Functions (all take an actor or a context map, plus `authorizer:` like the core API):
+`Warden.Ecto.scope/3,4`, `allowed?/3,4`, `authorize/3,4`, `filter/3,4` (one query,
+order kept), `allowed?` on `{schema, id}`, `to_sql/4`, `dataloader_query/2`,
+`update_all/4` and `delete_all/3` (refuse a query that was not scoped for a write
+action), `allowed_actors/3`, `explain/3`. Several tenants: `scope/3` without `tenant:` uses
+`tenants/2` and ORs `(tenant = t AND dynamic_t)`; a tenant the actor is not in adds
+nothing; a `NULL` tenant column is never visible unless the policy opts in. `through:`
+across tenants is never allowed. Policy callbacks run at most once per actor, tenant and
+action per call.
+
+Tests that need a database are tagged `:postgres`, excluded by default, and run with
+`mix test --only postgres` against `WARDEN_DATABASE_URL` (default
+`postgres://localhost/warden_test`, created and dropped by the suite). CI adds a
+Postgres service and runs that suite.
+
+### Field policies
+
+    use Warden.Fields, authorizer: MyApp.Authz, for: MyApp.Comment
+    redact :body, with: "", unless: check(:live)
+
+`Warden.redact/2,3` (struct, list, `deep: true` for nested registered structs),
+`Warden.visible_fields/2`. `unless:` is any rule over the struct (value = the struct).
+Compile time: every redacted field exists on the struct. In Absinthe, `redact_with`
+replaces the object value after its object rule passes and before any child field
+resolves, so default and custom resolvers see the redacted struct, on every subscription
+publish too. `with: nil` on a field whose GraphQL type is non-null fails compilation.
+Redaction never changes stored data, and inspect of anything Warden builds while
+redacting never shows the redacted values.
+
+### Phoenix channels
+
+`use Warden.Phoenix.Channel, rule: r, value: fun, recheck: [:every_push, {:every, ms}]`
+and `Warden.Phoenix.Channel.authorize_join/3`. The actor is built from the socket's
+assigns (authorizer callback `socket_context/1`, default `socket.assigns`) on every
+check. A denial stops the channel with a reason the client can show, and drops the push
+in flight; nothing is pushed after access ends.
+
+### Policy matrix
+
+`use Warden.Test.Matrix, authorizer:, repo:, snapshot:` with `actor` and `resource`
+fixtures; asserts that `Warden.Ecto.allowed?/3`, membership in `scope/4` and a
+hand-written `allowed?/4` agree for every cell, records results and visible fields, and
+compares with a readable snapshot that holds fixture names only. A policy without a
+resource fixture fails. `Warden.Test.assert_policy_consistent/3`,
+`Warden.Test.Absinthe.assert_matrix_matches/2`, `mix warden.matrix [--update]`.

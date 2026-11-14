@@ -34,6 +34,11 @@ defmodule Warden.MixProject do
     [
       {:absinthe, "~> 1.12", optional: true},
       {:plug, "~> 1.14", optional: true},
+      {:ecto, "~> 3.12", optional: true},
+      {:ecto_sql, "~> 3.12", optional: true},
+      {:phoenix, "~> 1.7", optional: true},
+      {:telemetry, "~> 1.2"},
+      {:postgrex, "~> 0.19", only: :test},
       {:stream_data, "~> 1.1", only: :test},
       {:dataloader, "~> 2.0", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
