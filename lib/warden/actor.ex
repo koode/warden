@@ -213,14 +213,39 @@ defmodule Warden.Actor do
     bounds = Keyword.get(opts, :bounds, %{})
 
     case delegation_error(actor, delegator, opts, bounds) do
-      nil -> %{actor | delegator: delegator, bounds: Map.merge(actor.bounds, bounds)}
+      nil -> %{actor | delegator: delegator, bounds: narrow_bounds(actor.bounds, bounds)}
       message -> raise ArgumentError, "Warden.on_behalf_of/3 " <> message
     end
   end
 
   def delegate(actor, delegator, _opts) do
-    raise ArgumentError,
-          "Warden.on_behalf_of/3 needs two %Warden.Actor{}s, got: #{inspect({actor, delegator})}"
+    raise ArgumentError, """
+    Warden.on_behalf_of/3 needs two %Warden.Actor{}s, got: #{Shape.describe(actor)} and \
+    #{Shape.describe(delegator)}\
+    """
+  end
+
+  # Delegation bounds only narrow the actor's own bounds (its credential's included): for
+  # a key in both, two lists give their intersection, equal values stay, and differing
+  # values of any other kind raise. A key in only one of them is kept.
+  defp narrow_bounds(own, given) do
+    Enum.reduce(given, own, fn {key, value}, bounds ->
+      case Map.fetch(bounds, key) do
+        :error -> Map.put(bounds, key, value)
+        {:ok, ^value} -> bounds
+        {:ok, existing} -> Map.put(bounds, key, intersect_bound!(key, existing, value))
+      end
+    end)
+  end
+
+  defp intersect_bound!(_key, existing, given) when is_list(existing) and is_list(given),
+    do: Enum.filter(existing, &(&1 in given))
+
+  defp intersect_bound!(key, _existing, _given) do
+    raise ArgumentError, """
+    Warden.on_behalf_of/3 `bounds:` gives #{inspect(key)} a value that differs from the \
+    actor's own; only lists can be narrowed (to their intersection)\
+    """
   end
 
   defp delegation_error(actor, delegator, opts, bounds) do
@@ -295,8 +320,16 @@ defmodule Warden.Actor do
 
       true ->
         listed = Callbacks.tenants(authorizer, actor, context)
-        narrow_to_bound(listed, bound_tenant(actor))
+        listed |> narrow_to_bound(bound_tenant(actor)) |> narrow_to_delegator(actor, context)
     end
+  end
+
+  # A delegated actor acts only in tenants both actors have.
+  defp narrow_to_delegator(listed, %__MODULE__{delegator: nil}, _context), do: listed
+
+  defp narrow_to_delegator(listed, %__MODULE__{delegator: delegator}, context) do
+    shared = tenants(delegator, context)
+    Enum.filter(listed, &(&1 in shared))
   end
 
   defp narrow_to_bound(listed, nil), do: listed
