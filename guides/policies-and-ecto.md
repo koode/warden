@@ -215,8 +215,9 @@ Options go in a third element (or the second, without an action):
   ```
 
   The cached ids are used only for the same parent, action, tenant (`tenant:`, else
-  every tenant of the actor), query prefix and actor; for a delegated actor each side
-  keeps its own. They are as fresh as the actor: a team created later in the request is
+  every tenant of the actor), query prefix and actor, and only by a scope under the same
+  context (`context:`, else the actor's own) as the preload; for a delegated actor each
+  side keeps its own. They are as fresh as the actor: a team created later in the request is
   not in them, so keep the actor for one request.
 * `system: :inherit` makes the clause apply to system actors without its `rule:` naming
   their kind: the parent policy decides them, so the clause admits only the system kinds

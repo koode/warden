@@ -1181,8 +1181,9 @@ Paths are relative to `lib/warden/`.
   actor without its cache, so a delegated actor's own side carries its narrowed
   bounds) and prefix. `Scope` reads the memo, then the actor's cache, then the
   database; a different key is a miss, never a wider match. Only `preload_ids/4` writes
-  the cache, so the ids are as fresh as the actor, like tenant roles, and were read
-  with the context of the preload call.
+  the cache, so the ids are as fresh as the actor, like tenant roles. The entry holds the
+  context of the preload call, which the ids were read with, and a scope uses it only
+  when its own context is `===` to it: a parent's scope may read the context.
 - **Errors across policies.** A policy only names other policies at runtime (through
   the authorizer's `policies:`), so a `through` target without a policy, a cycle over
   several policies, a parent of another authorizer or without the action, and mixed

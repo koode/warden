@@ -144,9 +144,10 @@ if Code.ensure_loaded?(Ecto) do
     delegated actor once for each side, each cached in that side's own struct.
 
     A cached entry is used only for the same parent policy, action, tenant, query prefix
-    and actor side; anything else reads the ids as before. The ids are as fresh as the
-    actor: keep the actor for one request, as with tenant roles. They were read with the
-    context of this call.
+    and actor side, and by a scope whose context is identical (`===`) to the context of
+    this call (`context:`, else the actor's own), which the ids were read with; anything
+    else reads the ids as before. The ids are as fresh as the actor: keep the actor for
+    one request, as with tenant roles.
     """
     @spec preload_ids(Actor.t(), module, atom, opts) :: Actor.t()
     def preload_ids(%Actor{} = actor, policy_or_schema, action, opts \\ [])

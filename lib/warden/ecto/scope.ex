@@ -511,13 +511,23 @@ if Code.ensure_loaded?(Ecto) do
     # The key of one side's parent ids, in the call's memo and in the actor's cache: the
     # parent policy, the action, the column read, the tenant, the side (without its cache)
     # and the query prefix. A side's cache entry is never used for the other side, nor for
-    # another tenant, prefix or action.
+    # another tenant, prefix or action. The cache entry also holds the context the ids were
+    # read with (`preload_ids/5`), checked when it is read.
     defp ids_key(parent, action, related_key, tenant, actor, state),
       do: {:ids, parent.policy, action, related_key, tenant, identity(actor), state.prefix}
 
-    # The ids from the call's memo, else from the side's cache (`preload_ids/5`).
+    # The ids from the call's memo, else from the side's cache (`preload_ids/5`) when they
+    # were read with an identical (`===`) context: a parent's scope may read the context,
+    # so ids read under one context say nothing about another.
     defp fetch_ids(key, actor, state) do
-      with :error <- Map.fetch(state.memo, key), do: Map.fetch(actor.cache, key)
+      with :error <- Map.fetch(state.memo, key), do: cached_ids(actor.cache, key, state.context)
+    end
+
+    defp cached_ids(cache, key, context) do
+      case Map.fetch(cache, key) do
+        {:ok, {read_with, ids}} when read_with === context -> {:ok, ids}
+        _miss -> :error
+      end
     end
 
     # Reads the ids that `resolve: :ids` compares a foreign key with (the primary key of
@@ -573,7 +583,8 @@ if Code.ensure_loaded?(Ecto) do
             :error -> read_ids(info, info.primary_key, verdict, tenant, key, state)
           end
 
-        cached = %{side | cache: Map.put(side.cache, key, ids)}
+        entry = {state.context, ids}
+        cached = %{side | cache: Map.put(side.cache, key, entry)}
         {verdict, cached, state}
       end
     end

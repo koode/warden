@@ -15,7 +15,8 @@
   example to load rows with `Warden.Ecto.all/5` that the object rules then trust).
 - `Warden.Ecto.preload_ids/4` reads the parent ids of `through: {assoc, action,
   resolve: :ids}` once and caches them in the actor, so later scopes of the request
-  with the same actor, tenant and prefix run no extra query.
+  with the same actor, tenant and prefix, under the same (`===`) context as the preload,
+  run no extra query.
 - `Warden.Ecto.to_sql/4` takes `bind:` (`%{host_placeholder => value}`): a value the
   scope needs that the host statement already binds uses the host's placeholder instead
   of a new parameter.
