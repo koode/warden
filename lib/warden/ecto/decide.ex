@@ -44,7 +44,9 @@ if Code.ensure_loaded?(Ecto) do
       answer(sorted, custom, allowed_rows, allowed_ids)
     end
 
-    # `{:done, answer}`, `{:custom, struct}`, `{:row, tenant, key}` or `{:id, key}`.
+    # `{:done, answer}`, `{:custom, struct}`, `{:row, {tenant, prefix}, key}` or
+    # `{:id, key}`. A struct loaded from another query prefix is decided against the
+    # tables of that prefix.
     defp sort(info, action, %schema{} = struct, {side, state}) when schema == info.schema do
       tenant = Memory.tenant(info, struct)
       key = Map.get(struct, info.primary_key)
@@ -62,7 +64,8 @@ if Code.ensure_loaded?(Ecto) do
 
         true ->
           {answer, side, state} = Memory.decide(info, action, side, struct, state)
-          sorted = if answer == :unknown, do: {:row, tenant, key}, else: {:done, answer}
+          group = {tenant, Info.prefix(struct)}
+          sorted = if answer == :unknown, do: {:row, group, key}, else: {:done, answer}
           {sorted, {side, state}}
       end
     end
@@ -108,7 +111,7 @@ if Code.ensure_loaded?(Ecto) do
     defp tenant_groups(sorted) do
       sorted
       |> Enum.flat_map(fn
-        {:row, tenant, key} -> [{tenant, key}]
+        {:row, group, key} -> [{group, key}]
         _other -> []
       end)
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
@@ -117,11 +120,18 @@ if Code.ensure_loaded?(Ecto) do
     defp id_values(sorted), do: for({:id, key} <- sorted, do: key)
 
     defp tenant_queries(info, action, side, by_tenant, state) do
-      Enum.reduce(by_tenant, {[], side, state}, fn {tenant, keys}, {queries, side, state} ->
-        {verdict, side, state} = Scope.verdict(info, action, side, tenant, state)
-        condition = Scope.tenant_condition(info, tenant)
-        query = keys_query(info, keys, Scope.both(condition, verdict))
-        {[query | queries], side, state}
+      Enum.reduce(by_tenant, {[], side, state}, fn
+        {{tenant, prefix}, keys}, {queries, side, state} ->
+          {verdict, side, state} = Scope.verdict(info, action, side, tenant, state)
+          condition = Scope.tenant_condition(info, tenant)
+
+          query =
+            case keys_query(info, keys, Scope.both(condition, verdict)) do
+              nil -> nil
+              query -> {prefix, %{query | prefix: prefix}}
+            end
+
+          {[query | queries], side, state}
       end)
     end
 
@@ -129,7 +139,14 @@ if Code.ensure_loaded?(Ecto) do
 
     defp id_query(info, action, side, keys, state) do
       {verdict, side, state} = Scope.scope(info, action, side, :all, state)
-      {keys_query(info, keys, verdict), side, state}
+
+      query =
+        case keys_query(info, keys, verdict) do
+          nil -> nil
+          query -> {nil, query}
+        end
+
+      {query, side, state}
     end
 
     defp keys_query(_info, _keys, false), do: nil
@@ -149,7 +166,8 @@ if Code.ensure_loaded?(Ecto) do
     end
 
     # Every query of one decision runs here, one round trip each: the allowed keys of the
-    # loaded structs (one query per tenant) and of the `{schema, id}` values.
+    # loaded structs (one query per tenant and prefix, as `{prefix, key}`) and of the
+    # `{schema, id}` values.
     defp run(info, tenant_queries, id_query) do
       tenant_queries = Enum.reject(tenant_queries, &is_nil/1)
       allowed_rows = keys(info, tenant_queries)
@@ -161,16 +179,27 @@ if Code.ensure_loaded?(Ecto) do
 
     defp keys(info, queries) do
       repo = Info.repo!(info)
-      Enum.reduce(queries, MapSet.new(), &MapSet.union(&2, MapSet.new(repo.all(&1))))
+
+      Enum.reduce(queries, MapSet.new(), fn {prefix, query}, acc ->
+        allowed = for key <- repo.all(query), do: {prefix, key}
+        MapSet.union(acc, MapSet.new(allowed))
+      end)
     end
 
     defp answer(sorted, custom, allowed_rows, allowed_ids) do
       {answers, _custom} =
         Enum.map_reduce(sorted, custom, fn
-          {:done, answer}, custom -> {answer, custom}
-          {:custom, _struct}, [answer | custom] -> {answer, custom}
-          {:row, _tenant, key}, custom -> {MapSet.member?(allowed_rows, key), custom}
-          {:id, key}, custom -> {MapSet.member?(allowed_ids, key), custom}
+          {:done, answer}, custom ->
+            {answer, custom}
+
+          {:custom, _struct}, [answer | custom] ->
+            {answer, custom}
+
+          {:row, {_tenant, prefix}, key}, custom ->
+            {MapSet.member?(allowed_rows, {prefix, key}), custom}
+
+          {:id, key}, custom ->
+            {MapSet.member?(allowed_ids, {nil, key}), custom}
         end)
 
       answers

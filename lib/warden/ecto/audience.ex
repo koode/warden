@@ -107,7 +107,7 @@ if Code.ensure_loaded?(Ecto) do
     defp select_row([{_element, _actor, info, _verdict, _index} | _rest], row, columns) do
       case row_key(info, row) do
         nil -> %{}
-        key -> info |> row_query(key, columns) |> run(info)
+        key -> info |> row_query(key, columns) |> Map.put(:prefix, Info.prefix(row)) |> run(info)
       end
     end
 

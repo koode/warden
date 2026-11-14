@@ -37,7 +37,7 @@ if Code.ensure_loaded?(Ecto) do
     defp locate(info, {_schema, id}) do
       with {:ok, key} when key != nil <- Ecto.Type.cast(info.primary_key_type, id),
            {:ok, tenant} <- read_tenant(info, key) do
-        {:ok, key, tenant}
+        {:ok, {nil, key}, tenant}
       else
         _missing -> :missing
       end
@@ -46,7 +46,7 @@ if Code.ensure_loaded?(Ecto) do
     defp locate(info, struct) do
       case Map.get(struct, info.primary_key) do
         nil -> :missing
-        key -> {:ok, key, Memory.tenant(info, struct)}
+        key -> {:ok, {Info.prefix(struct), key}, Memory.tenant(info, struct)}
       end
     end
 
@@ -153,7 +153,8 @@ if Code.ensure_loaded?(Ecto) do
       end)
     end
 
-    defp select(info, key, tenant, columns) do
+    # A struct loaded from another query prefix is explained against that prefix.
+    defp select(info, {prefix, key}, tenant, columns) do
       primary_key = info.primary_key
 
       query =
@@ -164,6 +165,7 @@ if Code.ensure_loaded?(Ecto) do
         )
 
       query = Scope.restrict(query, Scope.tenant_condition(info, tenant))
+      query = %{query | prefix: prefix}
       repo = Info.repo!(info)
       repo.one(query) || %{}
     end
