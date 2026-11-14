@@ -30,19 +30,41 @@ if Code.ensure_loaded?(Absinthe) do
     def warden_entry?({{__MODULE__, _}, _}), do: true
     def warden_entry?(_), do: false
 
-    # The actor is built once per document execution and cached in `resolution.acc`.
+    # The actor is built once per document execution, before resolution
+    # (`Warden.Absinthe.Plugin.before_resolution/1`), and cached in `resolution.acc`.
     # Evaluations return it with the tenant roles they read; `put_actor/2` stores that
-    # back, so `tenant_roles/3` runs at most once per tenant per execution.
+    # back, so `tenant_roles/3` runs at most once per tenant per execution. A pipeline
+    # that runs resolution without plugin callbacks has no actor yet, and the first field
+    # rule builds it here.
     def actor(%Resolution{acc: acc, context: context} = res, authorizer) do
-      case acc do
-        %{@acc_key => %{actor: %Actor{} = actor}} ->
+      case stored_actor(acc) do
+        %Actor{} = actor ->
           {actor, res}
 
-        _ ->
+        nil ->
           actor = Actor.build(authorizer, context)
           {actor, put_actor(res, actor)}
       end
     end
+
+    # `acc` with the execution's actor, built from `context` when it has none yet.
+    @spec with_actor(map, map, module) :: map
+    def with_actor(acc, context, authorizer) do
+      case stored_actor(acc) do
+        %Actor{} ->
+          acc
+
+        nil ->
+          state = Map.get(acc, @acc_key, %{})
+          actor = Actor.build(authorizer, context)
+          Map.put(acc, @acc_key, Map.put(state, :actor, actor))
+      end
+    end
+
+    # The execution's actor in `acc`, or `nil`.
+    @spec stored_actor(map) :: Actor.t() | nil
+    def stored_actor(%{@acc_key => %{actor: %Actor{} = actor}}), do: actor
+    def stored_actor(_acc), do: nil
 
     # What cross-parent batching shares per document execution, made once and kept in
     # `resolution.acc`: a reference that groups the deferred checks of one execution, and

@@ -8,13 +8,38 @@ if Code.ensure_loaded?(Absinthe) do
     # item errors in `resolution.acc`; this plugin then inserts `Warden.Absinthe.Phase.ItemErrors`
     # after the resolution phase, which attaches each error to the (already null) item.
     #
+    # Before resolution it builds the actor of the document execution from its context,
+    # once, and stores it in `acc` where every field rule and `Warden.Absinthe.actor/1`
+    # read it. Absinthe calls this before every resolution pass; a later pass finds the
+    # actor already there. A schema cannot add a phase to the document pipeline, which
+    # the caller builds, and this callback is Absinthe's hook for setting `acc` before
+    # resolution starts. A subscription publish is a new execution with an empty `acc`,
+    # so it builds a new actor from the subscriber's context.
+    #
+    # `Absinthe.Pipeline.BatchResolver` (Absinthe.Plug's batch mode) calls it with an
+    # execution that has no schema yet, so the authorizer is unknown: there the first
+    # field rule builds the actor (`Warden.Absinthe.Middleware.actor/2`), shared by the
+    # documents of the batch as before.
+    #
     # `use Warden.Absinthe` adds this plugin to the schema's `plugins/0`.
 
     @behaviour Absinthe.Plugin
 
+    alias Warden.Absinthe.Middleware
+
     def add_to(plugins), do: List.delete(plugins, __MODULE__) ++ [__MODULE__]
 
     @impl true
+    def before_resolution(%{schema: schema, acc: acc, context: context} = exec)
+        when is_atom(schema) and schema != nil do
+      if function_exported?(schema, :__warden__, 1) do
+        authorizer = schema.__warden__(:options).authorizer
+        %{exec | acc: Middleware.with_actor(acc, context, authorizer)}
+      else
+        exec
+      end
+    end
+
     def before_resolution(exec), do: exec
 
     @impl true

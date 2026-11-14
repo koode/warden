@@ -48,7 +48,7 @@ if Code.ensure_loaded?(Absinthe) do
     schema. Any problem is a `CompileError`.
     """
 
-    alias Warden.Absinthe.{Config, Plan, Plugin, Verifier}
+    alias Warden.Absinthe.{Config, Middleware, Plan, Plugin, Verifier}
 
     defmacro __using__(opts) do
       env = __CALLER__
@@ -123,6 +123,45 @@ if Code.ensure_loaded?(Absinthe) do
     @doc false
     def __after_compile__(env, _bytecode) do
       Verifier.verify!(env.module)
+    end
+
+    @doc """
+    Returns the actor of the document execution that `resolution` belongs to: the actor
+    every Warden rule in that execution is decided for. Warden builds it once, before
+    resolution starts, from the execution's context; every subscription publish builds
+    a new one from the subscriber's context.
+
+    Use it in a resolver to load rows that the object rules then trust:
+
+        resolve fn _args, resolution ->
+          query = from(issue in MyApp.Issues.Issue, order_by: issue.id)
+          {:ok, Warden.Ecto.all(MyApp.Repo, query, Warden.Absinthe.actor(resolution), :read)}
+        end
+
+    Raises `ArgumentError` when the schema does not `use Warden.Absinthe`, and
+    `Warden.PolicyError` when the execution has no actor yet. That happens only where
+    Absinthe runs resolution without the schema's plugin callbacks, before any Warden
+    rule of the execution ran: `Absinthe.Pipeline.BatchResolver` (Absinthe.Plug's batch
+    mode) and a custom pipeline that runs Absinthe's resolution phase with
+    `plugin_callbacks: false`.
+    """
+    @spec actor(Absinthe.Resolution.t()) :: Warden.Actor.t()
+    def actor(%Absinthe.Resolution{schema: schema, acc: acc}) do
+      if not (is_atom(schema) and function_exported?(schema, :__warden__, 1)) do
+        raise ArgumentError, "#{inspect(schema)} does not `use Warden.Absinthe`"
+      end
+
+      case Middleware.stored_actor(acc) do
+        %Warden.Actor{} = actor ->
+          actor
+
+        nil ->
+          raise Warden.PolicyError, """
+          the document execution has no Warden actor yet: it runs without the schema's \
+          plugin callbacks (Absinthe.Pipeline.BatchResolver, or plugin_callbacks: false), \
+          so Warden builds the actor at the first field rule instead\
+          """
+      end
     end
 
     @doc """
