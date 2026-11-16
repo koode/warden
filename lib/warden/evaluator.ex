@@ -239,7 +239,7 @@ defmodule Warden.Evaluator do
 
   defp batch_verdicts({:check, name, opts}, checks, actor, authorizer, catalog) do
     spec = check_spec(catalog, name)
-    batch = Enum.map(checks, &%{&1 | actor: actor, name: name, opts: opts})
+    batch = Enum.map(checks, &object_scoped(%{&1 | actor: actor, name: name, opts: opts}, spec))
     count = length(batch)
 
     verdicts =
@@ -539,7 +539,7 @@ defmodule Warden.Evaluator do
         decided(Map.fetch!(state.decided, rule), rule, state)
 
       true ->
-        check = %{state.check | name: name, opts: opts}
+        check = object_scoped(%{state.check | name: name, opts: opts}, spec)
 
         case call_check(state.authorizer, name, check, spec) do
           :timeout ->
@@ -644,6 +644,32 @@ defmodule Warden.Evaluator do
     |> Map.get(:check_specs, %{})
     |> Map.get(name, Catalog.default_check_spec())
   end
+
+  # A check that declares `per_object: true` decides an object alone when it guards one:
+  # in an object rule (a check with a `type`, which only object rules carry) it gets no
+  # field, arguments, parent type, argument path or resolution, so its answer cannot
+  # depend on where the object appears, and the context without `:loader` (Absinthe's
+  # Dataloader plugin keeps its cache there and replaces it on every resolution pass).
+  # That is what lets Warden reuse the decision across the fields, positions and
+  # resolution passes of a request (`Warden.Absinthe.Reuse`).
+  @spec object_scoped(Check.t(), map) :: Check.t()
+  def object_scoped(%Check{type: type, context: context} = check, %{per_object: true})
+      when type != nil do
+    %{
+      check
+      | field: nil,
+        args: %{},
+        parent_type: nil,
+        argument: nil,
+        resolution: nil,
+        context: without_loader(context)
+    }
+  end
+
+  def object_scoped(check, _spec), do: check
+
+  defp without_loader(context) when is_map(context), do: Map.delete(context, :loader)
+  defp without_loader(context), do: context
 
   # A system actor reaches a check only when the check names its kind.
   @spec system_refused?(Actor.t(), map) :: boolean

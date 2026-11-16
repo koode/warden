@@ -48,6 +48,15 @@ defmodule Warden.Authorizer do
       * `required: [name]` - options every rule must give (needs `opts:`).
       * `system_kinds: [kind]` - the system actor kinds the check is called for. Every
         other system actor is denied without calling it.
+      * `per_object: true` - in an object rule (of an object type, interface or union,
+        or `default_object_rule`), the check decides about the object alone: Warden
+        hands it the actor, the value, the type, the rule options and the context
+        without `:loader` (where Absinthe's Dataloader plugin keeps its cache), and
+        leaves `field`, `parent_type`, `argument` and `resolution` `nil` and `args`
+        empty, wherever the rule runs. An object rule whose checks all declare it can be
+        decided once per object and request (`decision_reuse:` in `Warden.Absinthe`).
+        The check must answer the same for the same inputs within one request. Field
+        and argument rules still get every field.
     * `:kinds` - the actor kinds `c:kind/2` may return and system actors may have. `:user`
       is always declared; `:anonymous` (an actor without a subject) cannot be declared.
     * `:tenant_roles` - the catalog of roles an actor holds per tenant (see
