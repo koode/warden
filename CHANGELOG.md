@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 (2026-11-16)
+
 ### Added
 
 - Decision reuse in GraphQL (`use Warden.Absinthe, decision_reuse: true`, the default).
