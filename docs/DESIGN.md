@@ -1355,3 +1355,87 @@ Paths are relative to `lib/warden/`.
   `mix test --only warden_matrix` in a child process.
 - **Redacted fields** are the fields whose value `Warden.redact/3` changes, recorded
   only where the actor may take an action on the resource.
+
+## Decision reuse (`decision_reuse:`)
+
+A 100-item list with 80 fields per item ran Warden's pre middleware 8,000 times, each
+deciding the item's object rule again and emitting a telemetry event, and decided the
+object rule of a shared nested object (the item's team) once per parent. Decision reuse
+removes that work without changing any decision.
+
+### The rule classes
+
+`Warden.Absinthe.Reuse.scope/2` classifies an object rule by the widest leaf, and the
+class says how much of the context a decision depends on (`Reuse.comparable/2`):
+
+- `:actor`: `public()`, `deny()`, `covered()`, `authenticated()`, roles, permissions,
+  `kind/1`, `credential_scope/1`, `session()`. They read the actor, no context; the
+  tenant binding screen reads the value's tenant when the actor (or its delegator) is
+  bound.
+- `:object`: also checks declared `per_object: true` without `single: true`. They read
+  the actor, the value, its type, the rule options and the context without `:loader`.
+- `:context`: also `tenant_role/1,2` without `{:arg, path}` (the value's tenant, the
+  actor's tenant roles, the whole context) and `can/2` without `arg:` (the policy gets
+  actor, action, value and the whole context, never a `%Check{}`).
+- `:field`: anything else: a check without the declaration (it may read `field`,
+  `args`, `parent_type` or `resolution`), and `single: true` checks (their single
+  answers come from `check/2` and their list answers from `check_many/2`).
+
+`Warden.Evaluator.object_scoped/2` enforces the declaration: a `per_object` check whose
+`%Check{}` has a `type` (only object rules set one: the post decision, the pre parent
+check, cross-parent batches and subscribe-time return checks) gets `field`, `args`,
+`parent_type`, `argument` and `resolution` cleared and `:loader` removed from the
+context, with or without reuse. Absinthe's Dataloader plugin replaces `:loader` on every
+resolution pass, so a context compared with it would never match across passes; a check
+that cannot see it cannot depend on it. So a decision is a function of (rule, type,
+actor, value, the comparable context), plus whatever the authorizer's callbacks read
+outside their arguments.
+
+### What is reused, and where
+
+1. **The memo** (`Reuse.memo/2`, kept in `resolution.acc`) maps `{type, identity}` to
+   `{rule, value, comparable_context, result}`. A hit needs the same type, an identical
+   (`===`) rule, an identical value and an identical comparable context; the identity
+   (Ecto primary key, else a non-nil `:id`) only finds the entry. The memo belongs to one
+   operation and one actor without its cache, compared with `===`; any difference starts
+   an empty memo. There is no
+   memo inside a mutation, whose root fields change state one after another. Results
+   whose denial a timeout caused (`:unavailable`) are not stored. `:actor` rules of an
+   unbound actor store one result per type and rule (`{type, :actor}`).
+2. **Lists** (`Decide.memo_results/4`): values the memo holds take its result; the
+   others are decided with one `Evaluator.many/3` call, each distinct (identity and
+   `===`) value once. Cross-parent batches deduplicate the same way inside one
+   execution's group.
+3. **Admissions** (`Decide.admits/4`, `Middleware.record_admits/2`): with a memo, a
+   passing value of a reusable type is admitted at its output path like a batched one,
+   but as `{:context, scope, context, comparable_context}`. The pre middleware skips the
+   parent check only when the field's context is identical or has the same comparable
+   context (`Middleware.admission_holds?/3`).
+4. **`parent_only` fields** (`Plan.with_parent_reuse/4`): a non-root field whose only
+   pre check is the parent's object rule, on a type that can be admitted, does an
+   admission lookup and nothing else when it hits (no actor, no `%Check{}`, no
+   evaluation, no telemetry). Siblings share Absinthe's parent path term, so the last
+   admitted parent is kept as `{parent_path_term, type, context}` and compared with
+   `===`. A miss runs the full pre middleware unchanged.
+
+### Why decisions stay the same
+
+- *Same inputs, same decision.* A reused result was computed by `Warden.Evaluator` for
+  the same rule, type, actor (cache aside), value and comparable context. Nothing else
+  reaches the evaluation: built-in leaves read only those, policies and the tenant-role
+  callback get only those (with the whole context, which `:context` compares whole), and
+  `object_scoped/2` strips the rest, `:loader` included, from `per_object` checks. This rests on the authorizer's callbacks answering the same for the same
+  inputs within one query or publish. 0.3 already relied on it for its admissions of
+  batched rules and on the per-execution tenant-role cache; mutations are excluded, and
+  `decision_reuse: false` turns all of it off.
+- *Admissions.* 0.3's argument for admissions holds unchanged (a child's source at path
+  P is the value the parent's post walk left at P), and the context check covers a
+  resolver that changed the context between the parent's decision and the field.
+- *Fail closed.* Every miss (another value, rule, actor, context, operation, a
+  mutation, a value without identity, a `:field` rule, an unadmitted parent) takes the
+  0.3 path.
+
+`test/property/decision_reuse_test.exs` compiles random schemas twice (with and without
+reuse) and compares responses, denials and raises over random actors, data and
+documents; `test/integration/decision_reuse_test.exs` covers mutations, context changes
+mid-document, the evaluation counts and the plan.

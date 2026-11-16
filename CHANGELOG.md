@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- Decision reuse in GraphQL (`use Warden.Absinthe, decision_reuse: true`, the default).
+  An object rule that reads only the actor, the object and the context is decided once
+  per object within a query or subscription publish: the decision is kept in the
+  execution's accumulator and reused wherever an equal (`===`) object of the same type
+  appears again under the same context, and equal objects in one list (or one
+  cross-parent batch) are decided once. A rule of only actor leaves is decided once for
+  every object of an actor whose credential is not bound to a tenant. Fields without a
+  rule of their own skip Warden's middleware work (no evaluation, no telemetry event) for
+  an object that passed its object rule. Mutations keep nothing between root fields; a
+  denial caused by a check timeout is not kept. `decision_reuse: false` decides as 0.3
+  did.
+- `per_object: true` for checks: in an object rule the check gets no field, arguments,
+  parent type, argument path or resolution, and the context without `:loader` (the
+  Dataloader cache), so its decision can be reused per object and across resolution
+  passes.
+
+### Changed
+
+- A field without a rule of its own on an object that passed its object rule no longer
+  emits a `[:warden, :decision]` event (with `decision_reuse: true`).
+
 ## 0.3.0 (2026-11-14)
 
 ### Added

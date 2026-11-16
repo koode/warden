@@ -8,7 +8,7 @@ if Code.ensure_loaded?(Absinthe) do
     # two can be compared exactly.
 
     alias Absinthe.Type
-    alias Warden.Absinthe.Rules
+    alias Warden.Absinthe.{Reuse, Rules}
     alias Warden.Fields.Redactor
     alias Warden.Rule
 
@@ -162,6 +162,7 @@ if Code.ensure_loaded?(Absinthe) do
           %{authorizer: config.authorizer, root: root?, checks: checks}
           |> with_on_deny(field)
           |> with_admissible(checks, redactors, config)
+          |> with_parent_reuse(checks, root?, config)
       end
     end
 
@@ -175,6 +176,33 @@ if Code.ensure_loaded?(Absinthe) do
     end
 
     defp with_admissible(spec, _checks, _redactors, _config), do: spec
+
+    # `decision_reuse: true`. A type whose object rule decides an object alone
+    # (`Warden.Absinthe.Reuse.scope/2`) is admitted too, by the post middleware of a
+    # query or subscription, for the context it was decided in (`reuse_admissible`, the
+    # rule's scope, says how much of the context counts). A
+    # field whose only pre check is its parent's object rule, on a type that can be
+    # admitted either way, is `parent_only`: for an admitted value it does no work at all
+    # (no actor, no evaluation, no telemetry); for any other value it runs the full pre
+    # middleware.
+    defp with_parent_reuse(spec, _checks, _root?, %{decision_reuse: false}), do: spec
+
+    defp with_parent_reuse(spec, [{:object, _type, rule} | _rest] = checks, false, config) do
+      admissible? = Map.get(spec, :admissible, false)
+      scope = Reuse.scope(rule, config.catalog)
+      reusable? = Reuse.reusable?(scope)
+
+      spec =
+        if reusable? and not admissible?,
+          do: Map.put(spec, :reuse_admissible, scope),
+          else: spec
+
+      if (admissible? or reusable?) and match?([_parent_check], checks),
+        do: Map.put(spec, :parent_only, true),
+        else: spec
+    end
+
+    defp with_parent_reuse(spec, _checks, _root?, _config), do: spec
 
     defp admissible?(type, rule, redactors, config),
       do: Map.has_key?(redactors, type) or Warden.Evaluator.batched?(rule, config.catalog)
@@ -478,6 +506,7 @@ if Code.ensure_loaded?(Absinthe) do
           spec
           |> with_redactors(field_redactors)
           |> with_across_parents(config)
+          |> with_reuse(config)
         end
       end
     end
@@ -538,6 +567,26 @@ if Code.ensure_loaded?(Absinthe) do
       Code.ensure_loaded?(policy) and
         (function_exported?(policy, :allowed_many, 4) or
            function_exported?(policy, :__warden_ecto__, 1))
+    end
+
+    # `decision_reuse: true`: the types (concrete, and the abstract type itself) whose
+    # rule may be decided once per object and execution, with what the rule reads.
+    defp with_reuse(spec, %{decision_reuse: false}), do: spec
+
+    defp with_reuse(spec, config) do
+      rules =
+        if spec.abstract_rule == nil,
+          do: spec.rules,
+          else: Map.put(spec.rules, spec.named, spec.abstract_rule)
+
+      scopes =
+        for {type, rule} <- rules,
+            scope = Reuse.scope(rule, config.catalog),
+            Reuse.reusable?(scope),
+            into: %{},
+            do: {type, scope}
+
+      Map.merge(spec, %{reuse: true, scopes: scopes})
     end
 
     # `redact_with`: the field policy of every object type the value may have. Only set

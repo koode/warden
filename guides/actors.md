@@ -318,6 +318,13 @@ policy), when the schema has the Batch plugin (Absinthe's default plugins includ
 batched leaf and fails compilation without the plugin. Checks deferred this way have no
 `resolution`.
 
+A check that decides an object from the object alone can say so with `per_object: true`
+(`checks: [team: [per_object: true]]`). In an object rule Warden then hands it no
+`field`, `args`, `parent_type`, `argument` or `resolution`, and an object rule made of
+such checks and built-in leaves is decided once per object and request
+(`decision_reuse:`, see the README). The check must answer the same for the same actor,
+object and context within one request.
+
 ### Timeouts
 
 `timeout: ms` runs the check (single or batched) in a separate process. When it takes

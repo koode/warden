@@ -55,6 +55,15 @@ if Code.ensure_loaded?(Absinthe) do
         delegator or bounds, raises `Warden.PolicyError`. An anonymous function fails
         compilation, since the options are compiled into the schema.
 
+      * `:decision_reuse` - `true` (default) or `false`. With `true`, an object rule
+        that reads only the actor, the object and the context (built-in leaves,
+        `tenant_role` and `can/2` without arguments, checks declared `per_object: true`)
+        is decided once per object within a query or subscription publish and reused
+        wherever an equal (`===`) object of the type appears again, under the same
+        context as far as the rule reads it; a field without a rule of its own skips Warden's middleware for an
+        object that passed its rule. Decisions are the same as with `false`; see
+        "Decision reuse" in the README for what it assumes.
+
     At compile time Warden validates every rule against the authorizer's catalogs,
     attaches its middleware to every field that needs it, and then verifies the compiled
     schema. Any problem is a `CompileError`.

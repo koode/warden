@@ -16,7 +16,7 @@ if Code.ensure_loaded?(Absinthe) do
     alias Absinthe.Middleware.Batch
     alias Absinthe.Resolution
     alias Absinthe.Type.{Interface, Union}
-    alias Warden.Absinthe.Decide
+    alias Warden.Absinthe.{Decide, Reuse}
     alias Warden.{Actor, Check, Denial, Evaluator, Shape}
     alias Warden.Authorizer.Callbacks
     alias Warden.Fields.Redactor
@@ -139,6 +139,19 @@ if Code.ensure_loaded?(Absinthe) do
       %{res | acc: Map.put(acc, @acc_key, Map.put(state, :actor, actor))}
     end
 
+    # A field whose only check is its parent's object rule (`parent_only`, from the plan)
+    # does nothing for a parent value this execution admitted: no actor, no evaluation,
+    # no telemetry. Any other parent value gets the full pre middleware below.
+    def pre(
+          %Resolution{path: [_field | parent_path]} = res,
+          %{parent_only: true, checks: [{:object, type, _rule}]} = spec
+        ) do
+      case parent_admission(res, parent_path, type, spec) do
+        {:admitted, res} -> res
+        :none -> pre(res, Map.delete(spec, :parent_only))
+      end
+    end
+
     def pre(%Resolution{} = res, %{authorizer: authorizer, checks: checks} = spec) do
       check_publish_loop(res)
       {actor, res} = actor(res, authorizer)
@@ -193,28 +206,80 @@ if Code.ensure_loaded?(Absinthe) do
     # admissions up. An admission is keyed by the concrete type and the response path of
     # the value (see "Admitted values" in docs/DESIGN.md), so the lookup costs the same
     # whatever the size of the value.
+    #
+    # With `decision_reuse: true`, a type whose object rule decides an object alone
+    # (`reuse_admissible: scope`) is admitted the same way by the post middleware of a
+    # query or subscription, together with the context it was decided in: the lookup
+    # only counts while the field's context is the same as far as the rule reads it
+    # (`Warden.Absinthe.Reuse.comparable/2`).
     defp skip_admitted([{:object, type, _rule} | rest] = checks, res, %{admissible: true}) do
-      if admitted?(res, type), do: rest, else: checks
+      if admitted?(res, type, :any), do: rest, else: checks
+    end
+
+    defp skip_admitted([{:object, type, _rule} | rest] = checks, res, %{reuse_admissible: scope}) do
+      if admitted?(res, type, {:same_context, scope}), do: rest, else: checks
     end
 
     defp skip_admitted(checks, _res, _spec), do: checks
 
-    defp admitted?(%Resolution{acc: acc} = res, type) do
+    defp admission_kind(%{admissible: true}), do: :any
+    defp admission_kind(%{reuse_admissible: scope}), do: {:same_context, scope}
+
+    defp admitted?(%Resolution{acc: acc} = res, type, kind) do
       case acc do
         %{@acc_key => %{admitted: table}} ->
           parent_path = res |> Resolution.path() |> Enum.drop(-1)
-          Map.has_key?(table, {type, parent_path})
+          admission = Map.get(table, {type, parent_path})
+          admission_holds?(admission, kind, res.context)
 
         _none ->
           false
       end
     end
 
+    defp admission_holds?(nil, _kind, _context), do: false
+    defp admission_holds?(_admission, :any, _context), do: true
+
+    defp admission_holds?({:context, scope, decided, compared}, {:same_context, scope}, context),
+      do: decided === context or Reuse.comparable(context, scope) === compared
+
+    defp admission_holds?(_admission, {:same_context, _scope}, _context), do: false
+
+    # `parent_only` fields. The fields of one object share one parent path term (Absinthe
+    # builds every child path on it), so the last admitted parent is kept with that term:
+    # a sibling field compares it with `===`, which is one pointer comparison for the
+    # same term, instead of building the response path again. A different term that is
+    # equal names the same position, which the table lookup would find too.
+    defp parent_admission(%Resolution{acc: acc} = res, parent_path, type, spec) do
+      context = res.context
+
+      case acc do
+        %{@acc_key => %{last_parent: {last_path, ^type, last_context}}}
+        when last_path === parent_path and last_context === context ->
+          {:admitted, res}
+
+        _other ->
+          if admitted?(res, type, admission_kind(spec)),
+            do: {:admitted, put_last_parent(res, {parent_path, type, context})},
+            else: :none
+      end
+    end
+
+    defp put_last_parent(%Resolution{acc: acc} = res, last_parent) do
+      state = Map.get(acc, @acc_key, %{})
+      %{res | acc: Map.put(acc, @acc_key, Map.put(state, :last_parent, last_parent))}
+    end
+
     defp put_admitted(res, []), do: res
 
     defp put_admitted(%Resolution{acc: acc} = res, admitted) do
       state = Map.get(acc, @acc_key, %{})
-      table = Enum.reduce(admitted, Map.get(state, :admitted, %{}), &Map.put(&2, &1, true))
+
+      table =
+        Enum.reduce(admitted, Map.get(state, :admitted, %{}), fn {key, admission}, table ->
+          Map.put(table, key, admission)
+        end)
+
       %{res | acc: Map.put(acc, @acc_key, Map.put(state, :admitted, table))}
     end
 
@@ -472,8 +537,8 @@ if Code.ensure_loaded?(Absinthe) do
       }
 
       ctx = %{spec: spec, base: base, res: res, actor: actor}
-      {decided, actor, stats} = Decide.decide(value, spec, ctx)
-      res = put_actor(res, actor)
+      {decided, actor, stats, memo} = Decide.decide(value, spec, ctx)
+      res = res |> put_actor(actor) |> Reuse.put_memo(memo)
       emit_post(spec, actor, stats)
 
       decided
@@ -505,7 +570,10 @@ if Code.ensure_loaded?(Absinthe) do
 
       ref = make_ref()
       redactor = spec |> Map.get(:redactors, %{}) |> Map.get(spec.named)
-      batch_key = {__MODULE__, :decide_across_parents, {rule, spec.authorizer, redactor}}
+
+      batch_key =
+        {__MODULE__, :decide_across_parents, {rule, spec.authorizer, redactor, distinct?(spec)}}
+
       continuation = {{__MODULE__, :post_decided}, {spec, value}}
 
       waiting = %{
@@ -542,16 +610,63 @@ if Code.ensure_loaded?(Absinthe) do
     # so grouping costs the same whatever the size of the context. Each group is decided
     # with one `Warden.Evaluator.many/3` call; with `redact_with`, the values that pass
     # are redacted together too. Returns `%{ref => {result, value}}`.
-    def decide_across_parents({rule, authorizer, redactor}, items) do
+    #
+    # With `decision_reuse: true` and a rule that decides an object alone, the values of
+    # one execution that are equal (`===`) are decided once: such a rule reads nothing
+    # else that differs between the deferred checks of one execution.
+    def decide_across_parents({rule, authorizer, redactor, distinct?}, items) do
       items
       |> Enum.group_by(
         fn {_ref, {execution, _shared}, _check} -> execution end,
         fn {ref, {_execution, shared}, check} -> {ref, shared, check} end
       )
       |> Enum.flat_map(fn {_execution, members} ->
-        decide_group(rule, authorizer, redactor, members)
+        decide_group(rule, authorizer, redactor, distinct?, members)
       end)
       |> Map.new()
+    end
+
+    defp distinct?(%{reuse: true, scopes: scopes, named: named}), do: Map.has_key?(scopes, named)
+    defp distinct?(_spec), do: false
+
+    defp decide_group(rule, authorizer, redactor, false, members),
+      do: decide_group(rule, authorizer, redactor, members)
+
+    defp decide_group(rule, authorizer, redactor, true, members) do
+      {distinct, positions} = distinct_members(members)
+      decided = distinct |> then(&decide_group(rule, authorizer, redactor, &1)) |> List.to_tuple()
+
+      Enum.zip_with(members, positions, fn {ref, _shared, _check}, position ->
+        {_distinct_ref, outcome} = elem(decided, position)
+        {ref, outcome}
+      end)
+    end
+
+    # The members with distinct values, in order, and for every member the position of
+    # its value among them.
+    defp distinct_members(members) do
+      {positions, {distinct, _count, _seen}} =
+        Enum.map_reduce(members, {[], 0, %{}}, fn {_ref, _shared, check} = member, acc ->
+          distinct_position(member, Reuse.identity(check.value), acc)
+        end)
+
+      {Enum.reverse(distinct), positions}
+    end
+
+    defp distinct_position(member, :none, {distinct, count, seen}),
+      do: {count, {[member | distinct], count + 1, seen}}
+
+    defp distinct_position({_ref, _shared, check} = member, identity, {distinct, count, seen}) do
+      equals = Map.get(seen, identity, [])
+
+      case Enum.find(equals, fn {value, _position} -> value === check.value end) do
+        {_value, position} ->
+          {position, {distinct, count, seen}}
+
+        nil ->
+          seen = Map.put(seen, identity, [{check.value, count} | equals])
+          {count, {[member | distinct], count + 1, seen}}
+      end
     end
 
     defp decide_group(rule, authorizer, redactor, [{_ref, shared, _check} | _rest] = members) do
@@ -714,9 +829,21 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp record_admits(res, admits) do
       field_path = Resolution.path(res)
-      admitted = for {@admit, {relative, type}} <- admits, do: {type, field_path ++ relative}
+
+      admitted =
+        for {@admit, {relative, admit}} <- admits do
+          admission(admit, field_path ++ relative, res.context)
+        end
+
       put_admitted(res, admitted)
     end
+
+    defp admission({:reuse, type, scope}, path, context) do
+      compared = Reuse.comparable(context, scope)
+      {{type, path}, {:context, scope, context, compared}}
+    end
+
+    defp admission(type, path, _context), do: {{type, path}, true}
 
     defp null_field(res, pending) do
       errors =

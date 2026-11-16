@@ -18,7 +18,8 @@ if Code.ensure_loaded?(Absinthe) do
       :list_policy,
       :batch_across_parents,
       :require_can_for,
-      :warm_actor
+      :warm_actor,
+      :decision_reuse
     ]
 
     @spec validate_options(keyword) :: {:ok, map} | {:error, [String.t()]}
@@ -31,6 +32,7 @@ if Code.ensure_loaded?(Absinthe) do
       across_parents = Keyword.get(opts, :batch_across_parents, :auto)
       require_can_for = Keyword.get(opts, :require_can_for, [])
       warm_actor = Keyword.get(opts, :warm_actor)
+      decision_reuse = Keyword.get(opts, :decision_reuse, true)
 
       errors =
         unknown_option_errors(opts) ++
@@ -42,7 +44,8 @@ if Code.ensure_loaded?(Absinthe) do
           list_policy_errors(policy) ++
           batch_across_parents_errors(across_parents) ++
           require_can_for_errors(require_can_for, strict) ++
-          warm_actor_errors(warm_actor)
+          warm_actor_errors(warm_actor) ++
+          decision_reuse_errors(decision_reuse)
 
       case errors do
         [] ->
@@ -55,7 +58,8 @@ if Code.ensure_loaded?(Absinthe) do
              list_policy: policy,
              batch_across_parents: across_parents,
              require_can_for: require_can_for,
-             warm_actor: warm_actor(warm_actor)
+             warm_actor: warm_actor(warm_actor),
+             decision_reuse: decision_reuse
            }}
 
         errors ->
@@ -143,6 +147,9 @@ if Code.ensure_loaded?(Absinthe) do
 
     defp batch_across_parents_errors(_value),
       do: ["`:batch_across_parents` must be :auto, true or false"]
+
+    defp decision_reuse_errors(value) when is_boolean(value), do: []
+    defp decision_reuse_errors(_value), do: ["`:decision_reuse` must be true or false"]
 
     defp list_policy_errors(policy) do
       if policy in Rules.list_policies(),

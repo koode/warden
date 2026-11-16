@@ -460,6 +460,55 @@ resolver that loads rows with `Warden.Ecto.all/5`. The `warm_actor:` option of
 once per execution, since a resolver cannot hand a warmed actor back (see the
 [actors guide](guides/actors.md#the-actor-in-a-graphql-resolver)).
 
+#### Decision reuse
+
+Warden decides an object rule where a field returns the object, and (defense in depth)
+again before each field of the object. With `decision_reuse: true` (the default), an
+object rule that reads only the actor, the object and the context is decided once per
+object and request instead:
+
+- **Once per object.** Within a query or a subscription publish, the decision for an
+  object is kept and reused wherever an equal object of the same type appears again: the
+  same team under 100 issues is decided once, not 100 times. Equal objects in one list are
+  decided once. A rule that reads only the actor (roles, permissions, `authenticated()`)
+  is decided once for every object of the type, unless the actor's credential is bound
+  to a tenant.
+- **No middleware work for fields without their own rule.** A field whose only rule is
+  its object's rule does nothing (no evaluation, no telemetry event) for an object that
+  passed that rule where it was returned. A field with its own rule still runs it.
+
+A rule qualifies when every leaf reads only the actor, the object and the context:
+`public()`, `deny()`, `authenticated()`, roles, permissions, `kind/1`,
+`credential_scope/1`, `session()`, `tenant_role/1,2` without `{:arg, path}`, `can/2`
+without `arg:`, and checks declared `per_object: true` (not `single: true`):
+
+```elixir
+checks: [team: [per_object: true]]
+```
+
+In an object rule, a `per_object` check gets no `field`, `args`, `parent_type`,
+`argument` or `resolution`, and the context without `:loader` (Absinthe's Dataloader
+plugin keeps its cache there and replaces it on every resolution pass), with or without
+reuse, so it cannot decide differently for one field, position or pass than for
+another. Field and argument rules still get every field.
+
+What does not change: every decision is the one Warden made before for the same actor,
+object, field and context. A rule with any other check is decided per field as before.
+An object is reused only when it is equal (`===`) to the one decided, so the same row
+loaded with other fields is decided again; an object without a primary key (an Ecto
+primary key, else a non-nil `:id`) is never stored. A decision is kept only for the
+context it was made with, as far as the rule reads it: a rule of only roles,
+permissions and the like reads no context; one with `per_object` checks reads all of it
+but `:loader`; one with `can/2` or `tenant_role/1,2` reads all of it, so a new loader
+makes Warden decide it again. A resolver that changes the context makes Warden decide
+again. Mutations keep nothing between their root fields, and nothing is kept between
+requests. A denial that a check timeout caused is asked again.
+
+Reuse assumes that a check, a policy and `tenant_roles/3` answer the same for the same
+actor, object and context within one request (a check that reads state the same query
+changes would see the old answer). `decision_reuse: false` decides every object at
+every field as 0.3 did.
+
 #### SDL schemas
 
 Use `Warden.Absinthe.Hydrate.meta/2` in `hydrate/2`:
@@ -486,6 +535,7 @@ the second argument: `Warden.Absinthe.Hydrate.meta([rule: role(:admin)], cache: 
 | `default_object_rule` | `nil` | Rule for object types without their own rule (root and introspection types excluded). |
 | `introspection` | `public()` | Rule that guards `__schema` and `__type` on every object Absinthe adds them to (any type named `Query` or `RootQueryType`, not only the root). `__typename` is guarded only by root object rules. |
 | `list_policy` | `:null_item` | Default list policy. |
+| `decision_reuse` | `true` | Decide an object rule that reads only the object once per object and request; see [Decision reuse](#decision-reuse). |
 
 `default_object_rule: public()` does nothing except hide that a type has no rule. Do not
 use it to silence strict mode.
@@ -673,6 +723,11 @@ It does not protect against the following:
   not checked; Warden checks object types.
 - **Type confusion in resolvers.** A resolver that returns a value of another type is
   checked against the field's declared type.
+- **Decision reuse trusts answers within a request.** With `decision_reuse: true`, a
+  check declared `per_object: true`, a policy or `tenant_roles/3` that answers
+  differently for the same actor, object and context later in the same query (because
+  the query itself changed what it reads) is not asked again. Mutations are not
+  affected; use `decision_reuse: false` for schemas whose queries change state.
 - **Non-deterministic `resolve_type`.** Warden calls your `resolve_type` for every value
   behind an interface or union; if it can give a different answer to Absinthe's own call,
   the concrete type's rule may not match what is rendered.

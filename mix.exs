@@ -90,11 +90,14 @@ defmodule Warden.MixProject do
       skip_code_autolink_to: [
         "Absinthe.Pipeline.BatchResolver",
         "Absinthe.Type.function/2",
+        "Warden.Absinthe.Reuse.scope/2",
         "Warden.Absinthe.Hydrator",
         "Warden.Absinthe.Phase.ItemErrors",
         "Warden.Absinthe.Phase.Publish",
         "Warden.Absinthe.Plugin",
         "Warden.Absinthe.SubscriptionConfig",
+        "Warden.Evaluator",
+        "Warden.Evaluator.object_scoped/2",
         "Warden.Policy.Dispatch",
         "Warden.Shape",
         "Warden.Plug.init/1"

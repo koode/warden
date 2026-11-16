@@ -20,21 +20,30 @@ if Code.ensure_loaded?(Absinthe) do
     # Then `redact_with`: every value that passed is replaced by its redacted struct,
     # decided per field policy for the whole group (`Warden.Fields.Redactor`), so the
     # walk, and every child field after it, sees the redacted value.
+    #
+    # With `decision_reuse: true`, outside mutations, a rule that decides an object alone
+    # (`Warden.Absinthe.Reuse`) is decided once per distinct input: an `:actor` rule once
+    # for every value of an unbound actor, any other once per value, with the decision
+    # stored in the execution's memo and reused for an equal value of the same type
+    # wherever it appears later. Equal values in one list are decided once.
 
     alias Absinthe.Resolution
-    alias Warden.Absinthe.Middleware
+    alias Warden.Absinthe.{Middleware, Reuse}
     alias Warden.{Check, Denial, Evaluator}
     alias Warden.Fields.Redactor
 
     @decided :__warden_decided__
     @undetermined %{failed_rule: :deny, missing_roles: [], missing_permissions: []}
 
-    # Returns {decided_value, actor, %{count: n, denied: d, reason: first_reason}}.
+    # Returns {decided_value, actor, %{count: n, denied: d, reason: first_reason}, memo}.
+    # `memo` is the execution's decision memo to keep in `resolution.acc`, or nil.
     def decide(value, spec, ctx) do
       values = value |> flatten(spec.shape, []) |> Enum.reverse()
-      {outcomes, types, actor} = decide_values(values, spec, ctx)
-      {values, actor} = redact(values, outcomes, types, spec, %{ctx | actor: actor})
-      outcomes = same_type_after_redaction(values, outcomes, types, spec, %{ctx | actor: actor})
+      ctx = Map.put(ctx, :memo, start_memo(spec, ctx))
+      {outcomes, types, ctx} = decide_values(values, spec, ctx)
+      {values, actor} = redact(values, outcomes, types, spec, ctx)
+      ctx = %{ctx | actor: actor}
+      outcomes = same_type_after_redaction(values, outcomes, types, spec, ctx)
       admits = admits(outcomes, types, spec, ctx)
       {decided, []} = rebuild(value, spec.shape, Enum.zip([values, outcomes, admits]))
       denials = for {:deny, denial} <- outcomes, do: denial
@@ -45,8 +54,11 @@ if Code.ensure_loaded?(Absinthe) do
         reason: first_reason(denials)
       }
 
-      {decided, actor, stats}
+      {decided, actor, stats, ctx.memo}
     end
+
+    defp start_memo(%{reuse: true}, ctx), do: Reuse.memo(ctx.res, ctx.actor)
+    defp start_memo(_spec, _ctx), do: nil
 
     # The type under which a passing value is admitted, or nil: the fields' pre
     # middleware does not decide that type's object rule again for it (see
@@ -55,6 +67,11 @@ if Code.ensure_loaded?(Absinthe) do
     # redacted value: its object rule was decided on the value before redaction, and
     # deciding it again on the redacted struct could disagree. For abstract types the
     # concrete type counts. `Plan.admissible?/3` is the same test, for the pre specs.
+    #
+    # Where the execution keeps a decision memo, a passing value of a type whose rule
+    # decides an object alone is admitted too, as `{:reuse, type, scope}`: for the
+    # context it was decided in, as far as the rule reads it (`Plan.with_parent_reuse/4`
+    # marks the pre specs that look it up).
     defp admits(outcomes, types, spec, ctx) do
       catalog = ctx.spec.authorizer.__warden_catalog__()
 
@@ -62,10 +79,23 @@ if Code.ensure_loaded?(Absinthe) do
       |> Enum.with_index()
       |> Enum.map(fn {outcome, index} ->
         type = value_type(index, types, spec)
-
-        if outcome == :ok and admissible?(type, spec, catalog), do: type, else: nil
+        admit(outcome, type, spec, catalog, ctx.memo)
       end)
     end
+
+    defp admit(:ok, type, spec, catalog, memo) do
+      scope = reuse_scope(spec, type)
+
+      cond do
+        admissible?(type, spec, catalog) -> type
+        memo != nil and scope != nil -> {:reuse, type, scope}
+        true -> nil
+      end
+    end
+
+    defp admit(_denied, _type, _spec, _catalog, _memo), do: nil
+
+    defp reuse_scope(spec, type), do: spec |> Map.get(:scopes, %{}) |> Map.get(type)
 
     defp admissible?(nil, _spec, _catalog), do: false
 
@@ -167,36 +197,35 @@ if Code.ensure_loaded?(Absinthe) do
       {decided, rest}
     end
 
-    # Returns {outcomes, %{index => concrete_type}, actor}; the concrete types are only
-    # known for abstract types.
-    defp decide_values([], _spec, ctx), do: {[], %{}, ctx.actor}
+    # Returns {outcomes, %{index => concrete_type}, ctx}; the concrete types are only
+    # known for abstract types. `ctx` carries the actor and the memo the decisions updated.
+    defp decide_values([], _spec, ctx), do: {[], %{}, ctx}
 
     defp decide_values(values, %{abstract: nil} = spec, ctx) do
-      {outcomes, actor} = decide_group(Map.get(spec.rules, spec.named), spec.named, values, ctx)
-      {outcomes, %{}, actor}
+      {outcomes, ctx} = decide_group(Map.get(spec.rules, spec.named), spec.named, values, ctx)
+      {outcomes, %{}, ctx}
     end
 
     defp decide_values(values, spec, ctx) do
-      {abstract, actor} = decide_group(spec.abstract_rule, spec.named, values, ctx)
-      ctx = %{ctx | actor: actor}
+      {abstract, ctx} = decide_group(spec.abstract_rule, spec.named, values, ctx)
 
       passed =
         for {{value, :ok}, index} <- values |> Enum.zip(abstract) |> Enum.with_index(),
             do: {index, value}
 
-      {concrete, types, actor} = decide_concrete(passed, spec, ctx)
+      {concrete, types, ctx} = decide_concrete(passed, spec, ctx)
       outcomes = abstract |> Enum.with_index() |> Enum.map(&merge_concrete(&1, concrete))
-      {outcomes, types, actor}
+      {outcomes, types, ctx}
     end
 
     defp merge_concrete({:ok, index}, concrete), do: Map.fetch!(concrete, index)
     defp merge_concrete({denied, _index}, _concrete), do: denied
 
-    # Returns {%{index => outcome}, %{index => concrete_type}, actor}. The concrete type is
+    # Returns {%{index => outcome}, %{index => concrete_type}, ctx}. The concrete type is
     # resolved when an object rule or a field policy may apply.
     defp decide_concrete(passed, %{rules: rules} = spec, ctx)
          when map_size(rules) == 0 and not is_map_key(spec, :redactors),
-         do: {Map.new(passed, fn {index, _value} -> {index, :ok} end), %{}, ctx.actor}
+         do: {Map.new(passed, fn {index, _value} -> {index, :ok} end), %{}, ctx}
 
     defp decide_concrete(passed, spec, ctx) do
       groups =
@@ -207,34 +236,126 @@ if Code.ensure_loaded?(Absinthe) do
           end
         )
 
-      Enum.reduce(groups, {%{}, %{}, ctx.actor}, fn {concrete, members}, {acc, types, actor} ->
+      Enum.reduce(groups, {%{}, %{}, ctx}, fn {concrete, members}, {acc, types, ctx} ->
         {indexes, values} = Enum.unzip(members)
-        {outcomes, actor} = decide_concrete_group(concrete, values, spec, %{ctx | actor: actor})
+        {outcomes, ctx} = decide_concrete_group(concrete, values, spec, ctx)
         decided = indexes |> Enum.zip(outcomes) |> Map.new()
         typed = Map.new(indexes, &{&1, concrete})
-        {Map.merge(acc, decided), Map.merge(types, typed), actor}
+        {Map.merge(acc, decided), Map.merge(types, typed), ctx}
       end)
     end
 
     defp decide_concrete_group(nil, values, spec, ctx) do
       denial = denial(:deny, @undetermined, spec.named, ctx)
-      {Enum.map(values, fn _value -> {:deny, denial} end), ctx.actor}
+      {Enum.map(values, fn _value -> {:deny, denial} end), ctx}
     end
 
     defp decide_concrete_group(concrete, values, spec, ctx),
       do: decide_group(Map.get(spec.rules, concrete), concrete, values, ctx)
 
-    # One rule over a group of values. Returns {outcomes, actor}.
+    # One rule over a group of values. Returns {outcomes, ctx}.
     defp decide_group(nil, _type, values, ctx),
-      do: {Enum.map(values, fn _value -> :ok end), ctx.actor}
+      do: {Enum.map(values, fn _value -> :ok end), ctx}
 
     defp decide_group(rule, type, values, ctx) do
+      {results, ctx} = group_results(rule, type, values, ctx, reused_scope(type, ctx))
+      outcomes = Enum.map(results, &outcome(&1, rule, type, ctx))
+      {outcomes, ctx}
+    end
+
+    # The reuse scope of `type`'s rule in this execution, or nil when its decisions are
+    # not reused here.
+    defp reused_scope(_type, %{memo: nil}), do: nil
+    defp reused_scope(type, ctx), do: reuse_scope(ctx.spec, type)
+
+    # The evaluation results for `values`, in order. Returns {results, ctx}.
+    defp group_results(rule, type, values, ctx, nil), do: evaluate(rule, type, values, ctx)
+
+    defp group_results(rule, type, values, ctx, :actor) do
+      if Reuse.unbound?(ctx.actor),
+        do: shared_results(rule, type, values, ctx),
+        else: memo_results(rule, type, values, ctx)
+    end
+
+    defp group_results(rule, type, values, ctx, scope) when scope in [:object, :context],
+      do: memo_results(rule, type, values, ctx)
+
+    # An `:actor` rule of an unbound actor reads nothing of the value: one decision holds
+    # for every value of the execution.
+    defp shared_results(rule, type, values, ctx) do
+      case Reuse.lookup_actor(ctx.memo, type, rule) do
+        {:ok, result} ->
+          results = Enum.map(values, fn _value -> result end)
+          {results, ctx}
+
+        :miss ->
+          {[result], ctx} = evaluate(rule, type, [hd(values)], ctx)
+          ctx = %{ctx | memo: Reuse.store_actor(ctx.memo, type, rule, result)}
+          results = Enum.map(values, fn _value -> result end)
+          {results, ctx}
+      end
+    end
+
+    # Every value is looked up in the memo; the values it does not hold are decided
+    # together, each distinct value once, and stored.
+    defp memo_results(rule, type, values, ctx) do
+      compared = Reuse.comparable(ctx.base.context, reuse_scope(ctx.spec, type))
+      lookup = {rule, type, compared, ctx.memo}
+
+      {slots, {pending, _count, _seen}} =
+        Enum.map_reduce(values, {[], 0, %{}}, &memo_slot(&1, &2, lookup))
+
+      pending = Enum.reverse(pending)
+      {fresh, ctx} = evaluate(rule, type, pending, ctx)
+
+      memo =
+        [pending, fresh]
+        |> Enum.zip()
+        |> Enum.reduce(ctx.memo, fn {value, result}, memo ->
+          Reuse.store(memo, type, rule, value, compared, result)
+        end)
+
+      fresh = List.to_tuple(fresh)
+      results = Enum.map(slots, &slot_result(&1, fresh))
+      {results, %{ctx | memo: memo}}
+    end
+
+    # `{:hit, result}` for a value the memo holds, else `{:pending, position}` in the
+    # list of values to decide. An equal value already pending shares its position.
+    defp memo_slot(value, acc, {rule, type, compared, memo}) do
+      case Reuse.lookup(memo, type, rule, value, compared) do
+        {:ok, result} -> {{:hit, result}, acc}
+        :miss -> pending_slot(value, Reuse.identity(value), acc)
+      end
+    end
+
+    defp pending_slot(value, :none, {pending, count, seen}),
+      do: {{:pending, count}, {[value | pending], count + 1, seen}}
+
+    defp pending_slot(value, identity, {pending, count, seen} = acc) do
+      equals = Map.get(seen, identity, [])
+
+      case Enum.find(equals, fn {candidate, _position} -> candidate === value end) do
+        {_candidate, position} ->
+          {{:pending, position}, acc}
+
+        nil ->
+          seen = Map.put(seen, identity, [{value, count} | equals])
+          {{:pending, count}, {[value | pending], count + 1, seen}}
+      end
+    end
+
+    defp slot_result({:hit, result}, _fresh), do: result
+    defp slot_result({:pending, position}, fresh), do: elem(fresh, position)
+
+    # `Warden.Evaluator.many/3` over the values. Returns {results, ctx}.
+    defp evaluate(_rule, _type, [], ctx), do: {[], ctx}
+
+    defp evaluate(rule, type, values, ctx) do
       %Check{} = base = ctx.base
       checks = Enum.map(values, &%{base | actor: ctx.actor, value: &1, type: type})
       {results, actor} = Evaluator.many(rule, checks, ctx.spec.authorizer)
-      ctx = %{ctx | actor: actor}
-      outcomes = Enum.map(results, &outcome(&1, rule, type, ctx))
-      {outcomes, actor}
+      {results, %{ctx | actor: actor}}
     end
 
     # Turns an evaluation result into the outcome the walk reads.
